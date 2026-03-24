@@ -50,8 +50,10 @@ async function initDb() {
       leaves_collected BIGINT NOT NULL DEFAULT 0,
       white_processed BIGINT NOT NULL DEFAULT 0,
       blue_processed BIGINT NOT NULL DEFAULT 0,
+      farm_earned BIGINT NOT NULL DEFAULT 0,
       sleep_count BIGINT NOT NULL DEFAULT 0,
       sleep_money BIGINT NOT NULL DEFAULT 0,
+      time_pilot DOUBLE PRECISION NOT NULL DEFAULT 0,
       last_seen TIMESTAMPTZ,
       path TEXT,
       ip TEXT,
@@ -79,10 +81,10 @@ app.post('/api/stats/sync', async (req, res) => {
       `
       INSERT INTO player_stats (
         player_id, cash_available, roulette_spent, roulette_won, total_net,
-        time_spent, leaves_collected, white_processed, blue_processed,
-        sleep_count, sleep_money, last_seen, path, ip, country, city, user_agent, updated_at
+        time_spent, leaves_collected, white_processed, blue_processed, farm_earned,
+        sleep_count, sleep_money, time_pilot, last_seen, path, ip, country, city, user_agent, updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),$12,$13,$14,$15,$16,NOW()
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),$14,$15,$16,$17,$18,NOW()
       )
       ON CONFLICT (player_id) DO UPDATE SET
         cash_available = EXCLUDED.cash_available,
@@ -93,8 +95,10 @@ app.post('/api/stats/sync', async (req, res) => {
         leaves_collected = EXCLUDED.leaves_collected,
         white_processed = EXCLUDED.white_processed,
         blue_processed = EXCLUDED.blue_processed,
+        farm_earned = EXCLUDED.farm_earned,
         sleep_count = EXCLUDED.sleep_count,
         sleep_money = EXCLUDED.sleep_money,
+        time_pilot = EXCLUDED.time_pilot,
         last_seen = NOW(),
         path = EXCLUDED.path,
         ip = EXCLUDED.ip,
@@ -113,8 +117,10 @@ app.post('/api/stats/sync', async (req, res) => {
         Number(stats.leavesCollected || 0),
         Number(stats.whiteProcessed || 0),
         Number(stats.blueProcessed || 0),
+        Number(stats.farmEarned || 0),
         Number(stats.sleepCount || 0),
         Number(stats.sleepMoney || 0),
+        Number(stats.timePilot || 0),
         currentPath || null,
         ip || null,
         country || null,
@@ -198,8 +204,10 @@ app.get('/api/adminpanelv2/dashboard', async (req, res) => {
           leaves_collected,
           white_processed,
           blue_processed,
+          farm_earned,
           sleep_count,
           sleep_money,
+          time_pilot,
           last_seen,
           city,
           country,

@@ -16,6 +16,8 @@ type DashboardResponse = {
     leaves_collected: number;
     white_processed: number;
     blue_processed: number;
+    farm_earned: number;
+    time_pilot: number;
     sleep_count: number;
     sleep_money: number;
     last_seen: string;
@@ -95,11 +97,13 @@ export default function AdminPanelV2() {
       acc.leaves += Number(p.leaves_collected || 0);
       acc.white += Number(p.white_processed || 0);
       acc.blue += Number(p.blue_processed || 0);
+      acc.farmEarned += Number(p.farm_earned || 0);
+      acc.timePilot += Number(p.time_pilot || 0);
       acc.sleepCount += Number(p.sleep_count || 0);
       acc.sleepMoney += Number(p.sleep_money || 0);
       return acc;
     },
-    { cash: 0, spent: 0, won: 0, net: 0, time: 0, leaves: 0, white: 0, blue: 0, sleepCount: 0, sleepMoney: 0 },
+    { cash: 0, spent: 0, won: 0, net: 0, time: 0, leaves: 0, white: 0, blue: 0, farmEarned: 0, timePilot: 0, sleepCount: 0, sleepMoney: 0 },
   );
 
   return (
@@ -121,6 +125,8 @@ export default function AdminPanelV2() {
           <InfoCard label="Total Frunze" value={totals.leaves.toLocaleString('ro-RO')} />
           <InfoCard label="Total Alb" value={totals.white.toLocaleString('ro-RO')} />
           <InfoCard label="Total Albastru" value={totals.blue.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Farm $" value={totals.farmEarned.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Pilot h" value={totals.timePilot.toLocaleString('ro-RO')} />
           <InfoCard label="Total Sleep #" value={totals.sleepCount.toLocaleString('ro-RO')} />
           <InfoCard label="Total Sleep $" value={totals.sleepMoney.toLocaleString('ro-RO')} />
         </div>
@@ -129,7 +135,7 @@ export default function AdminPanelV2() {
           <table className="min-w-full text-sm">
             <thead className="bg-white/5">
               <tr>
-                {['Player', 'Cash', 'Cheltuit', 'Câștigat', 'Net', 'Timp', 'Frunze', 'Alb', 'Albastru', 'Sleep #', 'Sleep $', 'Last seen', 'Locație', 'Path'].map((h) => (
+                {['Player', 'Cash', 'Cheltuit', 'Câștigat', 'Net', 'Timp', 'Farm $', 'Pilot h', 'Frunze', 'Alb', 'Albastru', 'Sleep #', 'Sleep $', 'Last seen', 'Locație', 'Path'].map((h) => (
                   <th key={h} className="px-3 py-2 text-left font-semibold text-white/70">{h}</th>
                 ))}
               </tr>
@@ -143,6 +149,8 @@ export default function AdminPanelV2() {
                   <td className="px-3 py-2">{p.roulette_won.toLocaleString('ro-RO')}</td>
                   <td className="px-3 py-2">{p.total_net.toLocaleString('ro-RO')}</td>
                   <td className="px-3 py-2">{p.time_spent.toLocaleString('ro-RO')}h</td>
+                  <td className="px-3 py-2">{p.farm_earned.toLocaleString('ro-RO')}</td>
+                  <td className="px-3 py-2">{p.time_pilot.toLocaleString('ro-RO')}h</td>
                   <td className="px-3 py-2">{p.leaves_collected.toLocaleString('ro-RO')}</td>
                   <td className="px-3 py-2">{p.white_processed.toLocaleString('ro-RO')}</td>
                   <td className="px-3 py-2">{p.blue_processed.toLocaleString('ro-RO')}</td>

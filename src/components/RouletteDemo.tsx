@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import SharedStatsPanel from './SharedStatsPanel';
 
 const rewards = [
   { name: 'Vehicul Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
@@ -156,6 +157,8 @@ export default function RouletteDemo() {
   const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
   const [processedWhite, setProcessedWhite] = useState(saved?.processedWhite ?? 0);
   const [processedBlue, setProcessedBlue] = useState(saved?.processedBlue ?? 0);
+  const [farmEarned, setFarmEarned] = useState(saved?.farmEarned ?? 0);
+  const [timePilot, setTimePilot] = useState(saved?.timePilot ?? 0);
   const [spinCount, setSpinCount] = useState(0);
   const [nearMissHint, setNearMissHint] = useState('');
 
@@ -196,8 +199,10 @@ export default function RouletteDemo() {
       processedFrunze,
       processedWhite,
       processedBlue,
+      farmEarned,
+      timePilot,
     });
-  }, [fragments, ogCoinsBalance, bonusSpins, cashBalance, rouletteSpent, rouletteWon, timeFarm, timeSleep, processedFrunze, processedWhite, processedBlue]);
+  }, [fragments, ogCoinsBalance, bonusSpins, cashBalance, rouletteSpent, rouletteWon, timeFarm, timeSleep, processedFrunze, processedWhite, processedBlue, farmEarned, timePilot]);
 
   const scheduleTask = (callback, delay) => {
     const timer = window.setTimeout(callback, delay);
@@ -514,49 +519,7 @@ export default function RouletteDemo() {
           </footer>
         </div>
 
-        <aside className="hidden lg:block lg:pt-[86px]">
-          <div className="rounded-2xl border border-white/15 bg-[#13112d]/72 p-4">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-white/45">Stats</p>
-            <div className="mt-3 space-y-2 text-sm">
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Cash disponibil</p>
-                <p className="text-lg font-black text-white">{cashBalance.toLocaleString('ro-RO')} $</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Cheltuit ruleta</p>
-                <p className="text-lg font-black text-rose-300">{rouletteSpent.toLocaleString('ro-RO')} $</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Câștigat ruleta</p>
-                <p className="text-lg font-black text-emerald-300">{rouletteWon.toLocaleString('ro-RO')} $</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Total net</p>
-                <p className={`text-lg font-black ${rouletteWon - rouletteSpent >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                  {(rouletteWon - rouletteSpent).toLocaleString('ro-RO')} $
-                </p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Timp Petrecut Farm</p>
-                <p className="text-base font-black text-white">{timeFarm.toLocaleString('ro-RO')}h</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Timp Sleep</p>
-                <p className="text-base font-black text-white">{timeSleep.toLocaleString('ro-RO')}h</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Timp Total pe server</p>
-                <p className="text-base font-black text-white">{(timeFarm + timeSleep).toLocaleString('ro-RO')}h</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Procesat (F/A/B)</p>
-                <p className="text-base font-black text-white">
-                  {processedFrunze.toLocaleString('ro-RO')} / {processedWhite.toLocaleString('ro-RO')} / {processedBlue.toLocaleString('ro-RO')}
-                </p>
-              </div>
-            </div>
-          </div>
-        </aside>
+        <aside className="hidden lg:block lg:pt-[86px]"><SharedStatsPanel /></aside>
       </div>
 
       {showWinModal && selectedReward ? (

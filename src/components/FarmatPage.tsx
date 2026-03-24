@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import SharedStatsPanel from './SharedStatsPanel';
 
 type ActionKey = 'collect_leaves' | 'process_pack' | 'refine_pack';
 type PopupType = 'success' | 'danger' | 'info';
@@ -34,24 +35,24 @@ function saveGameState(data: unknown) {
 const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeSpentHours: number; run: string }> = {
   collect_leaves: {
     title: 'Culege Frunze',
-    duration: 10,
+    duration: 5,
     risk: 10,
-    timeSpentHours: 1,
-    run: '+1000 frunze',
+    timeSpentHours: 0.5,
+    run: '+1200 frunze',
   },
   process_pack: {
     title: 'Procesare Plicuri Albe',
-    duration: 10,
+    duration: 5,
     risk: 10,
-    timeSpentHours: 1,
-    run: '2400 frunze -> 800 plicuri albe (cost 2.000.000 murdari)',
+    timeSpentHours: 0.5,
+    run: '1200 frunze + 900.000 murdari -> 400 plicuri albe',
   },
   refine_pack: {
     title: 'Procesare Albastru',
-    duration: 15,
+    duration: 5,
     risk: 10,
-    timeSpentHours: 2.5,
-    run: '800 plicuri albe -> 1600 plicuri albastre (cost 250.000 murdari)',
+    timeSpentHours: 1,
+    run: '400 plicuri albe + 100.000 murdari -> 800 plicuri albastre',
   },
 };
 
@@ -72,6 +73,7 @@ export default function FarmatPage() {
   const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
   const [processedAlbe, setProcessedAlbe] = useState(saved?.processedWhite ?? 0);
   const [processedAlbastre, setProcessedAlbastre] = useState(saved?.processedBlue ?? 0);
+  const [farmEarned, setFarmEarned] = useState(saved?.farmEarned ?? 0);
   const [rouletteSpent, setRouletteSpent] = useState(saved?.rouletteSpent ?? 0);
   const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
 
@@ -98,6 +100,7 @@ export default function FarmatPage() {
       processedFrunze,
       processedWhite: processedAlbe,
       processedBlue: processedAlbastre,
+      farmEarned,
       rouletteSpent,
       rouletteWon,
       cashBalance: baniCurati,
@@ -105,7 +108,7 @@ export default function FarmatPage() {
       ogCoinsBalance: saved?.ogCoinsBalance ?? 0,
       bonusSpins: saved?.bonusSpins ?? 0,
     });
-  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeFarm, timeSleep, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon, saved]);
+  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeFarm, timeSleep, processedFrunze, processedAlbe, processedAlbastre, farmEarned, rouletteSpent, rouletteWon, saved]);
 
   const pushPopup = (type: PopupType, text: string) => {
     setPopup({ type, text });
@@ -120,39 +123,27 @@ export default function FarmatPage() {
 
   const canRun = activeAction === null;
 
-  const convertCleanToDirty = (neededDirty: number) => {
-    const missingDirty = Math.max(0, neededDirty - baniMurdari);
-    if (!missingDirty) return true;
-
-    const cleanNeeded = Math.ceil(missingDirty * 0.65);
-    if (baniCurati < cleanNeeded) return false;
-
-    setBaniCurati((current) => current - cleanNeeded);
-    setBaniMurdari((current) => current + missingDirty);
-    return true;
-  };
-
   const runAction = (key: ActionKey) => {
     if (!canRun) return;
     const action = actions[key];
 
-    if (key === 'process_pack' && frunze < 2400) {
-      pushPopup('danger', 'Ai nevoie de 2400 frunze.');
+    if (key === 'process_pack' && frunze < 1200) {
+      pushPopup('danger', 'Ai nevoie de 1200 frunze.');
       return;
     }
 
-    if (key === 'refine_pack' && plicuriAlbe < 800) {
-      pushPopup('danger', 'Ai nevoie de 800 plicuri albe.');
+    if (key === 'refine_pack' && plicuriAlbe < 400) {
+      pushPopup('danger', 'Ai nevoie de 400 plicuri albe.');
       return;
     }
 
-    if (key === 'process_pack' && !convertCleanToDirty(2_000_000)) {
-      pushPopup('danger', 'Nu ai fonduri. Mergi la Sleep ca sa faci bani curati.');
+    if (key === 'process_pack' && baniMurdari < 900_000) {
+      pushPopup('danger', 'Ai nevoie de 900.000 bani murdari.');
       return;
     }
 
-    if (key === 'refine_pack' && !convertCleanToDirty(250_000)) {
-      pushPopup('danger', 'Nu ai fonduri. Mergi la Sleep ca sa faci bani curati.');
+    if (key === 'refine_pack' && baniMurdari < 100_000) {
+      pushPopup('danger', 'Ai nevoie de 100.000 bani murdari.');
       return;
     }
 
@@ -178,25 +169,25 @@ export default function FarmatPage() {
         }
 
         if (key === 'collect_leaves') {
-          setFrunze((current) => current + 1000);
-          setProcessedFrunze((current) => current + 1000);
-          pushPopup('success', '+1000 frunze.');
+          setFrunze((current) => current + 1200);
+          setProcessedFrunze((current) => current + 1200);
+          pushPopup('success', '+1200 frunze.');
         }
 
         if (key === 'process_pack') {
-          setFrunze((current) => current - 2400);
-          setPlicuriAlbe((current) => current + 800);
-          setBaniMurdari((current) => current - 2_000_000);
-          setProcessedAlbe((current) => current + 800);
-          pushPopup('success', 'Conversie facuta: 2400 frunze -> 800 plicuri albe.');
+          setFrunze((current) => current - 1200);
+          setPlicuriAlbe((current) => current + 400);
+          setBaniMurdari((current) => current - 900_000);
+          setProcessedAlbe((current) => current + 400);
+          pushPopup('success', 'Conversie facuta: 1200 frunze -> 400 plicuri albe.');
         }
 
         if (key === 'refine_pack') {
-          setPlicuriAlbe((current) => current - 800);
-          setPlicuriAlbastre((current) => current + 1600);
-          setBaniMurdari((current) => current - 250_000);
-          setProcessedAlbastre((current) => current + 1600);
-          pushPopup('success', 'Conversie facuta: 800 plicuri albe -> 1600 plicuri albastre.');
+          setPlicuriAlbe((current) => current - 400);
+          setPlicuriAlbastre((current) => current + 800);
+          setBaniMurdari((current) => current - 100_000);
+          setProcessedAlbastre((current) => current + 800);
+          pushPopup('success', 'Conversie facuta: 400 plicuri albe -> 800 plicuri albastre.');
         }
 
         setActiveAction(null);
@@ -212,6 +203,7 @@ export default function FarmatPage() {
 
     const payout = plicuriAlbastre * 2300;
     setBaniMurdari((current) => current + payout);
+    setFarmEarned((current) => current + payout);
     setPlicuriAlbastre(0);
     pushPopup('success', `Vanzare bulk: +${payout.toLocaleString('ro-RO')} bani murdari.`);
   };
@@ -232,40 +224,14 @@ export default function FarmatPage() {
     const payout = 100 * 3179;
     setPlicuriAlbastre((current) => current - 100);
     setBaniMurdari((current) => current + payout);
+    setFarmEarned((current) => current + payout);
     setTimeFarm((current) => current + 0.25);
     pushPopup('success', `Livrare reusita: +${payout.toLocaleString('ro-RO')} bani murdari.`);
   };
 
-  const washMoney = () => {
-    if (!baniMurdari) {
-      pushPopup('danger', 'Nu ai bani murdari de convertit.');
-      return;
-    }
-
-    const clean = Math.floor(baniMurdari * 0.65);
-    setBaniMurdari(0);
-    setBaniCurati((current) => current + clean);
-    pushPopup('success', `Ai convertit ${clean.toLocaleString('ro-RO')} bani curati.`);
-  };
-
-  const stats = useMemo(
-    () => [
-      { label: 'Timp Petrecut Farm', value: `${timeFarm.toLocaleString('ro-RO')}h` },
-      { label: 'Timp Sleep', value: `${timeSleep.toLocaleString('ro-RO')}h` },
-      { label: 'Timp Total pe server', value: `${(timeFarm + timeSleep).toLocaleString('ro-RO')}h` },
-      { label: 'Procesat frunze', value: processedFrunze.toLocaleString('ro-RO') },
-      { label: 'Procesat albe', value: processedAlbe.toLocaleString('ro-RO') },
-      { label: 'Procesat albastre', value: processedAlbastre.toLocaleString('ro-RO') },
-      { label: 'Cheltuit ruleta', value: `${rouletteSpent.toLocaleString('ro-RO')} $` },
-      { label: 'Castig ruleta', value: `${rouletteWon.toLocaleString('ro-RO')} $` },
-      { label: 'Total ruleta', value: `${(rouletteWon - rouletteSpent).toLocaleString('ro-RO')} $` },
-    ],
-    [timeFarm, timeSleep, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon],
-  );
-
   return (
     <div className="min-h-screen bg-[#110d28] px-4 pb-10 pt-20 text-white sm:px-6">
-      <div className="mx-auto grid max-w-[1340px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+      <div className="mx-auto grid max-w-[1340px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="rounded-2xl border border-white/15 bg-[#171438]/72 p-4 shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl sm:p-6">
           <h1 className="text-center text-4xl font-black uppercase tracking-tight text-white">Farmat</h1>
 
@@ -278,7 +244,7 @@ export default function FarmatPage() {
           </div>
 
           <div className="mt-4 rounded-xl border border-white/15 bg-black/25 p-3">
-            <p className="text-sm font-semibold text-white/75">2400 Frunze -&gt; 800 Plicuri Albe -&gt; 1600 Plicuri Albastre</p>
+            <p className="text-sm font-semibold text-white/75">1200 Frunze -&gt; 400 Plicuri Albe -&gt; 800 Plicuri Albastre</p>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -289,8 +255,8 @@ export default function FarmatPage() {
             key === 'collect_leaves'
               ? canRun
               : key === 'process_pack'
-                ? canRun && frunze >= 2400 && (baniMurdari >= 2_000_000 || baniCurati >= Math.ceil((2_000_000 - baniMurdari) * 0.65))
-                : canRun && plicuriAlbe >= 800 && (baniMurdari >= 250_000 || baniCurati >= Math.ceil((250_000 - baniMurdari) * 0.65));
+                ? canRun && frunze >= 1200 && baniMurdari >= 900_000
+                : canRun && plicuriAlbe >= 400 && baniMurdari >= 100_000;
           return (
             <button
               key={key}
@@ -317,9 +283,6 @@ export default function FarmatPage() {
               <button type="button" onClick={deliver100} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre >= 100 ? 'bg-sky-500/80' : 'bg-[#2a2744] text-white/50'}`}>
                 Livrare 100 buc (3179/buc)
               </button>
-              <button type="button" onClick={washMoney} className={`rounded-lg px-4 py-2 text-sm font-bold ${baniMurdari ? 'bg-amber-500/90 text-black' : 'bg-[#2a2744] text-white/50'}`}>
-                Converteste bani curati (65%)
-              </button>
             </div>
           </div>
 
@@ -331,17 +294,7 @@ export default function FarmatPage() {
           ) : null}
         </div>
 
-        <aside className="rounded-2xl border border-white/15 bg-[#13112d]/72 p-4 backdrop-blur-xl">
-          <p className="text-[11px] uppercase tracking-[0.2em] text-white/45">Stats</p>
-          <div className="mt-3 space-y-2">
-            {stats.map((s) => (
-              <div key={s.label} className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-xs text-white/55">{s.label}</p>
-                <p className="text-base font-black text-white">{s.value}</p>
-              </div>
-            ))}
-          </div>
-        </aside>
+        <SharedStatsPanel />
       </div>
 
       {popup ? (

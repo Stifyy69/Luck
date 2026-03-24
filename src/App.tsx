@@ -3,13 +3,14 @@ import RouletteDemo from './components/RouletteDemo';
 import FarmatPage from './components/FarmatPage';
 import SleepPage from './components/SleepPage';
 import AdminPanelV2 from './components/AdminPanelV2';
+import PilotPage from './components/PilotPage';
 import { startGameSync } from './lib/gameSync';
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname || '/ruleta');
 
   useEffect(() => {
-    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep' && path !== '/adminpanelv2')) {
+    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep' && path !== '/pilot' && path !== '/adminpanelv2')) {
       window.history.replaceState({}, '', '/ruleta');
       setPath('/ruleta');
     }
@@ -24,7 +25,7 @@ export default function App() {
     return () => stop?.();
   }, []);
 
-  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/adminpanelv2') => {
+  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/adminpanelv2') => {
     if (nextPath === path) return;
     window.history.pushState({}, '', nextPath);
     setPath(nextPath);
@@ -35,9 +36,9 @@ export default function App() {
       <div className="fixed left-4 top-4 z-50 w-[220px] rounded-2xl border border-white/15 bg-gradient-to-b from-[#0d1227]/95 to-[#070913]/95 p-4 shadow-[0_25px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl sm:left-6 sm:top-6">
         <div className="mb-4 border-b border-white/10 pb-3">
           <p className="inline-block rounded-full border border-white/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.28em] text-white/55">
-            OG Land
+            OG Stifyy
           </p>
-          <p className="mt-2 text-2xl font-black text-white/95">Control Panel</p>
+          <p className="mt-2 text-2xl font-black text-white/95">Farm Panel</p>
         </div>
         <button
           type="button"
@@ -60,12 +61,21 @@ export default function App() {
         >
           Sleep
         </button>
+        <button
+          type="button"
+          onClick={() => goTo('/pilot')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/pilot' ? 'border border-cyan-300/30 bg-white/10 text-white shadow-[inset_3px_0_0_#67e8f9]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Pilot
+        </button>
       </div>
 
       {path === '/farmat'
         ? <FarmatPage />
         : path === '/sleep'
           ? <SleepPage />
+          : path === '/pilot'
+            ? <PilotPage />
           : path === '/adminpanelv2'
             ? <AdminPanelV2 />
             : <RouletteDemo />}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import SharedStatsPanel from './SharedStatsPanel';
 
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
@@ -110,7 +111,8 @@ export default function SleepPage() {
 
   return (
     <div className="min-h-screen bg-[#110d28] px-4 pb-10 pt-20 text-white sm:px-6">
-      <div className="mx-auto max-w-[920px] rounded-2xl border border-white/15 bg-[#171438]/72 p-6 text-center shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+      <div className="mx-auto grid max-w-[1340px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="rounded-2xl border border-white/15 bg-[#171438]/72 p-6 text-center shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl">
         <div className="mx-auto mb-4 flex h-36 w-36 items-center justify-center rounded-full border border-white/20 bg-black/25 text-7xl">
           😴
         </div>
@@ -126,6 +128,8 @@ export default function SleepPage() {
         >
           {isSleeping ? `Dormii... ${timer}s` : cooldown > 0 ? `Abia ai dormit (${cooldown}s)` : 'Sleep 12h'}
         </button>
+      </div>
+      <SharedStatsPanel />
       </div>
 
       {(popup || isSleeping) ? (
