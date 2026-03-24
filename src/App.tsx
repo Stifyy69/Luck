@@ -5,6 +5,7 @@ import SleepPage from './components/SleepPage';
 import AdminPanelV2 from './components/AdminPanelV2';
 import PilotPage from './components/PilotPage';
 import CarsPage from './components/CarsPage';
+import GangsPage from './components/GangsPage';
 import { startGameSync } from './lib/gameSync';
 
 export default function App() {
@@ -12,7 +13,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep' && path !== '/pilot' && path !== '/cars' && path !== '/adminpanelv2')) {
+    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep' && path !== '/pilot' && path !== '/cars' && path !== '/gangs' && path !== '/adminpanelv2')) {
       window.history.replaceState({}, '', '/ruleta');
       setPath('/ruleta');
     }
@@ -27,7 +28,7 @@ export default function App() {
     return () => stop?.();
   }, []);
 
-  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/cars' | '/adminpanelv2') => {
+  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/cars' | '/gangs' | '/adminpanelv2') => {
     if (nextPath === path) return;
     window.history.pushState({}, '', nextPath);
     setPath(nextPath);
@@ -87,6 +88,13 @@ export default function App() {
         >
           Cars
         </button>
+        <button
+          type="button"
+          onClick={() => goTo('/gangs')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/gangs' ? 'border border-cyan-300/30 bg-white/10 text-white shadow-[inset_3px_0_0_#67e8f9]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Gangs
+        </button>
       </div>
 
       {path === '/farmat'
@@ -97,6 +105,8 @@ export default function App() {
             ? <PilotPage />
             : path === '/cars'
               ? <CarsPage />
+              : path === '/gangs'
+                ? <GangsPage />
           : path === '/adminpanelv2'
             ? <AdminPanelV2 />
             : <RouletteDemo />}

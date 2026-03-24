@@ -393,6 +393,21 @@ export default function RouletteDemo() {
     setShowWinModal(false);
   };
 
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.code !== 'Space') return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      if (!isSpinning && cashBalance >= 100_000) {
+        handleSpin('cash');
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isSpinning, cashBalance]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-[#130f2d] text-white">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(129,74,255,0.23),transparent_35%),radial-gradient(circle_at_bottom,rgba(255,72,72,0.12),transparent_23%)]" />
