@@ -120,8 +120,11 @@ export default function FarmatPage() {
 
   const canRun = activeAction === null;
 
-  const startAction = (key: ActionKey) => {
+  const startAction = (key: ActionKey, options?: { convertedDirtyCost?: number }) => {
     const action = actions[key];
+    const convertedDirtyCost = options?.convertedDirtyCost ?? 0;
+    const dirtyCost = key === 'process_pack' ? 900_000 : key === 'refine_pack' ? 100_000 : 0;
+    const dirtyDebit = Math.max(0, dirtyCost - convertedDirtyCost);
 
     setActiveAction(key);
     setTimer(action.duration);
@@ -140,11 +143,15 @@ export default function FarmatPage() {
         if (caught) {
           if (key === 'process_pack') {
             setFrunze((current) => Math.max(0, current - 1200));
-            setBaniMurdari((current) => Math.max(0, current - 900_000));
+            if (dirtyDebit > 0) {
+              setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
+            }
           }
           if (key === 'refine_pack') {
             setPlicuriAlbe((current) => Math.max(0, current - 400));
-            setBaniMurdari((current) => Math.max(0, current - 100_000));
+            if (dirtyDebit > 0) {
+              setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
+            }
           }
           pushPopup('danger', 'A VENIT RAZIIIAAAA!!!');
           setActiveAction(null);
@@ -160,7 +167,9 @@ export default function FarmatPage() {
         if (key === 'process_pack') {
           setFrunze((current) => current - 1200);
           setPlicuriAlbe((current) => current + 400);
-          setBaniMurdari((current) => current - 900_000);
+          if (dirtyDebit > 0) {
+            setBaniMurdari((current) => current - dirtyDebit);
+          }
           setProcessedAlbe((current) => current + 400);
           pushPopup('success', 'Conversie facuta: 1200 frunze -> 400 plicuri albe.');
         }
@@ -168,7 +177,9 @@ export default function FarmatPage() {
         if (key === 'refine_pack') {
           setPlicuriAlbe((current) => current - 400);
           setPlicuriAlbastre((current) => current + 800);
-          setBaniMurdari((current) => current - 100_000);
+          if (dirtyDebit > 0) {
+            setBaniMurdari((current) => current - dirtyDebit);
+          }
           setProcessedAlbastre((current) => current + 800);
           pushPopup('success', 'Conversie facuta: 400 plicuri albe -> 800 plicuri albastre.');
         }
@@ -220,11 +231,11 @@ export default function FarmatPage() {
     if (!confirmConvert || isConverting) return;
     setIsConverting(true);
     setBaniCurati((current) => current - confirmConvert.cleanCost);
-    setBaniMurdari((current) => current + confirmConvert.needed);
     const actionKey = confirmConvert.key;
+    const convertedDirtyCost = confirmConvert.needed;
     setConfirmConvert(null);
     window.setTimeout(() => {
-      startAction(actionKey);
+      startAction(actionKey, { convertedDirtyCost });
       setIsConverting(false);
     }, 0);
   };
