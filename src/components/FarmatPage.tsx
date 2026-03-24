@@ -1,64 +1,119 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type ActionKey = 'collect_leaves' | 'process_pack' | 'refine_pack';
+type PopupType = 'success' | 'danger' | 'info';
 
-type ToastType = 'success' | 'danger' | 'info';
+const GAME_KEY = 'luck_game_state_v1';
+const GAME_SALT = 'stifyy-ogromania-salt';
+
+function signPayload(payload: unknown) {
+  const raw = JSON.stringify(payload) + GAME_SALT;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
+  return String(hash);
+}
+
+function loadGameState() {
+  try {
+    const raw = localStorage.getItem(GAME_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.data || !parsed?.sig) return null;
+    return signPayload(parsed.data) === parsed.sig ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveGameState(data: unknown) {
+  try {
+    localStorage.setItem(GAME_KEY, JSON.stringify({ data, sig: signPayload(data) }));
+  } catch {}
+}
 
 const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeLostHours: number; run: string }> = {
   collect_leaves: {
-    title: 'Culege frunze',
+    title: 'Culege Frunze',
     duration: 10,
     risk: 10,
     timeLostHours: 1,
     run: '+1000 frunze',
   },
   process_pack: {
-    title: 'Procesare plicuri nivel 1',
+    title: 'Procesare Plicuri Albe',
     duration: 10,
     risk: 10,
     timeLostHours: 1,
-    run: '2400 frunze -> 800 plicuri (cost 2.000.000 murdari)',
+    run: '2400 frunze -> 800 plicuri albe (cost 2.000.000 murdari)',
   },
   refine_pack: {
-    title: 'Procesare plicuri nivel 2',
+    title: 'Procesare Albastru',
     duration: 15,
     risk: 10,
     timeLostHours: 2.5,
-    run: '800 plicuri -> 1600 plicuri finale (cost 250.000 murdari)',
+    run: '800 plicuri albe -> 1600 plicuri albastre (cost 250.000 murdari)',
   },
 };
 
 export default function FarmatPage() {
-  const [frunze, setFrunze] = useState(0);
-  const [plicuriNivel1, setPlicuriNivel1] = useState(0);
-  const [plicuriFinale, setPlicuriFinale] = useState(0);
-  const [baniMurdari, setBaniMurdari] = useState(5_000_000);
-  const [baniCurati, setBaniCurati] = useState(0);
+  const saved = typeof window !== 'undefined' ? loadGameState() : null;
+
+  const [frunze, setFrunze] = useState(saved?.frunze ?? 0);
+  const [plicuriAlbe, setPlicuriAlbe] = useState(saved?.plicuriAlbe ?? 0);
+  const [plicuriAlbastre, setPlicuriAlbastre] = useState(saved?.plicuriAlbastre ?? 0);
+  const [baniMurdari, setBaniMurdari] = useState(saved?.baniMurdari ?? 0);
+  const [baniCurati, setBaniCurati] = useState(saved?.baniCurati ?? 5_000_000);
 
   const [activeAction, setActiveAction] = useState<ActionKey | null>(null);
   const [timer, setTimer] = useState(0);
-  const [timeLost, setTimeLost] = useState(0);
 
-  const [processedFrunze, setProcessedFrunze] = useState(0);
-  const [processedNivel1, setProcessedNivel1] = useState(0);
-  const [processedFinale, setProcessedFinale] = useState(0);
-  const [rouletteSpent, setRouletteSpent] = useState(0);
-  const [rouletteWon, setRouletteWon] = useState(0);
+  const [timeLost, setTimeLost] = useState(saved?.timeLostFarm ?? 0);
+  const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
+  const [processedAlbe, setProcessedAlbe] = useState(saved?.processedWhite ?? 0);
+  const [processedAlbastre, setProcessedAlbastre] = useState(saved?.processedBlue ?? 0);
+  const [rouletteSpent, setRouletteSpent] = useState(saved?.rouletteSpent ?? 0);
+  const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
 
-  const [toasts, setToasts] = useState<Array<{ id: number; type: ToastType; text: string }>>([]);
+  const [popup, setPopup] = useState<null | { type: PopupType; text: string }>(null);
 
-  const pushToast = (type: ToastType, text: string) => {
-    const id = Date.now() + Math.floor(Math.random() * 1000);
-    setToasts((current) => [...current, { id, type, text }]);
-    window.setTimeout(() => {
-      setToasts((current) => current.filter((t) => t.id !== id));
-    }, 3500);
+  useEffect(() => {
+    const latest = loadGameState();
+    if (!latest) return;
+    setRouletteSpent(latest.rouletteSpent ?? 0);
+    setRouletteWon(latest.rouletteWon ?? 0);
+  }, []);
+
+  useEffect(() => {
+    const existing = loadGameState() || {};
+    saveGameState({
+      ...existing,
+      frunze,
+      plicuriAlbe,
+      plicuriAlbastre,
+      baniMurdari,
+      baniCurati,
+      timeLostFarm: timeLost,
+      processedFrunze,
+      processedWhite: processedAlbe,
+      processedBlue: processedAlbastre,
+      rouletteSpent,
+      rouletteWon,
+      cashBalance: saved?.cashBalance ?? 5_000_000,
+      fragments: saved?.fragments ?? 0,
+      ogCoinsBalance: saved?.ogCoinsBalance ?? 0,
+      bonusSpins: saved?.bonusSpins ?? 0,
+    });
+  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeLost, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon, saved]);
+
+  const pushPopup = (type: PopupType, text: string) => {
+    setPopup({ type, text });
+    window.setTimeout(() => setPopup(null), 3200);
   };
 
   const loseAllInventory = () => {
     setFrunze(0);
-    setPlicuriNivel1(0);
-    setPlicuriFinale(0);
+    setPlicuriAlbe(0);
+    setPlicuriAlbastre(0);
   };
 
   const canRun = activeAction === null;
@@ -68,18 +123,17 @@ export default function FarmatPage() {
     const action = actions[key];
 
     if (key === 'process_pack' && (frunze < 2400 || baniMurdari < 2_000_000)) {
-      pushToast('danger', 'Ai nevoie de 2400 frunze si 2.000.000 bani murdari.');
+      pushPopup('danger', 'Ai nevoie de 2400 frunze si 2.000.000 bani murdari.');
       return;
     }
 
-    if (key === 'refine_pack' && (plicuriNivel1 < 800 || baniMurdari < 250_000)) {
-      pushToast('danger', 'Ai nevoie de 800 plicuri nivel 1 si 250.000 bani murdari.');
+    if (key === 'refine_pack' && (plicuriAlbe < 800 || baniMurdari < 250_000)) {
+      pushPopup('danger', 'Ai nevoie de 800 plicuri albe si 250.000 bani murdari.');
       return;
     }
 
     setActiveAction(key);
     setTimer(action.duration);
-    pushToast('info', `${action.title} a pornit.`);
 
     let t = action.duration;
     const interval = window.setInterval(() => {
@@ -94,7 +148,7 @@ export default function FarmatPage() {
 
         if (caught) {
           loseAllInventory();
-          pushToast('danger', 'Ai fost prins in control. Inventarul curent a fost pierdut.');
+          pushPopup('danger', 'Ai fost prins in control. Ai pierdut toata marfa de pe tine.');
           setActiveAction(null);
           return;
         }
@@ -102,23 +156,23 @@ export default function FarmatPage() {
         if (key === 'collect_leaves') {
           setFrunze((current) => current + 1000);
           setProcessedFrunze((current) => current + 1000);
-          pushToast('success', '+1000 frunze.');
+          pushPopup('success', '+1000 frunze.');
         }
 
         if (key === 'process_pack') {
           setFrunze((current) => current - 2400);
-          setPlicuriNivel1((current) => current + 800);
+          setPlicuriAlbe((current) => current + 800);
           setBaniMurdari((current) => current - 2_000_000);
-          setProcessedNivel1((current) => current + 800);
-          pushToast('success', 'Conversie reusita: 2400 frunze -> 800 plicuri nivel 1.');
+          setProcessedAlbe((current) => current + 800);
+          pushPopup('success', 'Conversie facuta: 2400 frunze -> 800 plicuri albe.');
         }
 
         if (key === 'refine_pack') {
-          setPlicuriNivel1((current) => current - 800);
-          setPlicuriFinale((current) => current + 1600);
+          setPlicuriAlbe((current) => current - 800);
+          setPlicuriAlbastre((current) => current + 1600);
           setBaniMurdari((current) => current - 250_000);
-          setProcessedFinale((current) => current + 1600);
-          pushToast('success', 'Conversie reusita: 800 plicuri nivel 1 -> 1600 plicuri finale.');
+          setProcessedAlbastre((current) => current + 1600);
+          pushPopup('success', 'Conversie facuta: 800 plicuri albe -> 1600 plicuri albastre.');
         }
 
         setActiveAction(null);
@@ -127,59 +181,59 @@ export default function FarmatPage() {
   };
 
   const sellBulk = () => {
-    if (!plicuriFinale) {
-      pushToast('danger', 'Nu ai plicuri finale pentru vanzare.');
+    if (!plicuriAlbastre) {
+      pushPopup('danger', 'Nu ai marfa pentru vanzare bulk.');
       return;
     }
 
-    const payout = plicuriFinale * 2300;
+    const payout = plicuriAlbastre * 2300;
     setBaniMurdari((current) => current + payout);
-    setPlicuriFinale(0);
-    pushToast('success', `Vanzare bulk: +${payout.toLocaleString('ro-RO')} bani murdari.`);
+    setPlicuriAlbastre(0);
+    pushPopup('success', `Vanzare bulk: +${payout.toLocaleString('ro-RO')} bani murdari.`);
   };
 
   const deliver100 = () => {
-    if (plicuriFinale < 100) {
-      pushToast('danger', 'Ai nevoie de minim 100 plicuri finale pentru livrare.');
+    if (plicuriAlbastre < 100) {
+      pushPopup('danger', 'Ai nevoie de minim 100 plicuri albastre.');
       return;
     }
 
     const caught = Math.random() < 0.1;
     if (caught) {
-      setPlicuriFinale((current) => current - 100);
-      pushToast('danger', 'Ai fost prins la livrare. Ai pierdut 100 plicuri finale.');
+      setPlicuriAlbastre((current) => current - 100);
+      pushPopup('danger', 'Ai fost prins la livrare. Ai pierdut 100 bucati.');
       return;
     }
 
     const payout = 100 * 3179;
-    setPlicuriFinale((current) => current - 100);
+    setPlicuriAlbastre((current) => current - 100);
     setBaniMurdari((current) => current + payout);
-    pushToast('success', `Livrare reusita: +${payout.toLocaleString('ro-RO')} bani murdari.`);
+    pushPopup('success', `Livrare reusita: +${payout.toLocaleString('ro-RO')} bani murdari.`);
   };
 
   const washMoney = () => {
     if (!baniMurdari) {
-      pushToast('danger', 'Nu ai bani murdari pentru conversie.');
+      pushPopup('danger', 'Nu ai bani murdari de convertit.');
       return;
     }
 
     const clean = Math.floor(baniMurdari * 0.65);
     setBaniMurdari(0);
     setBaniCurati((current) => current + clean);
-    pushToast('success', `Conversie reusita: ${clean.toLocaleString('ro-RO')} bani curati.`);
+    pushPopup('success', `Ai convertit ${clean.toLocaleString('ro-RO')} bani curati.`);
   };
 
   const stats = useMemo(
     () => [
       { label: 'Timp pierdut in joc', value: `${timeLost.toLocaleString('ro-RO')}h` },
-      { label: 'Frunze adunate', value: processedFrunze.toLocaleString('ro-RO') },
-      { label: 'Plicuri nivel 1', value: processedNivel1.toLocaleString('ro-RO') },
-      { label: 'Plicuri finale', value: processedFinale.toLocaleString('ro-RO') },
+      { label: 'Procesat frunze', value: processedFrunze.toLocaleString('ro-RO') },
+      { label: 'Procesat albe', value: processedAlbe.toLocaleString('ro-RO') },
+      { label: 'Procesat albastre', value: processedAlbastre.toLocaleString('ro-RO') },
       { label: 'Cheltuit ruleta', value: `${rouletteSpent.toLocaleString('ro-RO')} $` },
       { label: 'Castig ruleta', value: `${rouletteWon.toLocaleString('ro-RO')} $` },
       { label: 'Total ruleta', value: `${(rouletteWon - rouletteSpent).toLocaleString('ro-RO')} $` },
     ],
-    [processedFinale, processedFrunze, processedNivel1, rouletteSpent, rouletteWon, timeLost],
+    [timeLost, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon],
   );
 
   return (
@@ -190,14 +244,14 @@ export default function FarmatPage() {
 
           <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-5">
             <StatCard label="Frunze" value={frunze} />
-            <StatCard label="Plicuri nivel 1" value={plicuriNivel1} />
-            <StatCard label="Plicuri finale" value={plicuriFinale} />
-            <StatCard label="Bani murdari" value={baniMurdari} money />
-            <StatCard label="Bani curati" value={baniCurati} money />
+            <StatCard label="Plicuri Albe" value={plicuriAlbe} />
+            <StatCard label="Plicuri Albastre" value={plicuriAlbastre} />
+            <StatCard label="Bani Murdari" value={baniMurdari} money />
+            <StatCard label="Bani Curati" value={baniCurati} money />
           </div>
 
           <div className="mt-4 rounded-xl border border-white/15 bg-black/25 p-3">
-            <p className="text-sm font-semibold text-white/75">Ordine conversie: 2400 Frunze -&gt; 800 Plicuri nivel 1 -&gt; 1600 Plicuri finale</p>
+            <p className="text-sm font-semibold text-white/75">2400 Frunze -&gt; 800 Plicuri Albe -&gt; 1600 Plicuri Albastre</p>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -210,12 +264,12 @@ export default function FarmatPage() {
                   type="button"
                   onClick={() => runAction(key)}
                   disabled={!canRun}
-                  className={`rounded-xl border border-white/15 bg-gradient-to-br ${color} p-4 text-left transition hover:brightness-110 disabled:opacity-50`}
+                  className={`rounded-xl border border-white/15 p-4 text-left transition ${canRun ? `bg-gradient-to-br ${color} hover:brightness-110` : 'bg-[#1d1a34] text-white/50'}`}
                 >
                   <p className="text-base font-black">{action.title}</p>
-                  <p className="mt-1 text-sm text-white/70">Durata: {action.duration}s</p>
-                  <p className="text-sm text-white/70">{action.run}</p>
-                  <p className="text-sm text-white/70">Timp joc: {action.timeLostHours}h · Risc: {action.risk}%</p>
+                  <p className="mt-1 text-sm">Durata: {action.duration}s</p>
+                  <p className="text-sm">{action.run}</p>
+                  <p className="text-sm">Timp joc: {action.timeLostHours}h · Risc: {action.risk}%</p>
                 </button>
               );
             })}
@@ -224,13 +278,13 @@ export default function FarmatPage() {
           <div className="mt-6 rounded-xl border border-white/15 bg-black/25 p-4">
             <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Vanzare</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <button type="button" onClick={sellBulk} className="rounded-lg bg-emerald-500/80 px-4 py-2 text-sm font-bold">
+              <button type="button" onClick={sellBulk} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre ? 'bg-emerald-500/80' : 'bg-[#2a2744] text-white/50'}`}>
                 Vanzare bulk tot (2300/buc)
               </button>
-              <button type="button" onClick={deliver100} className="rounded-lg bg-sky-500/80 px-4 py-2 text-sm font-bold">
+              <button type="button" onClick={deliver100} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre >= 100 ? 'bg-sky-500/80' : 'bg-[#2a2744] text-white/50'}`}>
                 Livrare 100 buc (3179/buc)
               </button>
-              <button type="button" onClick={washMoney} className="rounded-lg bg-amber-500/90 px-4 py-2 text-sm font-bold text-black">
+              <button type="button" onClick={washMoney} className={`rounded-lg px-4 py-2 text-sm font-bold ${baniMurdari ? 'bg-amber-500/90 text-black' : 'bg-[#2a2744] text-white/50'}`}>
                 Converteste bani curati (65%)
               </button>
             </div>
@@ -257,16 +311,15 @@ export default function FarmatPage() {
         </aside>
       </div>
 
-      <div className="fixed right-4 top-20 z-50 space-y-2">
-        {toasts.map((toast) => (
+      {popup ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
           <div
-            key={toast.id}
-            className={`min-w-[260px] rounded-lg border px-3 py-2 text-sm font-semibold shadow-xl ${toast.type === 'success' ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-100' : toast.type === 'danger' ? 'border-rose-300/40 bg-rose-500/20 text-rose-100' : 'border-sky-300/40 bg-sky-500/20 text-sky-100'}`}
+            className={`w-full max-w-md rounded-2xl border px-5 py-5 text-center text-base font-semibold shadow-xl ${popup.type === 'success' ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-100' : popup.type === 'danger' ? 'border-rose-300/40 bg-rose-500/20 text-rose-100' : 'border-sky-300/40 bg-sky-500/20 text-sky-100'}`}
           >
-            {toast.text}
+            {popup.text}
           </div>
-        ))}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }

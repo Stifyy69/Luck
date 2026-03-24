@@ -54,6 +54,35 @@ const START_INDEX = rewards.length * 4;
 const SPIN_DURATION_MS = 4600;
 const MIN_EXTRA_LOOPS = 6;
 const MAX_EXTRA_LOOPS = 8;
+const GAME_KEY = 'luck_game_state_v1';
+const GAME_SALT = 'stifyy-ogromania-salt';
+
+function signPayload(payload) {
+  const raw = JSON.stringify(payload) + GAME_SALT;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
+  }
+  return String(hash);
+}
+
+function loadGameState() {
+  try {
+    const raw = localStorage.getItem(GAME_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.data || !parsed?.sig) return null;
+    return signPayload(parsed.data) === parsed.sig ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveGameState(data) {
+  try {
+    localStorage.setItem(GAME_KEY, JSON.stringify({ data, sig: signPayload(data) }));
+  } catch {}
+}
 
 function randomMultipleOfFiveThousand(min, max) {
   const slots = Math.floor((max - min) / 5000);
@@ -115,12 +144,17 @@ export default function RouletteDemo() {
   const [showWinModal, setShowWinModal] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(START_INDEX);
   const [latestWins, setLatestWins] = useState([rewards[0], rewards[1], rewards[4], rewards[11]]);
-  const [fragments, setFragments] = useState(0);
-  const [ogCoinsBalance, setOgCoinsBalance] = useState(0);
-  const [bonusSpins, setBonusSpins] = useState(0);
-  const [cashBalance, setCashBalance] = useState(5_000_000);
-  const [rouletteSpent, setRouletteSpent] = useState(0);
-  const [rouletteWon, setRouletteWon] = useState(0);
+  const saved = typeof window !== 'undefined' ? loadGameState() : null;
+  const [fragments, setFragments] = useState(saved?.fragments ?? 0);
+  const [ogCoinsBalance, setOgCoinsBalance] = useState(saved?.ogCoinsBalance ?? 0);
+  const [bonusSpins, setBonusSpins] = useState(saved?.bonusSpins ?? 0);
+  const [cashBalance, setCashBalance] = useState(saved?.cashBalance ?? 5_000_000);
+  const [rouletteSpent, setRouletteSpent] = useState(saved?.rouletteSpent ?? 0);
+  const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
+  const [timeLostFarm, setTimeLostFarm] = useState(saved?.timeLostFarm ?? 0);
+  const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
+  const [processedWhite, setProcessedWhite] = useState(saved?.processedWhite ?? 0);
+  const [processedBlue, setProcessedBlue] = useState(saved?.processedBlue ?? 0);
 
   const trackRewards = useMemo(
     () => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(),
@@ -143,6 +177,23 @@ export default function RouletteDemo() {
       timersRef.current.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
+
+  useEffect(() => {
+    const existing = loadGameState() || {};
+    saveGameState({
+      ...existing,
+      fragments,
+      ogCoinsBalance,
+      bonusSpins,
+      cashBalance,
+      rouletteSpent,
+      rouletteWon,
+      timeLostFarm,
+      processedFrunze,
+      processedWhite,
+      processedBlue,
+    });
+  }, [fragments, ogCoinsBalance, bonusSpins, cashBalance, rouletteSpent, rouletteWon, timeLostFarm, processedFrunze, processedWhite, processedBlue]);
 
   const scheduleTask = (callback, delay) => {
     const timer = window.setTimeout(callback, delay);
@@ -279,11 +330,9 @@ export default function RouletteDemo() {
       if (winner.name === 'Fragmente ruleta') {
         setFragments((current) => {
           const total = current + 5;
-          if (total >= 4) {
-            const extra = Math.floor(total / 4);
-            setBonusSpins((spins) => spins + extra);
-          }
-          return total;
+          const extra = Math.floor(total / 4);
+          if (extra > 0) setBonusSpins((spins) => spins + extra);
+          return total % 4;
         });
       }
 
@@ -421,32 +470,6 @@ export default function RouletteDemo() {
             </div>
           </div>
 
-          <div className="mt-3 rounded-[12px] border border-white/30 bg-[#06061a]/60 px-4 py-2.5 text-center">
-            {isSpinning ? (
-              <>
-                <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">In derulare</p>
-                <p className="mt-1.5 text-sm text-white/70">
-                  Ruleta ruleaza sub pointer si incetineste progresiv pana pe reward-ul castigator.
-                </p>
-              </>
-            ) : (selectedReward || latestWins[0]) ? (
-              <>
-                <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">Ultimul castig</p>
-                <div className="mt-2 flex items-center justify-center gap-3">
-                  <span className="text-2xl">{(selectedReward || latestWins[0]).emoji}</span>
-                  <div>
-                    <p className="text-base font-extrabold text-white">{(selectedReward || latestWins[0]).name}</p>
-                    <p className="text-sm text-white/60">
-                      {rarityLabel[(selectedReward || latestWins[0]).tier]} · {(selectedReward || latestWins[0]).subtitle}
-                    </p>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-white/60">Aștept primul câștig...</p>
-            )}
-          </div>
-
           </div>
 
           <section className="mx-auto mt-7 w-full max-w-[1120px]">
@@ -497,6 +520,16 @@ export default function RouletteDemo() {
                   {(rouletteWon - rouletteSpent).toLocaleString('ro-RO')} $
                 </p>
               </div>
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Timp pierdut farmat</p>
+                <p className="text-base font-black text-white">{timeLostFarm.toLocaleString('ro-RO')}h</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Procesat (F/A/B)</p>
+                <p className="text-base font-black text-white">
+                  {processedFrunze.toLocaleString('ro-RO')} / {processedWhite.toLocaleString('ro-RO')} / {processedBlue.toLocaleString('ro-RO')}
+                </p>
+              </div>
             </div>
           </div>
         </aside>
@@ -526,17 +559,6 @@ export default function RouletteDemo() {
                 className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-bold uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
               >
                 Inchide
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowWinModal(false);
-                  handleSpin(activeCost);
-                }}
-                disabled={isSpinning}
-                className="flex-1 rounded-2xl border border-red-400/25 bg-gradient-to-r from-red-600 to-orange-500 px-5 py-3 text-sm font-bold uppercase tracking-[0.18em] text-white transition hover:scale-[1.01] disabled:opacity-60"
-              >
-                Mai incearca
               </button>
             </div>
           </div>
