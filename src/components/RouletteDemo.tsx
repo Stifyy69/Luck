@@ -3,17 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const rewards = [
-  { name: 'Vehicul Suvenir', subtitle: 'Motocicleta 2.000.000 / Masina 5.000.000', tier: 'legendary', emoji: '🚗' },
-  { name: 'VIP Gold', subtitle: '0 valoare', tier: 'epic', emoji: '💎' },
-  { name: 'VIP Silver', subtitle: '0 valoare', tier: 'epic', emoji: '💠' },
+  { name: 'Vehicul Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
+  { name: 'VIP Gold', subtitle: '6-12 zile', tier: 'epic', emoji: '💎' },
+  { name: 'VIP Silver', subtitle: '6-12 zile', tier: 'epic', emoji: '💠' },
   { name: 'Mystery Box', subtitle: 'Obiecte unice', tier: 'epic', emoji: '📦' },
   { name: 'Fragmente ruleta', subtitle: 'x5 fragmente', tier: 'rare', emoji: '🪙' },
   { name: 'OGCoins', subtitle: '10 OGC', tier: 'rare', emoji: '🟠' },
-  { name: 'Slot Vehicle', subtitle: '0 valoare', tier: 'rare', emoji: '➕' },
-  { name: 'Voucher Showroom', subtitle: '0 valoare', tier: 'rare', emoji: '🎟️' },
-  { name: 'Job Boost', subtitle: '0 valoare', tier: 'uncommon', emoji: '📈' },
-  { name: 'Scutire Taxe', subtitle: '0 valoare', tier: 'uncommon', emoji: '💸' },
-  { name: 'Xenon Vehicul', subtitle: '4x 5.000 si 1x 150.000', tier: 'common', emoji: '🔩' },
+  { name: 'Slot Vehicle', subtitle: '1 slot', tier: 'rare', emoji: '➕' },
+  { name: 'Voucher Showroom', subtitle: '1 voucher', tier: 'rare', emoji: '🎟️' },
+  { name: 'Job Boost', subtitle: '12 de ore', tier: 'uncommon', emoji: '📈' },
+  { name: 'Scutire Taxe', subtitle: '24 de ore', tier: 'uncommon', emoji: '💸' },
+  { name: 'Xenon Vehicul', subtitle: '1 pachet xenon', tier: 'common', emoji: '🔩' },
   { name: 'Bani', subtitle: 'suma de bani', tier: 'common', emoji: '💵' },
 ];
 
@@ -61,32 +61,28 @@ function randomMultipleOfFiveThousand(min, max) {
 }
 
 function resolveRewardOutcome(baseReward) {
+  if (baseReward.name === 'Vehicul Suvenir') {
+    const value = Math.random() < 0.5 ? 2_000_000 : 5_000_000;
+    return { ...baseReward, payout: value };
+  }
+
   if (baseReward.name === 'Mystery Box') {
     const isJackpot = Math.random() < 0.001;
     const value = isJackpot ? randomMultipleOfFiveThousand(5_000_000, 10_000_000) : randomMultipleOfFiveThousand(5_000, 1_000_000);
-    return {
-      ...baseReward,
-      subtitle: `${isJackpot ? 'Jackpot haine' : 'Haine random'}: ${value.toLocaleString('ro-RO')}`,
-    };
+    return { ...baseReward, payout: value };
   }
 
   if (baseReward.name === 'Xenon Vehicul') {
     const value = Math.random() < 0.8 ? 5_000 : 150_000;
-    return {
-      ...baseReward,
-      subtitle: `Valoare xenon: ${value.toLocaleString('ro-RO')}`,
-    };
+    return { ...baseReward, payout: value };
   }
 
   if (baseReward.name === 'Bani') {
     const value = randomMultipleOfFiveThousand(25_000, 50_000);
-    return {
-      ...baseReward,
-      subtitle: `Suma cash: ${value.toLocaleString('ro-RO')}`,
-    };
+    return { ...baseReward, payout: value };
   }
 
-  return baseReward;
+  return { ...baseReward, payout: 0 };
 }
 
 function pickWeightedReward() {
@@ -122,6 +118,9 @@ export default function RouletteDemo() {
   const [fragments, setFragments] = useState(0);
   const [ogCoinsBalance, setOgCoinsBalance] = useState(0);
   const [bonusSpins, setBonusSpins] = useState(0);
+  const [cashBalance, setCashBalance] = useState(5_000_000);
+  const [rouletteSpent, setRouletteSpent] = useState(0);
+  const [rouletteWon, setRouletteWon] = useState(0);
 
   const trackRewards = useMemo(
     () => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(),
@@ -235,6 +234,8 @@ export default function RouletteDemo() {
 
   const handleSpin = async (costType) => {
     if (isSpinning || !viewportWidth) return;
+    if (costType === 'cash' && cashBalance < 100_000) return;
+    if (costType === 'ogc' && ogCoinsBalance < 30 && bonusSpins < 1) return;
 
     clearScheduledTasks();
 
@@ -255,6 +256,15 @@ export default function RouletteDemo() {
     setShowWinModal(false);
     setHighlightIndex(null);
     setIsSpinning(true);
+
+    if (costType === 'cash') {
+      setCashBalance((current) => current - 100_000);
+      setRouletteSpent((current) => current + 100_000);
+    } else if (bonusSpins > 0) {
+      setBonusSpins((current) => current - 1);
+    } else {
+      setOgCoinsBalance((current) => current - 30);
+    }
 
     currentIndexRef.current = targetIndex;
     setTranslateX(getTranslateForIndex(targetIndex, viewportWidth));
@@ -288,6 +298,11 @@ export default function RouletteDemo() {
         });
       }
 
+      if (winner.payout > 0) {
+        setCashBalance((current) => current + winner.payout);
+        setRouletteWon((current) => current + winner.payout);
+      }
+
       playWinSound();
     }, SPIN_DURATION_MS + 40);
 
@@ -305,7 +320,7 @@ export default function RouletteDemo() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(129,74,255,0.23),transparent_35%),radial-gradient(circle_at_bottom,rgba(255,72,72,0.12),transparent_23%)]" />
       <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(8,7,24,0.2),rgba(7,6,20,0.76))]" />
 
-      <div className="relative mx-auto grid min-h-screen w-full max-w-[1340px] grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[190px_minmax(0,1fr)] lg:gap-6 lg:px-7">
+      <div className="relative mx-auto grid min-h-screen w-full max-w-[1440px] grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[190px_minmax(0,1fr)_230px] lg:gap-6 lg:px-7">
         <aside className="hidden lg:flex lg:flex-col lg:pt-7">
           <p className="pl-1 text-left text-[24px] font-black uppercase italic leading-[0.9] tracking-tight text-white/90">
             Ultimele
@@ -376,7 +391,7 @@ export default function RouletteDemo() {
             <button
               type="button"
               onClick={() => handleSpin('cash')}
-              disabled={isSpinning}
+              disabled={isSpinning || cashBalance < 100_000}
               className="w-full rounded-[10px] border border-red-300/30 bg-gradient-to-r from-red-600 to-orange-500 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(239,68,68,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
             >
               {isSpinning && activeCost === 'cash' ? 'Se deschide...' : 'Deschide cu 100,000$'}
@@ -384,7 +399,7 @@ export default function RouletteDemo() {
             <button
               type="button"
               onClick={() => handleSpin('ogc')}
-              disabled={isSpinning}
+              disabled={isSpinning || (ogCoinsBalance < 30 && bonusSpins < 1)}
               className="w-full rounded-[10px] border border-orange-300/30 bg-gradient-to-r from-orange-500 to-amber-400 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(251,146,60,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
             >
               {isSpinning && activeCost === 'ogc' ? 'Se deschide...' : 'Deschide cu 30 OGC'}
@@ -459,6 +474,32 @@ export default function RouletteDemo() {
             </div>
           </footer>
         </div>
+
+        <aside className="hidden lg:block lg:pt-[86px]">
+          <div className="rounded-2xl border border-white/15 bg-[#13112d]/72 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-white/45">Stats</p>
+            <div className="mt-3 space-y-2 text-sm">
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Cash disponibil</p>
+                <p className="text-lg font-black text-white">{cashBalance.toLocaleString('ro-RO')} $</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Cheltuit ruleta</p>
+                <p className="text-lg font-black text-rose-300">{rouletteSpent.toLocaleString('ro-RO')} $</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Câștigat ruleta</p>
+                <p className="text-lg font-black text-emerald-300">{rouletteWon.toLocaleString('ro-RO')} $</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Total net</p>
+                <p className={`text-lg font-black ${rouletteWon - rouletteSpent >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  {(rouletteWon - rouletteSpent).toLocaleString('ro-RO')} $
+                </p>
+              </div>
+            </div>
+          </div>
+        </aside>
       </div>
 
       {showWinModal && selectedReward ? (
