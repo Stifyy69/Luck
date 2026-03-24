@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
@@ -29,50 +29,80 @@ function saveGameState(data: unknown) {
 }
 
 export default function SleepPage() {
-  const saved = typeof window !== 'undefined' ? loadGameState() : null;
+  const [timer, setTimer] = useState(0);
   const [cooldown, setCooldown] = useState(0);
-  const [sleeping, setSleeping] = useState(false);
-  const [timer, setTimer] = useState(12);
   const [popup, setPopup] = useState<string | null>(null);
 
-  const startSleep = () => {
-    if (sleeping || cooldown > 0) return;
-    setSleeping(true);
-    setTimer(12);
+  const syncFromStorage = () => {
+    const latest = loadGameState() || {};
+    const now = Date.now();
+    const sleepEndsAt = latest.sleepEndsAt ?? 0;
+    const sleepCooldownUntil = latest.sleepCooldownUntil ?? 0;
 
-    let t = 12;
+    setTimer(Math.max(0, Math.ceil((sleepEndsAt - now) / 1000)));
+    setCooldown(Math.max(0, Math.ceil((sleepCooldownUntil - now) / 1000)));
+  };
+
+  useEffect(() => {
+    syncFromStorage();
     const interval = window.setInterval(() => {
-      t -= 1;
-      setTimer(t);
+      const latest = loadGameState() || {};
+      const now = Date.now();
 
-      if (t <= 0) {
-        window.clearInterval(interval);
-        setSleeping(false);
+      const sleepEndsAt = latest.sleepEndsAt ?? 0;
+      const sleepCooldownUntil = latest.sleepCooldownUntil ?? 0;
 
-        const latest = loadGameState() || saved || {};
+      if (sleepEndsAt > now) {
+        setTimer(Math.ceil((sleepEndsAt - now) / 1000));
+      } else {
+        setTimer(0);
+      }
+
+      if (sleepCooldownUntil > now) {
+        setCooldown(Math.ceil((sleepCooldownUntil - now) / 1000));
+      } else {
+        setCooldown(0);
+      }
+
+      if (sleepEndsAt > 0 && sleepEndsAt <= now && !latest.sleepRewardClaimed) {
         const nextCash = (latest.cashBalance ?? 1_000_000) + 150_000;
-        const nextTimeLost = (latest.timeLostFarm ?? 0) + 12;
+        const nextSleepTime = (latest.timeSleep ?? 0) + 12;
+        const nextCooldownUntil = now + 60_000;
 
         saveGameState({
           ...latest,
           cashBalance: nextCash,
           baniCurati: nextCash,
-          timeLostFarm: nextTimeLost,
+          timeSleep: nextSleepTime,
+          sleepRewardClaimed: true,
+          sleepCooldownUntil: nextCooldownUntil,
         });
 
-        setPopup('+150,000 bani curati (12h timp joc adaugat)');
+        setPopup('Abia ai dormit. +150,000 bani curati. Cooldown 60s.');
         window.setTimeout(() => setPopup(null), 2500);
-
-        setCooldown(30);
-        let c = 30;
-        const cooldownInterval = window.setInterval(() => {
-          c -= 1;
-          setCooldown(c);
-          if (c <= 0) window.clearInterval(cooldownInterval);
-        }, 1000);
       }
-    }, 1000);
+    }, 250);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const startSleep = () => {
+    const latest = loadGameState() || {};
+    const now = Date.now();
+
+    if ((latest.sleepCooldownUntil ?? 0) > now) return;
+    if ((latest.sleepEndsAt ?? 0) > now) return;
+
+    saveGameState({
+      ...latest,
+      sleepEndsAt: now + 12_000,
+      sleepRewardClaimed: false,
+    });
+
+    syncFromStorage();
   };
+
+  const isSleeping = timer > 0;
 
   return (
     <div className="min-h-screen bg-[#110d28] px-4 pb-10 pt-20 text-white sm:px-6">
@@ -82,22 +112,22 @@ export default function SleepPage() {
         </div>
 
         <h1 className="text-4xl font-black uppercase">Sleep</h1>
-        <p className="mt-2 text-white/70">Dormit 12h (simulat în 12 secunde), reward: 150.000 bani curati.</p>
+        <p className="mt-2 text-white/70">Sleep 12h (12s real). Reward 150.000 bani curati. Cooldown 60s.</p>
 
         <button
           type="button"
           onClick={startSleep}
-          disabled={sleeping || cooldown > 0}
-          className={`mt-6 rounded-xl px-6 py-3 text-base font-black ${sleeping || cooldown > 0 ? 'bg-[#2a2744] text-white/50' : 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white'}`}
+          disabled={isSleeping || cooldown > 0}
+          className={`mt-6 rounded-xl px-6 py-3 text-base font-black ${isSleeping || cooldown > 0 ? 'bg-[#2a2744] text-white/50' : 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white'}`}
         >
-          {sleeping ? `Se doarme... ${timer}s` : cooldown > 0 ? `Cooldown ${cooldown}s` : 'Sleep 12h'}
+          {isSleeping ? `Dormii... ${timer}s` : cooldown > 0 ? `Abia ai dormit (${cooldown}s)` : 'Sleep 12h'}
         </button>
       </div>
 
-      {popup ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-emerald-300/40 bg-emerald-500/20 px-5 py-5 text-center text-base font-semibold text-emerald-100 shadow-xl">
-            {popup}
+      {(popup || isSleeping) ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-violet-300/40 bg-violet-500/20 px-5 py-5 text-center text-base font-semibold text-violet-100 shadow-xl">
+            {isSleeping ? `Dormii... ${timer}s` : popup}
           </div>
         </div>
       ) : null}

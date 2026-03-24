@@ -31,26 +31,26 @@ function saveGameState(data: unknown) {
   } catch {}
 }
 
-const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeLostHours: number; run: string }> = {
+const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeSpentHours: number; run: string }> = {
   collect_leaves: {
     title: 'Culege Frunze',
     duration: 10,
     risk: 10,
-    timeLostHours: 1,
+    timeSpentHours: 1,
     run: '+1000 frunze',
   },
   process_pack: {
     title: 'Procesare Plicuri Albe',
     duration: 10,
     risk: 10,
-    timeLostHours: 1,
+    timeSpentHours: 1,
     run: '2400 frunze -> 800 plicuri albe (cost 2.000.000 murdari)',
   },
   refine_pack: {
     title: 'Procesare Albastru',
     duration: 15,
     risk: 10,
-    timeLostHours: 2.5,
+    timeSpentHours: 2.5,
     run: '800 plicuri albe -> 1600 plicuri albastre (cost 250.000 murdari)',
   },
 };
@@ -67,7 +67,8 @@ export default function FarmatPage() {
   const [activeAction, setActiveAction] = useState<ActionKey | null>(null);
   const [timer, setTimer] = useState(0);
 
-  const [timeLost, setTimeLost] = useState(saved?.timeLostFarm ?? 0);
+  const [timeFarm, setTimeFarm] = useState(saved?.timeFarm ?? saved?.timeLostFarm ?? 0);
+  const [timeSleep, setTimeSleep] = useState(saved?.timeSleep ?? 0);
   const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
   const [processedAlbe, setProcessedAlbe] = useState(saved?.processedWhite ?? 0);
   const [processedAlbastre, setProcessedAlbastre] = useState(saved?.processedBlue ?? 0);
@@ -92,7 +93,8 @@ export default function FarmatPage() {
       plicuriAlbastre,
       baniMurdari,
       baniCurati,
-      timeLostFarm: timeLost,
+      timeFarm,
+      timeSleep,
       processedFrunze,
       processedWhite: processedAlbe,
       processedBlue: processedAlbastre,
@@ -103,7 +105,7 @@ export default function FarmatPage() {
       ogCoinsBalance: saved?.ogCoinsBalance ?? 0,
       bonusSpins: saved?.bonusSpins ?? 0,
     });
-  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeLost, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon, saved]);
+  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeFarm, timeSleep, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon, saved]);
 
   const pushPopup = (type: PopupType, text: string) => {
     setPopup({ type, text });
@@ -166,7 +168,7 @@ export default function FarmatPage() {
         window.clearInterval(interval);
 
         const caught = Math.random() < action.risk / 100;
-        setTimeLost((current) => current + action.timeLostHours);
+        setTimeFarm((current) => current + action.timeSpentHours);
 
         if (caught) {
           loseAllInventory();
@@ -230,6 +232,7 @@ export default function FarmatPage() {
     const payout = 100 * 3179;
     setPlicuriAlbastre((current) => current - 100);
     setBaniMurdari((current) => current + payout);
+    setTimeFarm((current) => current + 0.25);
     pushPopup('success', `Livrare reusita: +${payout.toLocaleString('ro-RO')} bani murdari.`);
   };
 
@@ -247,7 +250,9 @@ export default function FarmatPage() {
 
   const stats = useMemo(
     () => [
-      { label: 'Timp pierdut in joc', value: `${timeLost.toLocaleString('ro-RO')}h` },
+      { label: 'Timp Petrecut Farm', value: `${timeFarm.toLocaleString('ro-RO')}h` },
+      { label: 'Timp Sleep', value: `${timeSleep.toLocaleString('ro-RO')}h` },
+      { label: 'Timp Total pe server', value: `${(timeFarm + timeSleep).toLocaleString('ro-RO')}h` },
       { label: 'Procesat frunze', value: processedFrunze.toLocaleString('ro-RO') },
       { label: 'Procesat albe', value: processedAlbe.toLocaleString('ro-RO') },
       { label: 'Procesat albastre', value: processedAlbastre.toLocaleString('ro-RO') },
@@ -255,7 +260,7 @@ export default function FarmatPage() {
       { label: 'Castig ruleta', value: `${rouletteWon.toLocaleString('ro-RO')} $` },
       { label: 'Total ruleta', value: `${(rouletteWon - rouletteSpent).toLocaleString('ro-RO')} $` },
     ],
-    [timeLost, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon],
+    [timeFarm, timeSleep, processedFrunze, processedAlbe, processedAlbastre, rouletteSpent, rouletteWon],
   );
 
   return (
@@ -297,7 +302,7 @@ export default function FarmatPage() {
                   <p className="text-base font-black">{action.title}</p>
                   <p className="mt-1 text-sm">Durata: {action.duration}s</p>
                   <p className="text-sm">{action.run}</p>
-                  <p className="text-sm">Timp joc: {action.timeLostHours}h · Risc: {action.risk}%</p>
+                  <p className="text-sm">Timp joc: {action.timeSpentHours}h</p>
                 </button>
               );
             })}

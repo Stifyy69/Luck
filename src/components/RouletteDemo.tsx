@@ -151,7 +151,8 @@ export default function RouletteDemo() {
   const [cashBalance, setCashBalance] = useState(saved?.cashBalance ?? 1_000_000);
   const [rouletteSpent, setRouletteSpent] = useState(saved?.rouletteSpent ?? 0);
   const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
-  const [timeLostFarm, setTimeLostFarm] = useState(saved?.timeLostFarm ?? 0);
+  const [timeFarm, setTimeFarm] = useState(saved?.timeFarm ?? saved?.timeLostFarm ?? 0);
+  const [timeSleep, setTimeSleep] = useState(saved?.timeSleep ?? 0);
   const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
   const [processedWhite, setProcessedWhite] = useState(saved?.processedWhite ?? 0);
   const [processedBlue, setProcessedBlue] = useState(saved?.processedBlue ?? 0);
@@ -190,12 +191,13 @@ export default function RouletteDemo() {
       cashBalance,
       rouletteSpent,
       rouletteWon,
-      timeLostFarm,
+      timeFarm,
+      timeSleep,
       processedFrunze,
       processedWhite,
       processedBlue,
     });
-  }, [fragments, ogCoinsBalance, bonusSpins, cashBalance, rouletteSpent, rouletteWon, timeLostFarm, processedFrunze, processedWhite, processedBlue]);
+  }, [fragments, ogCoinsBalance, bonusSpins, cashBalance, rouletteSpent, rouletteWon, timeFarm, timeSleep, processedFrunze, processedWhite, processedBlue]);
 
   const scheduleTask = (callback, delay) => {
     const timer = window.setTimeout(callback, delay);
@@ -535,8 +537,16 @@ export default function RouletteDemo() {
                 </p>
               </div>
               <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-                <p className="text-white/55">Timp pierdut farmat</p>
-                <p className="text-base font-black text-white">{timeLostFarm.toLocaleString('ro-RO')}h</p>
+                <p className="text-white/55">Timp Petrecut Farm</p>
+                <p className="text-base font-black text-white">{timeFarm.toLocaleString('ro-RO')}h</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Timp Sleep</p>
+                <p className="text-base font-black text-white">{timeSleep.toLocaleString('ro-RO')}h</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+                <p className="text-white/55">Timp Total pe server</p>
+                <p className="text-base font-black text-white">{(timeFarm + timeSleep).toLocaleString('ro-RO')}h</p>
               </div>
               <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
                 <p className="text-white/55">Procesat (F/A/B)</p>
