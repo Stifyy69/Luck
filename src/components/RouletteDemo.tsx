@@ -227,7 +227,7 @@ export default function RouletteDemo() {
       setIsSpinning(false);
       setSelectedReward(winner);
       setHighlightIndex(targetIndex);
-      setLatestWins((current) => [winner, ...current].slice(0, 4));
+      setLatestWins((current) => [winner, ...current].slice(0, 10));
       playWinSound();
     }, SPIN_DURATION_MS + 40);
 
@@ -245,7 +245,7 @@ export default function RouletteDemo() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(129,74,255,0.23),transparent_35%),radial-gradient(circle_at_bottom,rgba(255,72,72,0.12),transparent_23%)]" />
       <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(8,7,24,0.2),rgba(7,6,20,0.76))]" />
 
-      <div className="relative mx-auto grid min-h-screen w-full max-w-[1340px] grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[170px_minmax(0,1fr)] lg:gap-6 lg:px-7">
+      <div className="relative mx-auto grid min-h-screen w-full max-w-[1340px] grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[190px_minmax(0,1fr)] lg:gap-6 lg:px-7">
         <aside className="hidden lg:flex lg:flex-col lg:pt-7">
           <p className="pl-1 text-left text-[24px] font-black uppercase italic leading-[0.9] tracking-tight text-white/90">
             Ultimele
@@ -253,13 +253,13 @@ export default function RouletteDemo() {
             castiguri
           </p>
           <div className="mt-4 space-y-2 opacity-45">
-            {rewards.slice(10, 12).concat(rewards.slice(4, 7)).map((reward, index) => (
+            {latestWins.map((reward, index) => (
               <RewardCard
                 key={`${reward.name}-side-${index}`}
                 reward={reward}
                 styles={tierStyles}
                 compact
-                className="min-h-[152px] border-white/10 brightness-90"
+                className="min-h-[148px] border-white/10 brightness-90"
               />
             ))}
           </div>
@@ -331,7 +331,7 @@ export default function RouletteDemo() {
             </button>
           </div>
 
-          <div className="mt-3 rounded-[12px] border border-white/8 bg-black/20 px-4 py-2.5 text-center">
+          <div className="mt-3 rounded-[12px] border border-white/30 bg-[#06061a]/60 px-4 py-2.5 text-center">
             {isSpinning ? (
               <>
                 <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">In derulare</p>
@@ -339,62 +339,50 @@ export default function RouletteDemo() {
                   Ruleta ruleaza sub pointer si incetineste progresiv pana pe reward-ul castigator.
                 </p>
               </>
-            ) : selectedReward ? (
+            ) : (selectedReward || latestWins[0]) ? (
               <>
                 <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">Ultimul castig</p>
                 <div className="mt-2 flex items-center justify-center gap-3">
-                  <span className="text-2xl">{selectedReward.emoji}</span>
+                  <span className="text-2xl">{(selectedReward || latestWins[0]).emoji}</span>
                   <div>
-                    <p className="text-base font-extrabold text-white">{selectedReward.name}</p>
-                    <p className="text-sm text-white/60">{rarityLabel[selectedReward.tier]} · {selectedReward.subtitle}</p>
+                    <p className="text-base font-extrabold text-white">{(selectedReward || latestWins[0]).name}</p>
+                    <p className="text-sm text-white/60">
+                      {rarityLabel[(selectedReward || latestWins[0]).tier]} · {(selectedReward || latestWins[0]).subtitle}
+                    </p>
                   </div>
                 </div>
               </>
             ) : (
-              <>
-                <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">Demo web</p>
-                <p className="mt-1.5 text-sm text-white/70">
-                  Layout-ul este optimizat pentru o vedere mai clară a ruletei și a premiilor dintr-o singură privire.
-                </p>
-              </>
+              <p className="text-sm text-white/60">Aștept primul câștig...</p>
             )}
           </div>
 
           </div>
 
-          <section className="mx-auto mt-5 w-full max-w-[1120px]">
+          <section className="mx-auto mt-7 w-full max-w-[1120px]">
             <div className="mb-2.5 flex items-end justify-between gap-4">
               <h2 className="text-center text-2xl font-black uppercase italic tracking-tight text-white sm:w-full sm:text-[35px]">
                 Poti castiga premiile
               </h2>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3 md:grid-cols-6">
-              {latestWins.map((reward, index) => (
-                <RewardCard
-                  key={`${reward.name}-${index}`}
-                  reward={reward}
-                  styles={tierStyles}
-                  compact
-                  className="min-h-[152px]"
-                />
-              ))}
-              {rewards.slice(6, 8).map((reward, index) => (
-                <RewardCard
-                  key={`${reward.name}-bonus-${index}`}
-                  reward={reward}
-                  styles={tierStyles}
-                  compact
-                  className="min-h-[152px]"
-                />
-              ))}
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2.5 pb-8 sm:grid-cols-3 sm:gap-3 lg:grid-cols-6">
+            <div className="mt-2 grid grid-cols-2 gap-2.5 pb-14 sm:grid-cols-3 sm:gap-3 lg:grid-cols-6">
               {rewards.map((reward) => (
                 <RewardCard key={reward.name} reward={reward} styles={tierStyles} />
               ))}
             </div>
           </section>
+
+          <footer className="mx-auto mt-auto w-full max-w-[1120px] pb-10">
+            <div className="rounded-[14px] border border-white/20 bg-black/35 px-4 py-5 text-center">
+              <p className="text-sm font-black uppercase tracking-[0.16em] text-amber-300">⚠️ Disclaimer ⚠️</p>
+              <p className="mt-2 text-sm leading-relaxed text-white/75">
+                Acest conținut este realizat de Stifyy exclusiv în scop de divertisment. Nu are nicio legătură cu
+                OGLAND și nu reflectă în niciun fel algoritmii, procentajele sau rezultatele reale ale jocurilor de
+                ruletă sau ale altor jocuri de noroc.
+              </p>
+            </div>
+          </footer>
         </div>
       </div>
 
