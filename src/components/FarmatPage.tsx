@@ -118,17 +118,68 @@ export default function FarmatPage() {
     window.setTimeout(() => setPopup(null), 3200);
   };
 
-  const loseAllInventory = () => {
-    setFrunze(0);
-    setPlicuriAlbe(0);
-    setPlicuriAlbastre(0);
-  };
-
   const canRun = activeAction === null;
+
+  const startAction = (key: ActionKey) => {
+    const action = actions[key];
+
+    setActiveAction(key);
+    setTimer(action.duration);
+
+    let t = action.duration;
+    const interval = window.setInterval(() => {
+      t -= 1;
+      setTimer(t);
+
+      if (t <= 0) {
+        window.clearInterval(interval);
+
+        const caught = Math.random() < action.risk / 100;
+        setTimeFarm((current) => current + action.timeSpentHours);
+
+        if (caught) {
+          if (key === 'process_pack') {
+            setFrunze((current) => Math.max(0, current - 1200));
+            setBaniMurdari((current) => Math.max(0, current - 900_000));
+          }
+          if (key === 'refine_pack') {
+            setPlicuriAlbe((current) => Math.max(0, current - 400));
+            setBaniMurdari((current) => Math.max(0, current - 100_000));
+          }
+          pushPopup('danger', 'A VENIT RAZIIIAAAA!!!');
+          setActiveAction(null);
+          return;
+        }
+
+        if (key === 'collect_leaves') {
+          setFrunze((current) => current + 1200);
+          setProcessedFrunze((current) => current + 1200);
+          pushPopup('success', '+1200 frunze.');
+        }
+
+        if (key === 'process_pack') {
+          setFrunze((current) => current - 1200);
+          setPlicuriAlbe((current) => current + 400);
+          setBaniMurdari((current) => current - 900_000);
+          setProcessedAlbe((current) => current + 400);
+          pushPopup('success', 'Conversie facuta: 1200 frunze -> 400 plicuri albe.');
+        }
+
+        if (key === 'refine_pack') {
+          setPlicuriAlbe((current) => current - 400);
+          setPlicuriAlbastre((current) => current + 800);
+          setBaniMurdari((current) => current - 100_000);
+          setProcessedAlbastre((current) => current + 800);
+          pushPopup('success', 'Conversie facuta: 400 plicuri albe -> 800 plicuri albastre.');
+        }
+
+        setActiveAction(null);
+      }
+    }, 1000);
+  };
 
   const runAction = (key: ActionKey) => {
     if (!canRun) return;
-    const action = actions[key];
 
     if (key === 'process_pack' && frunze < 1200) {
       pushPopup('danger', 'Ai nevoie de 1200 frunze.');
@@ -162,52 +213,7 @@ export default function FarmatPage() {
       return;
     }
 
-    setActiveAction(key);
-    setTimer(action.duration);
-
-    let t = action.duration;
-    const interval = window.setInterval(() => {
-      t -= 1;
-      setTimer(t);
-
-      if (t <= 0) {
-        window.clearInterval(interval);
-
-        const caught = Math.random() < action.risk / 100;
-        setTimeFarm((current) => current + action.timeSpentHours);
-
-        if (caught) {
-          loseAllInventory();
-          pushPopup('danger', 'A VENIT RAZIIIAAAA!!!');
-          setActiveAction(null);
-          return;
-        }
-
-        if (key === 'collect_leaves') {
-          setFrunze((current) => current + 1200);
-          setProcessedFrunze((current) => current + 1200);
-          pushPopup('success', '+1200 frunze.');
-        }
-
-        if (key === 'process_pack') {
-          setFrunze((current) => current - 1200);
-          setPlicuriAlbe((current) => current + 400);
-          setBaniMurdari((current) => current - 900_000);
-          setProcessedAlbe((current) => current + 400);
-          pushPopup('success', 'Conversie facuta: 1200 frunze -> 400 plicuri albe.');
-        }
-
-        if (key === 'refine_pack') {
-          setPlicuriAlbe((current) => current - 400);
-          setPlicuriAlbastre((current) => current + 800);
-          setBaniMurdari((current) => current - 100_000);
-          setProcessedAlbastre((current) => current + 800);
-          pushPopup('success', 'Conversie facuta: 400 plicuri albe -> 800 plicuri albastre.');
-        }
-
-        setActiveAction(null);
-      }
-    }, 1000);
+    startAction(key);
   };
 
   const confirmConvertAndRun = () => {
@@ -218,7 +224,7 @@ export default function FarmatPage() {
     const actionKey = confirmConvert.key;
     setConfirmConvert(null);
     window.setTimeout(() => {
-      runAction(actionKey);
+      startAction(actionKey);
       setIsConverting(false);
     }, 0);
   };
@@ -299,8 +305,14 @@ export default function FarmatPage() {
                   : key === 'process_pack'
                     ? canRun && frunze >= 1200 && baniMurdari >= 900_000
                     : canRun && plicuriAlbe >= 400 && baniMurdari >= 100_000;
+              const canConvertFromClean =
+                key === 'process_pack'
+                  ? canRun && frunze >= 1200 && baniMurdari < 900_000 && baniCurati >= Math.ceil((900_000 - baniMurdari) * 0.65)
+                  : key === 'refine_pack'
+                    ? canRun && plicuriAlbe >= 400 && baniMurdari < 100_000 && baniCurati >= Math.ceil((100_000 - baniMurdari) * 0.65)
+                    : false;
               const buttonClasses =
-                key !== 'collect_leaves' && isStyledActive
+                key !== 'collect_leaves' && canConvertFromClean
                   ? 'bg-gradient-to-br from-amber-300/35 to-yellow-600/20 border-amber-200/60 text-yellow-100 shadow-[0_0_18px_rgba(250,204,21,0.25)] hover:brightness-110'
                   : isStyledActive
                     ? `bg-gradient-to-br ${color} hover:brightness-110`
@@ -355,8 +367,9 @@ export default function FarmatPage() {
       <div className="mx-auto mt-5 max-w-[1460px]"><PageDisclaimer /></div>
 
       {popup ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onClick={() => setPopup(null)}>
           <div
+            onClick={(event) => event.stopPropagation()}
             className={`w-full max-w-md rounded-2xl border px-5 py-5 text-center text-base font-semibold shadow-xl ${popup.type === 'success' ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-100' : popup.type === 'danger' ? 'border-rose-300/40 bg-rose-500/20 text-rose-100' : 'border-sky-300/40 bg-sky-500/20 text-sky-100'}`}
           >
             {popup.text}
@@ -365,8 +378,8 @@ export default function FarmatPage() {
       ) : null}
 
       {confirmConvert ? (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white">
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !isConverting && setConfirmConvert(null)}>
+          <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white" onClick={(event) => event.stopPropagation()}>
             <p className="text-lg font-black">Convert la banii curați în murdari pentru materiale?</p>
             <p className="mt-2 text-sm text-white/70">
               Necesari murdari: {confirmConvert.needed.toLocaleString('ro-RO')} · Cost curat: {confirmConvert.cleanCost.toLocaleString('ro-RO')}
