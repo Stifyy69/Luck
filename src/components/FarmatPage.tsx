@@ -80,6 +80,7 @@ export default function FarmatPage() {
 
   const [popup, setPopup] = useState<null | { type: PopupType; text: string }>(null);
   const [confirmConvert, setConfirmConvert] = useState<null | { key: ActionKey; needed: number; cleanCost: number }>(null);
+  const [isConverting, setIsConverting] = useState(false);
 
   useEffect(() => {
     const latest = loadGameState();
@@ -210,12 +211,24 @@ export default function FarmatPage() {
   };
 
   const confirmConvertAndRun = () => {
-    if (!confirmConvert) return;
+    if (!confirmConvert || isConverting) return;
+    setIsConverting(true);
     setBaniCurati((current) => current - confirmConvert.cleanCost);
     setBaniMurdari((current) => current + confirmConvert.needed);
     const actionKey = confirmConvert.key;
     setConfirmConvert(null);
-    window.setTimeout(() => runAction(actionKey), 0);
+    window.setTimeout(() => {
+      runAction(actionKey);
+      setIsConverting(false);
+    }, 0);
+  };
+
+  const convertDirtyToClean = () => {
+    if (baniMurdari <= 0) return;
+    const gainClean = Math.floor(baniMurdari * 0.65);
+    setBaniMurdari(0);
+    setBaniCurati((current) => current + gainClean);
+    pushPopup('success', `Convert reusit: +${gainClean.toLocaleString('ro-RO')} bani curati.`);
   };
 
   const sellBulk = () => {
@@ -286,13 +299,19 @@ export default function FarmatPage() {
                   : key === 'process_pack'
                     ? canRun && frunze >= 1200 && baniMurdari >= 900_000
                     : canRun && plicuriAlbe >= 400 && baniMurdari >= 100_000;
+              const buttonClasses =
+                key !== 'collect_leaves' && isStyledActive
+                  ? 'bg-gradient-to-br from-amber-300/35 to-yellow-600/20 border-amber-200/60 text-yellow-100 shadow-[0_0_18px_rgba(250,204,21,0.25)] hover:brightness-110'
+                  : isStyledActive
+                    ? `bg-gradient-to-br ${color} hover:brightness-110`
+                    : 'bg-[#1d1a34] text-white/50';
               return (
                 <button
                   key={key}
                   type="button"
                   onClick={() => runAction(key)}
                   disabled={!canClickAction}
-                  className={`rounded-xl border border-white/15 p-4 text-left transition ${isStyledActive ? `bg-gradient-to-br ${color} hover:brightness-110` : 'bg-[#1d1a34] text-white/50'}`}
+                  className={`rounded-xl border border-white/15 p-4 text-left transition ${buttonClasses}`}
                 >
                   <p className="text-base font-black">{action.title}</p>
                   <p className="mt-1 text-sm">Durata: {action.duration}s</p>
@@ -311,6 +330,14 @@ export default function FarmatPage() {
               </button>
               <button type="button" onClick={deliver100} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre >= 100 ? 'bg-sky-500/80' : 'bg-[#2a2744] text-white/50'}`}>
                 Livrare 100 buc (3179/buc)
+              </button>
+              <button
+                type="button"
+                onClick={convertDirtyToClean}
+                disabled={baniMurdari <= 0}
+                className={`rounded-lg px-4 py-2 text-sm font-bold ${baniMurdari > 0 ? 'bg-amber-500/80 text-white' : 'bg-[#2a2744] text-white/50'}`}
+              >
+                Convert murdari în curati
               </button>
             </div>
           </div>
@@ -345,8 +372,8 @@ export default function FarmatPage() {
               Necesari murdari: {confirmConvert.needed.toLocaleString('ro-RO')} · Cost curat: {confirmConvert.cleanCost.toLocaleString('ro-RO')}
             </p>
             <div className="mt-4 flex gap-2">
-              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold" onClick={confirmConvertAndRun} type="button">Da</button>
-              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold" onClick={() => setConfirmConvert(null)} type="button">Nu</button>
+              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold disabled:opacity-60" onClick={confirmConvertAndRun} type="button" disabled={isConverting}>Da</button>
+              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold disabled:opacity-60" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>Nu</button>
             </div>
           </div>
         </div>

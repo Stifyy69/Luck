@@ -42,7 +42,7 @@ export default function PilotPage() {
       setCooldown(Math.max(0, Math.ceil(((state.pilotCooldownUntil ?? 0) - now) / 1000)));
 
       if ((state.pilotEndsAt ?? 0) > 0 && (state.pilotEndsAt ?? 0) <= now && !state.pilotRewardClaimed) {
-        const nextCash = Number(state.cashBalance ?? 1_000_000) + 50_000;
+        const nextCash = Number(state.cashBalance ?? 1_000_000) + 100_000;
         const nextPilot = Number(state.timePilot ?? 0) + 0.25;
         saveGameState({
           ...state,
@@ -50,11 +50,11 @@ export default function PilotPage() {
           baniCurati: nextCash,
           timePilot: nextPilot,
           pilotCount: Number(state.pilotCount ?? 0) + 1,
-          pilotMoney: Number(state.pilotMoney ?? 0) + 50_000,
+          pilotMoney: Number(state.pilotMoney ?? 0) + 100_000,
           pilotRewardClaimed: true,
-          pilotCooldownUntil: now + 60_000,
+          pilotCooldownUntil: now + 30_000,
         });
-        setPopup('+50,000 bani curati · cooldown 60s');
+        setPopup('+100,000 bani curati · cooldown 30s');
         window.setTimeout(() => setPopup(null), 2200);
       }
     };
@@ -83,7 +83,7 @@ export default function PilotPage() {
         <div className="rounded-2xl border border-white/15 bg-[#171438]/72 p-6 text-center shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl">
           <div className="mx-auto mb-4 flex h-36 w-36 items-center justify-center rounded-full border border-white/20 bg-black/25 text-7xl">🛩️</div>
           <h1 className="text-4xl font-black uppercase">Pilot</h1>
-          <p className="mt-2 text-white/70">Pilot task 3s, reward +50.000 curat, cooldown 60s, +0.25h timp pilot.</p>
+          <p className="mt-2 text-white/70">Pilot task 3s, reward +100.000 curat, cooldown 30s, +0.25h timp pilot.</p>
 
           <button
             type="button"

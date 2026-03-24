@@ -66,11 +66,11 @@ export default function SleepPage() {
       }
 
       if (sleepEndsAt > 0 && sleepEndsAt <= now && !latest.sleepRewardClaimed) {
-        const nextCash = (latest.cashBalance ?? 1_000_000) + 150_000;
-        const nextSleepTime = (latest.timeSleep ?? 0) + 12;
-        const nextCooldownUntil = now + 60_000;
+        const nextCash = (latest.cashBalance ?? 1_000_000) + 300_000;
+        const nextSleepTime = (latest.timeSleep ?? 0) + 24;
+        const nextCooldownUntil = now + 30_000;
         const nextSleepCount = (latest.sleepCount ?? 0) + 1;
-        const nextSleepMoney = (latest.sleepMoney ?? 0) + 150_000;
+        const nextSleepMoney = (latest.sleepMoney ?? 0) + 300_000;
 
         saveGameState({
           ...latest,
@@ -83,7 +83,7 @@ export default function SleepPage() {
           sleepCooldownUntil: nextCooldownUntil,
         });
 
-        setPopup('Abia ai dormit. +150,000 bani curati. Cooldown 60s.');
+        setPopup('Abia ai dormit. +300,000 bani curati. Cooldown 30s.');
         window.setTimeout(() => setPopup(null), 2500);
       }
     }, 250);
@@ -118,7 +118,7 @@ export default function SleepPage() {
         </div>
 
         <h1 className="text-4xl font-black uppercase">Sleep</h1>
-        <p className="mt-2 text-white/70">Sleep 12h (12s real). Reward 150.000 bani curati. Cooldown 60s.</p>
+        <p className="mt-2 text-white/70">Sleep 24h (12s real). Reward 300.000 bani curati. Cooldown 30s.</p>
 
         <button
           type="button"
@@ -126,7 +126,7 @@ export default function SleepPage() {
           disabled={isSleeping || cooldown > 0}
           className={`mt-6 rounded-xl px-6 py-3 text-base font-black ${isSleeping || cooldown > 0 ? 'bg-[#2a2744] text-white/50' : 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white'}`}
         >
-          {isSleeping ? `Dormii... ${timer}s` : cooldown > 0 ? `Abia ai dormit (${cooldown}s)` : 'Sleep 12h'}
+          {isSleeping ? `Dormii... ${timer}s` : cooldown > 0 ? `Abia ai dormit (${cooldown}s)` : 'Sleep 24h'}
         </button>
       </div>
       <SharedStatsPanel />
