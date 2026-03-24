@@ -240,7 +240,7 @@ export default function FarmatPage() {
     const caught = Math.random() < 0.1;
     if (caught) {
       setPlicuriAlbastre((current) => current - 100);
-      pushPopup('danger', 'Ai fost prins la livrare. Ai pierdut 100 bucati.');
+      pushPopup('danger', 'A VENIT RAZIIIAAAA!!! Ai pierdut 100 bucati.');
       return;
     }
 
@@ -273,21 +273,27 @@ export default function FarmatPage() {
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             {(Object.keys(actions) as ActionKey[]).map((key, index) => {
               const action = actions[key];
-          const color = index === 0 ? 'from-emerald-500/25 to-emerald-700/10' : index === 1 ? 'from-sky-500/25 to-blue-700/10' : 'from-fuchsia-500/25 to-purple-700/10';
-          const canRunAction =
-            key === 'collect_leaves'
-              ? canRun
-              : key === 'process_pack'
-                ? canRun && frunze >= 1200 && baniMurdari >= 900_000
-                : canRun && plicuriAlbe >= 400 && baniMurdari >= 100_000;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => runAction(key)}
-              disabled={!canRunAction}
-              className={`rounded-xl border border-white/15 p-4 text-left transition ${canRunAction ? `bg-gradient-to-br ${color} hover:brightness-110` : 'bg-[#1d1a34] text-white/50'}`}
-            >
+              const color = index === 0 ? 'from-emerald-500/25 to-emerald-700/10' : index === 1 ? 'from-sky-500/25 to-blue-700/10' : 'from-fuchsia-500/25 to-purple-700/10';
+              const canClickAction =
+                key === 'collect_leaves'
+                  ? canRun
+                  : key === 'process_pack'
+                    ? canRun && frunze >= 1200
+                    : canRun && plicuriAlbe >= 400;
+              const isStyledActive =
+                key === 'collect_leaves'
+                  ? canRun
+                  : key === 'process_pack'
+                    ? canRun && frunze >= 1200 && baniMurdari >= 900_000
+                    : canRun && plicuriAlbe >= 400 && baniMurdari >= 100_000;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => runAction(key)}
+                  disabled={!canClickAction}
+                  className={`rounded-xl border border-white/15 p-4 text-left transition ${isStyledActive ? `bg-gradient-to-br ${color} hover:brightness-110` : 'bg-[#1d1a34] text-white/50'}`}
+                >
                   <p className="text-base font-black">{action.title}</p>
                   <p className="mt-1 text-sm">Durata: {action.duration}s</p>
                   <p className="text-sm">{action.run}</p>

@@ -63,6 +63,23 @@ async function initDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  const requiredColumns = [
+    ['farm_earned', "BIGINT NOT NULL DEFAULT 0"],
+    ['time_pilot', "DOUBLE PRECISION NOT NULL DEFAULT 0"],
+    ['sleep_count', "BIGINT NOT NULL DEFAULT 0"],
+    ['sleep_money', "BIGINT NOT NULL DEFAULT 0"],
+    ['country', 'TEXT'],
+    ['city', 'TEXT'],
+    ['path', 'TEXT'],
+    ['user_agent', 'TEXT'],
+    ['last_seen', 'TIMESTAMPTZ'],
+    ['updated_at', "TIMESTAMPTZ NOT NULL DEFAULT NOW()"],
+  ];
+
+  for (const [column, definition] of requiredColumns) {
+    await pool.query(`ALTER TABLE player_stats ADD COLUMN IF NOT EXISTS ${column} ${definition};`);
+  }
 }
 
 app.use(cookieParser());
