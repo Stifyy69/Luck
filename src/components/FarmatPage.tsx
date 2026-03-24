@@ -241,6 +241,7 @@ export default function FarmatPage() {
   };
 
   const convertDirtyToClean = () => {
+    if (activeAction) return;
     if (baniMurdari <= 0) return;
     const gainClean = Math.floor(baniMurdari * 0.65);
     setBaniMurdari(0);
@@ -357,8 +358,8 @@ export default function FarmatPage() {
               <button
                 type="button"
                 onClick={convertDirtyToClean}
-                disabled={baniMurdari <= 0}
-                className={`rounded-lg px-4 py-2 text-sm font-bold ${baniMurdari > 0 ? 'bg-amber-500/80 text-white' : 'bg-[#2a2744] text-white/50'}`}
+                disabled={baniMurdari <= 0 || Boolean(activeAction)}
+                className={`rounded-lg px-4 py-2 text-sm font-bold ${baniMurdari > 0 && !activeAction ? 'bg-amber-500/80 text-white' : 'bg-[#2a2744] text-white/50'}`}
               >
                 Convert murdari în curati
               </button>
