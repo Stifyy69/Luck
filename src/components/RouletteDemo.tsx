@@ -401,9 +401,9 @@ export default function RouletteDemo() {
 
         <div className="flex min-h-screen flex-col">
           <header className="mb-2 text-center">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.36em] text-white/45 sm:text-xs">OGRomania</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.36em] text-white/45 sm:text-xs">OG Stifyy</p>
             <h1 className="bg-gradient-to-r from-white via-red-300 to-red-500 bg-clip-text text-3xl font-black uppercase tracking-tight text-transparent sm:text-4xl">
-              Roulette
+              Roulette Stifyy
             </h1>
           </header>
 

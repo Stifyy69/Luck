@@ -85,14 +85,44 @@ export default function AdminPanelV2() {
     );
   }
 
+  const totals = (data?.players ?? []).reduce(
+    (acc, p) => {
+      acc.cash += Number(p.cash_available || 0);
+      acc.spent += Number(p.roulette_spent || 0);
+      acc.won += Number(p.roulette_won || 0);
+      acc.net += Number(p.total_net || 0);
+      acc.time += Number(p.time_spent || 0);
+      acc.leaves += Number(p.leaves_collected || 0);
+      acc.white += Number(p.white_processed || 0);
+      acc.blue += Number(p.blue_processed || 0);
+      acc.sleepCount += Number(p.sleep_count || 0);
+      acc.sleepMoney += Number(p.sleep_money || 0);
+      return acc;
+    },
+    { cash: 0, spent: 0, won: 0, net: 0, time: 0, leaves: 0, white: 0, blue: 0, sleepCount: 0, sleepMoney: 0 },
+  );
+
   return (
     <div className="min-h-screen bg-[#0d1021] p-6 text-white">
       <div className="mx-auto max-w-[1400px]">
-        <h1 className="text-3xl font-black">Admin Panel V2</h1>
+        <h1 className="text-3xl font-black">Roulette Stifyy · Admin Panel V2</h1>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <InfoCard label="Online acum" value={String(data?.summary.onlineNow ?? 0)} />
           <InfoCard label="Activi recent" value={String(data?.summary.activeRecent ?? 0)} />
           <InfoCard label="Total jucători" value={String(data?.summary.totalPlayers ?? 0)} />
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <InfoCard label="Total Cash" value={totals.cash.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Cheltuit" value={totals.spent.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Câștigat" value={totals.won.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Net" value={totals.net.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Timp" value={`${totals.time.toLocaleString('ro-RO')}h`} />
+          <InfoCard label="Total Frunze" value={totals.leaves.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Alb" value={totals.white.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Albastru" value={totals.blue.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Sleep #" value={totals.sleepCount.toLocaleString('ro-RO')} />
+          <InfoCard label="Total Sleep $" value={totals.sleepMoney.toLocaleString('ro-RO')} />
         </div>
 
         <div className="mt-6 overflow-auto rounded-xl border border-white/10">
