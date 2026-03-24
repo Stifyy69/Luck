@@ -52,6 +52,8 @@ export default function GangsPage() {
   const [actionTimer, setActionTimer] = useState(0);
   const [actionType, setActionType] = useState<GangAction | null>(null);
   const [recruitTimer, setRecruitTimer] = useState(0);
+  const [confirmConvert, setConfirmConvert] = useState<null | { type: GangAction; needed: number; cleanCost: number; online: number }>(null);
+  const [isConverting, setIsConverting] = useState(false);
 
   const [cashBalance, setCashBalance] = useState(Number(saved?.cashBalance ?? 1_000_000));
   const [baniMurdari, setBaniMurdari] = useState(Number(saved?.baniMurdari ?? 0));
@@ -173,7 +175,6 @@ export default function GangsPage() {
     }
 
     const online = Math.max(1, Math.floor(activeWorkers * (0.5 + Math.random() * 0.5)));
-    const duration = 5;
     const needsFrunze = type === 'white' ? 1200 * online : 0;
     const needsWhite = type === 'blue' ? 400 * online : 0;
     const needsDirty = type === 'white' ? 900_000 * online : type === 'blue' ? 100_000 * online : 0;
@@ -185,13 +186,26 @@ export default function GangsPage() {
       pushPopup(`Ai nevoie de ${needsWhite.toLocaleString('ro-RO')} alb.`);
       return;
     }
-    if (baniMurdari < needsDirty) {
-      pushPopup(`Nu ai ${needsDirty.toLocaleString('ro-RO')} bani murdari.`);
+    if (needsDirty > 0 && baniMurdari < needsDirty) {
+      const needed = needsDirty - baniMurdari;
+      const cleanCost = Math.ceil(needed * 0.65);
+      if (cashBalance < cleanCost) {
+        pushPopup(`Nu ai ${needsDirty.toLocaleString('ro-RO')} bani murdari.`);
+        return;
+      }
+      setConfirmConvert({ type, needed, cleanCost, online });
       return;
     }
 
+    startGangAction(type, online, 0);
+  };
+
+  const startGangAction = (type: GangAction, online: number, convertedDirtyCost: number) => {
+    const needsDirty = type === 'white' ? 900_000 * online : type === 'blue' ? 100_000 * online : 0;
+    const dirtyDebit = Math.max(0, needsDirty - convertedDirtyCost);
+
     setActionType(type);
-    setActionTimer(duration);
+    setActionTimer(5);
     setGangData((current) => ({ ...current, onlineNow: online }));
 
     window.setTimeout(() => {
@@ -214,7 +228,7 @@ export default function GangsPage() {
           white: current.white + 400 * online,
           onlineNow: 0,
         }));
-        setBaniMurdari((current) => current - needsDirty);
+        if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
       }
       if (type === 'blue') {
         setGangData((current) => ({
@@ -223,12 +237,32 @@ export default function GangsPage() {
           blue: current.blue + 800 * online,
           onlineNow: 0,
         }));
-        setBaniMurdari((current) => current - needsDirty);
+        if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
       }
       pushPopup(`Acțiune finalizată cu ${online} membri online.`);
       setActionType(null);
       setActionTimer(0);
-    }, duration * 1000);
+    }, 5 * 1000);
+  };
+
+  const confirmConvertAndStart = () => {
+    if (!confirmConvert || isConverting) return;
+    setIsConverting(true);
+    setCashBalance((current) => current - confirmConvert.cleanCost);
+    const payload = confirmConvert;
+    setConfirmConvert(null);
+    window.setTimeout(() => {
+      startGangAction(payload.type, payload.online, payload.needed);
+      setIsConverting(false);
+    }, 0);
+  };
+
+  const convertDirtyToClean = () => {
+    if (actionType || baniMurdari <= 0) return;
+    const gainClean = Math.floor(baniMurdari * 0.65);
+    setBaniMurdari(0);
+    setCashBalance((current) => current + gainClean);
+    pushPopup(`Convertit în curat: +${gainClean.toLocaleString('ro-RO')}.`);
   };
 
   const sellGangBlue = () => {
@@ -285,6 +319,16 @@ export default function GangsPage() {
                   Vinde tot blue
                 </button>
               </div>
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={convertDirtyToClean}
+                  disabled={baniMurdari <= 0 || Boolean(actionType)}
+                  className={`rounded-xl border border-white/15 px-4 py-2 text-sm font-black ${baniMurdari > 0 && !actionType ? 'bg-amber-500/70' : 'bg-[#2a2744] text-white/50'}`}
+                >
+                  Convert murdari în curati
+                </button>
+              </div>
 
               <div className="mt-5 rounded-xl border border-white/15 bg-black/25 p-3">
                 <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Membri</p>
@@ -308,6 +352,21 @@ export default function GangsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onClick={() => setPopup(null)}>
           <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-2xl border border-white/25 bg-[#1a1635] px-5 py-5 text-center text-base font-semibold text-white shadow-xl">
             {popup}
+          </div>
+        </div>
+      ) : null}
+
+      {confirmConvert ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !isConverting && setConfirmConvert(null)}>
+          <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white" onClick={(event) => event.stopPropagation()}>
+            <p className="text-lg font-black">Convert la banii curați în murdari pentru gang?</p>
+            <p className="mt-2 text-sm text-white/70">
+              Necesari murdari: {confirmConvert.needed.toLocaleString('ro-RO')} · Cost curat: {confirmConvert.cleanCost.toLocaleString('ro-RO')}
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold disabled:opacity-60" onClick={confirmConvertAndStart} type="button" disabled={isConverting}>Da</button>
+              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold disabled:opacity-60" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>Nu</button>
+            </div>
           </div>
         </div>
       ) : null}
