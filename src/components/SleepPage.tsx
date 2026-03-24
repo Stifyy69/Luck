@@ -100,7 +100,7 @@ export default function SleepPage() {
 
     saveGameState({
       ...latest,
-      sleepEndsAt: now + 12_000,
+      sleepEndsAt: now + 3_000,
       sleepRewardClaimed: false,
     });
 
@@ -118,7 +118,7 @@ export default function SleepPage() {
         </div>
 
         <h1 className="text-4xl font-black uppercase">Sleep</h1>
-        <p className="mt-2 text-white/70">Sleep 24h (12s real). Reward 300.000 bani curati. Cooldown 30s.</p>
+        <p className="mt-2 text-white/70">Sleep 24h (3s real). Reward 300.000 bani curati. Cooldown 30s.</p>
 
         <button
           type="button"

@@ -4,7 +4,7 @@ import PageDisclaimer from './PageDisclaimer';
 
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
-const LEAVE_INTERVAL_MS = 10 * 60 * 1000;
+const LEAVE_INTERVAL_MS = 3 * 60 * 1000;
 
 const MEMBER_POOL = [
   'Enzo', 'Fifi', 'Adi', 'Camataru', 'Capdemied', 'Fra', 'Tavi', 'Babal', 'Nacho', 'dexter', 'Sebi', 'Darius',
@@ -52,11 +52,12 @@ export default function GangsPage() {
   const [actionTimer, setActionTimer] = useState(0);
   const [actionType, setActionType] = useState<GangAction | null>(null);
   const [recruitTimer, setRecruitTimer] = useState(0);
-  const [confirmConvert, setConfirmConvert] = useState<null | { type: GangAction; needed: number; cleanCost: number; online: number }>(null);
+  const [confirmConvert, setConfirmConvert] = useState<null | { type: GangAction; needed: number; cleanCost: number; online: number; units: number }>(null);
   const [isConverting, setIsConverting] = useState(false);
 
   const [cashBalance, setCashBalance] = useState(Number(saved?.cashBalance ?? 1_000_000));
   const [baniMurdari, setBaniMurdari] = useState(Number(saved?.baniMurdari ?? 0));
+  const [timeFarm, setTimeFarm] = useState(Number(saved?.timeFarm ?? 0));
 
   const [gangData, setGangData] = useState({
     name: String(saved?.gangData?.name ?? ''),
@@ -80,13 +81,14 @@ export default function GangsPage() {
   const maxMembers = level.maxMembers;
   const activeWorkers = Math.min(gangData.members.length, totalCars);
 
-  const persist = (nextGangData = gangData, nextCash = cashBalance, nextDirty = baniMurdari) => {
+  const persist = (nextGangData = gangData, nextCash = cashBalance, nextDirty = baniMurdari, nextTimeFarm = timeFarm) => {
     const existing = loadGameState() || {};
     saveGameState({
       ...existing,
       cashBalance: nextCash,
       baniCurati: nextCash,
       baniMurdari: nextDirty,
+      timeFarm: nextTimeFarm,
       gangData: nextGangData,
     });
   };
@@ -115,7 +117,7 @@ export default function GangsPage() {
 
   useEffect(() => {
     persist();
-  }, [gangData, cashBalance, baniMurdari]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gangData, cashBalance, baniMurdari, timeFarm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pushPopup = (text: string) => {
     setPopup(text);
@@ -146,18 +148,19 @@ export default function GangsPage() {
   };
 
   const startRecruit = () => {
-    if (!formed || actionType || recruitTimer > 0) return;
+    if (!formed || actionType) return;
     if (gangData.members.length >= maxMembers) {
       pushPopup('Ai atins limita de membri pentru nivelul curent.');
       return;
     }
-    const duration = 10 + Math.floor(Math.random() * 21);
+    const duration = 5 + Math.floor(Math.random() * 6);
     setRecruitTimer(duration);
 
     window.setTimeout(() => {
       setGangData((current) => {
         const used = new Set(current.members);
-        const candidate = MEMBER_POOL.find((name) => !used.has(name));
+        const available = MEMBER_POOL.filter((name) => !used.has(name));
+        const candidate = available[Math.floor(Math.random() * available.length)];
         if (!candidate) return current;
         if (current.members.length >= maxMembers) return current;
         const next = { ...current, members: [...current.members, candidate] };
@@ -168,40 +171,51 @@ export default function GangsPage() {
   };
 
   const runGangAction = (type: GangAction) => {
-    if (!formed || actionType || recruitTimer > 0) return;
+    if (!formed || actionType) return;
     if (activeWorkers <= 0) {
       pushPopup('Ai nevoie de mașini în stoc pentru membri.');
       return;
     }
 
     const online = Math.max(1, Math.floor(activeWorkers * (0.5 + Math.random() * 0.5)));
-    const needsFrunze = type === 'white' ? 1200 * online : 0;
-    const needsWhite = type === 'blue' ? 400 * online : 0;
-    const needsDirty = type === 'white' ? 900_000 * online : type === 'blue' ? 100_000 * online : 0;
-    if (gangData.frunze < needsFrunze) {
-      pushPopup(`Ai nevoie de ${needsFrunze.toLocaleString('ro-RO')} frunze.`);
+    let processUnits = 1;
+    if (type === 'white') {
+      processUnits = Math.floor(gangData.frunze / 1200);
+    } else if (type === 'blue') {
+      processUnits = Math.floor(gangData.white / 400);
+    }
+
+    if (type !== 'collect' && processUnits <= 0) {
+      pushPopup(type === 'white' ? 'Nu ai frunze de procesat.' : 'Nu ai plicuri albe de procesat.');
       return;
     }
-    if (gangData.white < needsWhite) {
-      pushPopup(`Ai nevoie de ${needsWhite.toLocaleString('ro-RO')} alb.`);
-      return;
-    }
-    if (needsDirty > 0 && baniMurdari < needsDirty) {
-      const needed = needsDirty - baniMurdari;
-      const cleanCost = Math.ceil(needed * 0.65);
-      if (cashBalance < cleanCost) {
-        pushPopup(`Nu ai ${needsDirty.toLocaleString('ro-RO')} bani murdari.`);
+
+    if (type !== 'collect') {
+      const dirtyCostPerUnit = type === 'white' ? 900_000 : 100_000;
+      const maxUnitsByMoney = Math.floor((baniMurdari + Math.floor(cashBalance / 0.65)) / dirtyCostPerUnit);
+      processUnits = Math.min(processUnits, Math.max(0, maxUnitsByMoney));
+      if (processUnits <= 0) {
+        pushPopup('Nu ai bani suficienți pentru procesare.');
         return;
       }
-      setConfirmConvert({ type, needed, cleanCost, online });
-      return;
+      const needsDirty = processUnits * dirtyCostPerUnit;
+      if (baniMurdari < needsDirty) {
+        const needed = needsDirty - baniMurdari;
+        const cleanCost = Math.ceil(needed * 0.65);
+        if (cashBalance < cleanCost) {
+          pushPopup(`Nu ai ${needsDirty.toLocaleString('ro-RO')} bani murdari.`);
+          return;
+        }
+        setConfirmConvert({ type, needed, cleanCost, online, units: processUnits });
+        return;
+      }
     }
 
-    startGangAction(type, online, 0);
+    startGangAction(type, online, 0, processUnits);
   };
 
-  const startGangAction = (type: GangAction, online: number, convertedDirtyCost: number) => {
-    const needsDirty = type === 'white' ? 900_000 * online : type === 'blue' ? 100_000 * online : 0;
+  const startGangAction = (type: GangAction, online: number, convertedDirtyCost: number, processUnits: number) => {
+    const needsDirty = type === 'white' ? 900_000 * processUnits : type === 'blue' ? 100_000 * processUnits : 0;
     const dirtyDebit = Math.max(0, needsDirty - convertedDirtyCost);
 
     setActionType(type);
@@ -220,12 +234,13 @@ export default function GangsPage() {
 
       if (type === 'collect') {
         setGangData((current) => ({ ...current, frunze: current.frunze + 1200 * online, onlineNow: 0 }));
+        setTimeFarm((current) => current + 1);
       }
       if (type === 'white') {
         setGangData((current) => ({
           ...current,
-          frunze: current.frunze - 1200 * online,
-          white: current.white + 400 * online,
+          frunze: current.frunze - 1200 * processUnits,
+          white: current.white + 400 * processUnits,
           onlineNow: 0,
         }));
         if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
@@ -233,8 +248,8 @@ export default function GangsPage() {
       if (type === 'blue') {
         setGangData((current) => ({
           ...current,
-          white: current.white - 400 * online,
-          blue: current.blue + 800 * online,
+          white: current.white - 400 * processUnits,
+          blue: current.blue + 800 * processUnits,
           onlineNow: 0,
         }));
         if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
@@ -252,7 +267,7 @@ export default function GangsPage() {
     const payload = confirmConvert;
     setConfirmConvert(null);
     window.setTimeout(() => {
-      startGangAction(payload.type, payload.online, payload.needed);
+      startGangAction(payload.type, payload.online, payload.needed, payload.units);
       setIsConverting(false);
     }, 0);
   };
@@ -271,6 +286,29 @@ export default function GangsPage() {
     setBaniMurdari((current) => current + gain);
     setGangData((current) => ({ ...current, blue: 0, dirtyEarned: current.dirtyEarned + gain }));
     pushPopup(`Vânzare gang: +${gain.toLocaleString('ro-RO')} murdari.`);
+  };
+
+  const deliverGangBlue = () => {
+    if (!formed || gangData.blue < 100) {
+      pushPopup('Ai nevoie de minim 100 albastru pentru livrare.');
+      return;
+    }
+    const online = Math.max(1, Math.floor(Math.max(1, activeWorkers) * (0.5 + Math.random() * 0.5)));
+    const chunks = Math.min(Math.floor(gangData.blue / 100), online);
+    const qty = chunks * 100;
+    if (qty <= 0) return;
+    const caught = Math.random() < 0.1;
+    if (caught) {
+      setGangData((current) => ({ ...current, blue: current.blue - qty }));
+      setTimeFarm((current) => current + 0.25);
+      pushPopup(`A VENIT RAZIIIAAAA!!! Ai pierdut ${qty} albastru.`);
+      return;
+    }
+    const gain = qty * 3179;
+    setGangData((current) => ({ ...current, blue: current.blue - qty, dirtyEarned: current.dirtyEarned + gain }));
+    setBaniMurdari((current) => current + gain);
+    setTimeFarm((current) => current + 0.25);
+    pushPopup(`Livrare reușită (${qty}): +${gain.toLocaleString('ro-RO')} murdari.`);
   };
 
   return (
@@ -301,14 +339,14 @@ export default function GangsPage() {
               <div className="mt-4 rounded-xl border border-white/15 bg-black/25 p-4">
                 <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Recrutare</p>
                 <button type="button" onClick={startRecruit} disabled={recruitTimer > 0 || actionType !== null} className={`mt-3 rounded-lg px-4 py-2 font-black ${recruitTimer > 0 || actionType ? 'bg-[#2a2744] text-white/50' : 'bg-cyan-500/80'}`}>
-                  {recruitTimer > 0 ? `Caută om... ${recruitTimer}s` : 'Caută om (10-30s)'}
+                  {recruitTimer > 0 ? `Caută om... ${recruitTimer}s` : 'Caută om (5-10s)'}
                 </button>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <ActionButton title="Farm frunze gang" detail="+1200 / om online" onClick={() => runGangAction('collect')} disabled={Boolean(actionType) || recruitTimer > 0} />
-                <ActionButton title="Procesare alb gang" detail="1200 frunze + 900k / om online" onClick={() => runGangAction('white')} disabled={Boolean(actionType) || recruitTimer > 0} />
-                <ActionButton title="Procesare albastru gang" detail="400 alb + 100k / om online" onClick={() => runGangAction('blue')} disabled={Boolean(actionType) || recruitTimer > 0} />
+                <ActionButton title="Farm frunze gang" detail="+1200 / om online" onClick={() => runGangAction('collect')} disabled={Boolean(actionType)} />
+                <ActionButton title="Procesare alb gang" detail="1200 frunze + 900k / unitate" onClick={() => runGangAction('white')} disabled={Boolean(actionType)} />
+                <ActionButton title="Procesare albastru gang" detail="400 alb + 100k / unitate" onClick={() => runGangAction('blue')} disabled={Boolean(actionType)} />
               </div>
 
               <div className="mt-4 grid gap-2 sm:grid-cols-4">
@@ -317,6 +355,11 @@ export default function GangsPage() {
                 <Card label="Albastru gang" value={gangData.blue.toLocaleString('ro-RO')} />
                 <button type="button" onClick={sellGangBlue} className={`rounded-xl border border-white/15 p-3 text-sm font-black ${gangData.blue > 0 ? 'bg-emerald-500/70' : 'bg-[#2a2744] text-white/50'}`} disabled={gangData.blue <= 0}>
                   Vinde tot blue
+                </button>
+              </div>
+              <div className="mt-2">
+                <button type="button" onClick={deliverGangBlue} className={`rounded-xl border border-white/15 px-4 py-2 text-sm font-black ${gangData.blue >= 100 ? 'bg-sky-500/70' : 'bg-[#2a2744] text-white/50'}`} disabled={gangData.blue < 100}>
+                  Livrare 100 / om online (3179)
                 </button>
               </div>
               <div className="mt-2">
