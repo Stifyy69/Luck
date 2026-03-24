@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import RouletteDemo from './components/RouletteDemo';
 import FarmatPage from './components/FarmatPage';
 import SleepPage from './components/SleepPage';
+import AdminPanelV2 from './components/AdminPanelV2';
+import { startGameSync } from './lib/gameSync';
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname || '/ruleta');
 
   useEffect(() => {
-    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep')) {
+    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep' && path !== '/adminpanelv2')) {
       window.history.replaceState({}, '', '/ruleta');
       setPath('/ruleta');
     }
@@ -17,7 +19,12 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, [path]);
 
-  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep') => {
+  useEffect(() => {
+    const stop = startGameSync();
+    return () => stop?.();
+  }, []);
+
+  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/adminpanelv2') => {
     if (nextPath === path) return;
     window.history.pushState({}, '', nextPath);
     setPath(nextPath);
@@ -55,7 +62,13 @@ export default function App() {
         </button>
       </div>
 
-      {path === '/farmat' ? <FarmatPage /> : path === '/sleep' ? <SleepPage /> : <RouletteDemo />}
+      {path === '/farmat'
+        ? <FarmatPage />
+        : path === '/sleep'
+          ? <SleepPage />
+          : path === '/adminpanelv2'
+            ? <AdminPanelV2 />
+            : <RouletteDemo />}
     </div>
   );
 }

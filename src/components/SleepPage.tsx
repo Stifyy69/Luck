@@ -68,12 +68,16 @@ export default function SleepPage() {
         const nextCash = (latest.cashBalance ?? 1_000_000) + 150_000;
         const nextSleepTime = (latest.timeSleep ?? 0) + 12;
         const nextCooldownUntil = now + 60_000;
+        const nextSleepCount = (latest.sleepCount ?? 0) + 1;
+        const nextSleepMoney = (latest.sleepMoney ?? 0) + 150_000;
 
         saveGameState({
           ...latest,
           cashBalance: nextCash,
           baniCurati: nextCash,
           timeSleep: nextSleepTime,
+          sleepCount: nextSleepCount,
+          sleepMoney: nextSleepMoney,
           sleepRewardClaimed: true,
           sleepCooldownUntil: nextCooldownUntil,
         });
