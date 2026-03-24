@@ -241,19 +241,39 @@ export default function RouletteDemo() {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#100d25] text-white">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(93,51,226,0.24),transparent_34%),radial-gradient(circle_at_bottom,rgba(255,64,64,0.14),transparent_24%)]" />
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(7,7,20,0.22),rgba(8,7,21,0.72))]" />
+    <div className="relative min-h-screen overflow-hidden bg-[#130f2d] text-white">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(129,74,255,0.23),transparent_35%),radial-gradient(circle_at_bottom,rgba(255,72,72,0.12),transparent_23%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(8,7,24,0.2),rgba(7,6,20,0.76))]" />
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[1240px] flex-col px-5 py-5 sm:px-7 lg:px-10">
-        <header className="mb-4 text-center">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.38em] text-white/45 sm:text-xs">OGRomania</p>
-          <h1 className="bg-gradient-to-r from-white via-red-300 to-red-500 bg-clip-text text-3xl font-black uppercase tracking-tight text-transparent sm:text-4xl">
-            Roulette
-          </h1>
-        </header>
+      <div className="relative mx-auto grid min-h-screen w-full max-w-[1340px] grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[170px_minmax(0,1fr)] lg:gap-6 lg:px-7">
+        <aside className="hidden lg:flex lg:flex-col lg:pt-7">
+          <p className="pl-1 text-left text-[24px] font-black uppercase italic leading-[0.9] tracking-tight text-white/90">
+            Ultimele
+            <br />
+            castiguri
+          </p>
+          <div className="mt-4 space-y-2 opacity-45">
+            {rewards.slice(10, 12).concat(rewards.slice(4, 7)).map((reward, index) => (
+              <RewardCard
+                key={`${reward.name}-side-${index}`}
+                reward={reward}
+                styles={tierStyles}
+                compact
+                className="min-h-[152px] border-white/10 brightness-90"
+              />
+            ))}
+          </div>
+        </aside>
 
-        <div className="mx-auto w-full max-w-[1140px] rounded-[26px] border border-white/10 bg-[#161433]/70 px-3 py-3 shadow-[0_28px_90px_rgba(0,0,0,0.42)] backdrop-blur-xl sm:px-4 sm:py-4">
+        <div className="flex min-h-screen flex-col">
+          <header className="mb-2 text-center">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.36em] text-white/45 sm:text-xs">OGRomania</p>
+            <h1 className="bg-gradient-to-r from-white via-red-300 to-red-500 bg-clip-text text-3xl font-black uppercase tracking-tight text-transparent sm:text-4xl">
+              Roulette
+            </h1>
+          </header>
+
+          <div className="mx-auto w-full max-w-[1120px] rounded-[20px] border border-white/10 bg-[#17143a]/72 px-2.5 py-2.5 shadow-[0_30px_100px_rgba(0,0,0,0.44)] backdrop-blur-xl sm:px-3 sm:py-3">
           <section className="rounded-[20px] border border-white/8 bg-[#13112c]/86 p-3 sm:p-4">
             <div className="mb-3 flex justify-center">
               <div className="flex flex-col items-center gap-1.5">
@@ -262,10 +282,7 @@ export default function RouletteDemo() {
               </div>
             </div>
 
-            <div
-              ref={viewportRef}
-              className="relative overflow-hidden rounded-[16px] border border-white/5 bg-black/20 px-2 py-3 sm:px-3 sm:py-4"
-            >
+            <div ref={viewportRef} className="relative overflow-hidden rounded-[14px] border border-white/5 bg-black/20 px-2 py-3 sm:px-3 sm:py-3.5">
               <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-10 bg-gradient-to-r from-[#13112c] via-[#13112c]/75 to-transparent sm:w-16" />
               <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-10 bg-gradient-to-l from-[#13112c] via-[#13112c]/75 to-transparent sm:w-16" />
               <div className="pointer-events-none absolute inset-y-3 left-1/2 z-10 w-[2px] -translate-x-1/2 rounded-full bg-white/35 shadow-[0_0_18px_rgba(255,255,255,0.28)]" />
@@ -295,12 +312,12 @@ export default function RouletteDemo() {
             </div>
           </section>
 
-          <div className="mt-3 flex flex-col items-center justify-center gap-2.5 sm:mt-4 sm:flex-row sm:gap-3">
+          <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row sm:gap-2.5">
             <button
               type="button"
               onClick={() => handleSpin('cash')}
               disabled={isSpinning}
-              className="w-full rounded-xl border border-red-300/30 bg-gradient-to-r from-red-600 to-orange-500 px-6 py-3 text-xs font-bold uppercase tracking-[0.08em] text-white shadow-[0_7px_24px_rgba(239,68,68,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[210px]"
+              className="w-full rounded-[10px] border border-red-300/30 bg-gradient-to-r from-red-600 to-orange-500 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(239,68,68,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
             >
               {isSpinning && activeCost === 'cash' ? 'Se deschide...' : 'Deschide cu 100,000$'}
             </button>
@@ -308,13 +325,13 @@ export default function RouletteDemo() {
               type="button"
               onClick={() => handleSpin('ogc')}
               disabled={isSpinning}
-              className="w-full rounded-xl border border-orange-300/30 bg-gradient-to-r from-orange-500 to-amber-400 px-6 py-3 text-xs font-bold uppercase tracking-[0.08em] text-white shadow-[0_7px_24px_rgba(251,146,60,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[210px]"
+              className="w-full rounded-[10px] border border-orange-300/30 bg-gradient-to-r from-orange-500 to-amber-400 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(251,146,60,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
             >
               {isSpinning && activeCost === 'ogc' ? 'Se deschide...' : 'Deschide cu 30 OGC'}
             </button>
           </div>
 
-          <div className="mt-3 rounded-[16px] border border-white/8 bg-black/20 px-4 py-3 text-center">
+          <div className="mt-3 rounded-[12px] border border-white/8 bg-black/20 px-4 py-2.5 text-center">
             {isSpinning ? (
               <>
                 <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">In derulare</p>
@@ -342,43 +359,41 @@ export default function RouletteDemo() {
               </>
             )}
           </div>
-        </div>
 
-        <section className="mx-auto mt-6 w-full max-w-[1140px]">
-          <div className="mb-3 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">Activitate</p>
-              <h2 className="mt-1 text-xl font-black uppercase tracking-tight text-white sm:text-2xl">Ultimele castiguri</h2>
+          <section className="mx-auto mt-5 w-full max-w-[1120px]">
+            <div className="mb-2.5 flex items-end justify-between gap-4">
+              <h2 className="text-center text-2xl font-black uppercase italic tracking-tight text-white sm:w-full sm:text-[35px]">
+                Poti castiga premiile
+              </h2>
             </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
-            {latestWins.map((reward, index) => (
-              <RewardCard
-                key={`${reward.name}-${index}`}
-                reward={reward}
-                styles={tierStyles}
-                compact
-                className="min-h-[168px]"
-              />
-            ))}
-          </div>
-        </section>
-
-        <section className="mx-auto mt-6 w-full max-w-[1140px] pb-8">
-          <div className="text-center">
-            <p className="text-[10px] uppercase tracking-[0.28em] text-white/45 sm:text-[11px]">Premii</p>
-            <h2 className="mt-1 text-2xl font-black uppercase tracking-tight text-white">
-              Poti castiga premiile
-            </h2>
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-6">
-            {rewards.map((reward) => (
-              <RewardCard key={reward.name} reward={reward} styles={tierStyles} />
-            ))}
-          </div>
-        </section>
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3 md:grid-cols-6">
+              {latestWins.map((reward, index) => (
+                <RewardCard
+                  key={`${reward.name}-${index}`}
+                  reward={reward}
+                  styles={tierStyles}
+                  compact
+                  className="min-h-[152px]"
+                />
+              ))}
+              {rewards.slice(6, 8).map((reward, index) => (
+                <RewardCard
+                  key={`${reward.name}-bonus-${index}`}
+                  reward={reward}
+                  styles={tierStyles}
+                  compact
+                  className="min-h-[152px]"
+                />
+              ))}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2.5 pb-8 sm:grid-cols-3 sm:gap-3 lg:grid-cols-6">
+              {rewards.map((reward) => (
+                <RewardCard key={reward.name} reward={reward} styles={tierStyles} />
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
 
       {showWinModal && selectedReward ? (
@@ -433,19 +448,20 @@ function RewardCard({ reward, styles, className = '', compact = false, highlight
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-[14px] border p-3 transition duration-300 ${hoverClasses} ${styles[reward.tier]} ${highlightClasses} ${className}`}
+      className={`group relative overflow-hidden rounded-[10px] border p-2.5 transition duration-300 ${hoverClasses} ${styles[reward.tier]} ${highlightClasses} ${className}`}
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_45%)] opacity-60" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_45%)] opacity-50" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(130deg,rgba(255,255,255,0.08),transparent_40%)]" />
 
       <div
-        className={`relative mb-3 flex items-center justify-center rounded-[12px] bg-black/15 backdrop-blur-sm ${compact ? 'h-[72px] text-4xl sm:h-[76px] sm:text-[2.6rem]' : 'h-[92px] text-5xl'}`}
+        className={`relative mb-2.5 flex items-center justify-center rounded-[9px] bg-black/15 backdrop-blur-sm ${compact ? 'h-[66px] text-4xl sm:h-[70px] sm:text-[2.45rem]' : 'h-[88px] text-5xl'}`}
       >
         <span className="drop-shadow-[0_0_14px_rgba(255,255,255,0.16)]">{reward.emoji}</span>
       </div>
 
       <div className="relative space-y-0.5">
-        <p className="text-[11px] leading-tight text-white/50 sm:text-xs">{reward.subtitle}</p>
-        <h3 className={`${compact ? 'text-sm sm:text-base' : 'text-base sm:text-lg'} font-extrabold leading-tight text-white`}>
+        <p className="text-[10px] leading-tight text-white/50 sm:text-[11px]">{reward.subtitle}</p>
+        <h3 className={`${compact ? 'text-[15px] sm:text-base' : 'text-base sm:text-lg'} font-extrabold leading-tight text-white`}>
           {reward.name}
         </h3>
       </div>
