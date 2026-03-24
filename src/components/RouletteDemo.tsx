@@ -360,6 +360,8 @@ export default function RouletteDemo() {
             )}
           </div>
 
+          </div>
+
           <section className="mx-auto mt-5 w-full max-w-[1120px]">
             <div className="mb-2.5 flex items-end justify-between gap-4">
               <h2 className="text-center text-2xl font-black uppercase italic tracking-tight text-white sm:w-full sm:text-[35px]">
