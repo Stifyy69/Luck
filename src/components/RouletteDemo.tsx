@@ -160,7 +160,7 @@ export default function RouletteDemo() {
   const [farmEarned, setFarmEarned] = useState(saved?.farmEarned ?? 0);
   const [timePilot, setTimePilot] = useState(saved?.timePilot ?? 0);
   const [spinCount, setSpinCount] = useState(0);
-  const [nearMissHint, setNearMissHint] = useState('');
+  const [nearVehicleIndex, setNearVehicleIndex] = useState<number | null>(null);
 
   const trackRewards = useMemo(
     () => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(),
@@ -335,6 +335,7 @@ export default function RouletteDemo() {
       setIsSpinning(false);
       setSelectedReward(winner);
       setHighlightIndex(targetIndex);
+      setNearVehicleIndex(null);
       setLatestWins((current) => [winner, ...current].slice(0, 5));
 
       if (winner.name === 'Fragmente ruleta') {
@@ -362,13 +363,26 @@ export default function RouletteDemo() {
         setRouletteWon((current) => current + winner.payout);
       }
 
-      if ((spinCount + 1) % 3 === 0 && winner.name !== 'Vehicul Suvenir') {
-        setNearMissHint('Aproape de Vehicul Suvenir! Mai încearcă!');
-        scheduleTask(() => setNearMissHint(''), 2200);
+      if ((spinCount + 1) % 5 === 0 && winner.name !== 'Vehicul Suvenir') {
+        const neighbor = targetIndex + (Math.random() > 0.5 ? 1 : -1);
+        if ((trackRewards[neighbor] || {}).name === 'Vehicul Suvenir') setNearVehicleIndex(neighbor);
       }
 
       playWinSound();
     }, SPIN_DURATION_MS + 40);
+
+    scheduleTask(() => {
+      const safeBase = rewards.length * 20;
+      const normalizedIndex = safeBase + (targetIndex % rewards.length);
+      currentIndexRef.current = normalizedIndex;
+      setHighlightIndex(normalizedIndex);
+      setNearVehicleIndex((current) => {
+        if (current === targetIndex - 1) return normalizedIndex - 1;
+        if (current === targetIndex + 1) return normalizedIndex + 1;
+        return null;
+      });
+      setTranslateX(getTranslateForIndex(normalizedIndex, viewportWidth));
+    }, SPIN_DURATION_MS + 160);
 
     scheduleTask(() => {
       setShowWinModal(true);
@@ -443,7 +457,7 @@ export default function RouletteDemo() {
                     compact
                     styles={tierStyles}
                     className="w-[156px] shrink-0"
-                    highlighted={highlightIndex === index}
+                    highlighted={highlightIndex === index || nearVehicleIndex === index}
                     spinning={isSpinning}
                   />
                 ))}
@@ -484,12 +498,6 @@ export default function RouletteDemo() {
               <p className="text-lg font-black text-amber-300">{bonusSpins}</p>
             </div>
           </div>
-
-          {nearMissHint ? (
-            <div className="mt-2 rounded-lg border border-amber-300/30 bg-amber-500/10 px-3 py-2 text-center text-sm font-bold text-amber-200">
-              {nearMissHint}
-            </div>
-          ) : null}
 
           </div>
 

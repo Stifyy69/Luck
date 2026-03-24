@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import SharedStatsPanel from './SharedStatsPanel';
+import PageDisclaimer from './PageDisclaimer';
 
 type ActionKey = 'collect_leaves' | 'process_pack' | 'refine_pack';
 type PopupType = 'success' | 'danger' | 'info';
@@ -78,6 +79,7 @@ export default function FarmatPage() {
   const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
 
   const [popup, setPopup] = useState<null | { type: PopupType; text: string }>(null);
+  const [confirmConvert, setConfirmConvert] = useState<null | { key: ActionKey; needed: number; cleanCost: number }>(null);
 
   useEffect(() => {
     const latest = loadGameState();
@@ -138,12 +140,24 @@ export default function FarmatPage() {
     }
 
     if (key === 'process_pack' && baniMurdari < 900_000) {
-      pushPopup('danger', 'Ai nevoie de 900.000 bani murdari.');
+      const needed = 900_000 - baniMurdari;
+      const cleanCost = Math.ceil(needed * 0.65);
+      if (baniCurati < cleanCost) {
+        pushPopup('danger', 'Nu ai bani curați suficienți pentru materiale.');
+        return;
+      }
+      setConfirmConvert({ key, needed, cleanCost });
       return;
     }
 
     if (key === 'refine_pack' && baniMurdari < 100_000) {
-      pushPopup('danger', 'Ai nevoie de 100.000 bani murdari.');
+      const needed = 100_000 - baniMurdari;
+      const cleanCost = Math.ceil(needed * 0.65);
+      if (baniCurati < cleanCost) {
+        pushPopup('danger', 'Nu ai bani curați suficienți pentru materiale.');
+        return;
+      }
+      setConfirmConvert({ key, needed, cleanCost });
       return;
     }
 
@@ -195,6 +209,15 @@ export default function FarmatPage() {
     }, 1000);
   };
 
+  const confirmConvertAndRun = () => {
+    if (!confirmConvert) return;
+    setBaniCurati((current) => current - confirmConvert.cleanCost);
+    setBaniMurdari((current) => current + confirmConvert.needed);
+    const actionKey = confirmConvert.key;
+    setConfirmConvert(null);
+    window.setTimeout(() => runAction(actionKey), 0);
+  };
+
   const sellBulk = () => {
     if (!plicuriAlbastre) {
       pushPopup('danger', 'Nu ai marfa pentru vanzare bulk.');
@@ -231,9 +254,9 @@ export default function FarmatPage() {
 
   return (
     <div className="min-h-screen bg-[#110d28] px-4 pb-10 pt-20 text-white sm:px-6">
-      <div className="mx-auto grid max-w-[1340px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mx-auto grid max-w-[1460px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
         <div className="rounded-2xl border border-white/15 bg-[#171438]/72 p-4 shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl sm:p-6">
-          <h1 className="text-center text-4xl font-black uppercase tracking-tight text-white">Farmat</h1>
+          <h1 className="text-center text-4xl font-black uppercase tracking-tight text-white">Cayo</h1>
 
           <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-5">
             <StatCard label="Frunze" value={frunze} />
@@ -296,6 +319,7 @@ export default function FarmatPage() {
 
         <SharedStatsPanel />
       </div>
+      <div className="mx-auto mt-5 max-w-[1460px]"><PageDisclaimer /></div>
 
       {popup ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
@@ -303,6 +327,21 @@ export default function FarmatPage() {
             className={`w-full max-w-md rounded-2xl border px-5 py-5 text-center text-base font-semibold shadow-xl ${popup.type === 'success' ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-100' : popup.type === 'danger' ? 'border-rose-300/40 bg-rose-500/20 text-rose-100' : 'border-sky-300/40 bg-sky-500/20 text-sky-100'}`}
           >
             {popup.text}
+          </div>
+        </div>
+      ) : null}
+
+      {confirmConvert ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white">
+            <p className="text-lg font-black">Convert la banii curați în murdari pentru materiale?</p>
+            <p className="mt-2 text-sm text-white/70">
+              Necesari murdari: {confirmConvert.needed.toLocaleString('ro-RO')} · Cost curat: {confirmConvert.cleanCost.toLocaleString('ro-RO')}
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold" onClick={confirmConvertAndRun} type="button">Da</button>
+              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold" onClick={() => setConfirmConvert(null)} type="button">Nu</button>
+            </div>
           </div>
         </div>
       ) : null}
