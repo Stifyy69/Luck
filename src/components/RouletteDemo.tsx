@@ -3,17 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const rewards = [
-  { name: 'Vehicul Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
-  { name: 'VIP Gold', subtitle: '6-12 zile', tier: 'epic', emoji: '💎' },
-  { name: 'VIP Silver', subtitle: '6-12 zile', tier: 'epic', emoji: '💠' },
+  { name: 'Vehicul Suvenir', subtitle: 'Motocicleta 2.000.000 / Masina 5.000.000', tier: 'legendary', emoji: '🚗' },
+  { name: 'VIP Gold', subtitle: '0 valoare', tier: 'epic', emoji: '💎' },
+  { name: 'VIP Silver', subtitle: '0 valoare', tier: 'epic', emoji: '💠' },
   { name: 'Mystery Box', subtitle: 'Obiecte unice', tier: 'epic', emoji: '📦' },
   { name: 'Fragmente ruleta', subtitle: 'x5 fragmente', tier: 'rare', emoji: '🪙' },
   { name: 'OGCoins', subtitle: '10 OGC', tier: 'rare', emoji: '🟠' },
-  { name: 'Slot Vehicle', subtitle: '1 slot', tier: 'rare', emoji: '➕' },
-  { name: 'Voucher Showroom', subtitle: '1 voucher', tier: 'rare', emoji: '🎟️' },
-  { name: 'Job Boost', subtitle: '12 de ore', tier: 'uncommon', emoji: '📈' },
-  { name: 'Scutire Taxe', subtitle: '24 de ore', tier: 'uncommon', emoji: '💸' },
-  { name: 'Xenon Vehicul', subtitle: '1 pachet xenon', tier: 'common', emoji: '🔩' },
+  { name: 'Slot Vehicle', subtitle: '0 valoare', tier: 'rare', emoji: '➕' },
+  { name: 'Voucher Showroom', subtitle: '0 valoare', tier: 'rare', emoji: '🎟️' },
+  { name: 'Job Boost', subtitle: '0 valoare', tier: 'uncommon', emoji: '📈' },
+  { name: 'Scutire Taxe', subtitle: '0 valoare', tier: 'uncommon', emoji: '💸' },
+  { name: 'Xenon Vehicul', subtitle: '4x 5.000 si 1x 150.000', tier: 'common', emoji: '🔩' },
   { name: 'Bani', subtitle: 'suma de bani', tier: 'common', emoji: '💵' },
 ];
 
@@ -55,6 +55,40 @@ const SPIN_DURATION_MS = 4600;
 const MIN_EXTRA_LOOPS = 6;
 const MAX_EXTRA_LOOPS = 8;
 
+function randomMultipleOfFiveThousand(min, max) {
+  const slots = Math.floor((max - min) / 5000);
+  return min + Math.floor(Math.random() * (slots + 1)) * 5000;
+}
+
+function resolveRewardOutcome(baseReward) {
+  if (baseReward.name === 'Mystery Box') {
+    const isJackpot = Math.random() < 0.001;
+    const value = isJackpot ? randomMultipleOfFiveThousand(5_000_000, 10_000_000) : randomMultipleOfFiveThousand(5_000, 1_000_000);
+    return {
+      ...baseReward,
+      subtitle: `${isJackpot ? 'Jackpot haine' : 'Haine random'}: ${value.toLocaleString('ro-RO')}`,
+    };
+  }
+
+  if (baseReward.name === 'Xenon Vehicul') {
+    const value = Math.random() < 0.8 ? 5_000 : 150_000;
+    return {
+      ...baseReward,
+      subtitle: `Valoare xenon: ${value.toLocaleString('ro-RO')}`,
+    };
+  }
+
+  if (baseReward.name === 'Bani') {
+    const value = randomMultipleOfFiveThousand(25_000, 50_000);
+    return {
+      ...baseReward,
+      subtitle: `Suma cash: ${value.toLocaleString('ro-RO')}`,
+    };
+  }
+
+  return baseReward;
+}
+
 function pickWeightedReward() {
   const totalWeight = rewards.reduce((sum, reward) => sum + (tierWeight[reward.tier] ?? 1), 0);
   let roll = Math.random() * totalWeight;
@@ -85,6 +119,9 @@ export default function RouletteDemo() {
   const [showWinModal, setShowWinModal] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(START_INDEX);
   const [latestWins, setLatestWins] = useState([rewards[0], rewards[1], rewards[4], rewards[11]]);
+  const [fragments, setFragments] = useState(0);
+  const [ogCoinsBalance, setOgCoinsBalance] = useState(0);
+  const [bonusSpins, setBonusSpins] = useState(0);
 
   const trackRewards = useMemo(
     () => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(),
@@ -206,7 +243,7 @@ export default function RouletteDemo() {
       await context.resume();
     }
 
-    const winner = pickWeightedReward();
+    const winner = resolveRewardOutcome(pickWeightedReward());
     const winnerRewardIndex = rewards.findIndex((reward) => reward.name === winner.name);
     const currentRewardIndex = currentIndexRef.current % rewards.length;
     const deltaToWinner = (winnerRewardIndex - currentRewardIndex + rewards.length) % rewards.length;
@@ -228,6 +265,29 @@ export default function RouletteDemo() {
       setSelectedReward(winner);
       setHighlightIndex(targetIndex);
       setLatestWins((current) => [winner, ...current].slice(0, 10));
+
+      if (winner.name === 'Fragmente ruleta') {
+        setFragments((current) => {
+          const total = current + 5;
+          if (total >= 4) {
+            const extra = Math.floor(total / 4);
+            setBonusSpins((spins) => spins + extra);
+          }
+          return total;
+        });
+      }
+
+      if (winner.name === 'OGCoins') {
+        setOgCoinsBalance((current) => {
+          const total = current + 10;
+          if (total >= 30) {
+            const extra = Math.floor(total / 30);
+            setBonusSpins((spins) => spins + extra);
+          }
+          return total;
+        });
+      }
+
       playWinSound();
     }, SPIN_DURATION_MS + 40);
 
@@ -329,6 +389,21 @@ export default function RouletteDemo() {
             >
               {isSpinning && activeCost === 'ogc' ? 'Se deschide...' : 'Deschide cu 30 OGC'}
             </button>
+          </div>
+
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="rounded-[10px] border border-white/15 bg-black/25 px-3 py-2 text-center">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Fragmente</p>
+              <p className="text-lg font-black text-white">{fragments}/4</p>
+            </div>
+            <div className="rounded-[10px] border border-white/15 bg-black/25 px-3 py-2 text-center">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">OGCoins</p>
+              <p className="text-lg font-black text-white">{ogCoinsBalance}/30</p>
+            </div>
+            <div className="rounded-[10px] border border-white/15 bg-black/25 px-3 py-2 text-center">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Spin bonus</p>
+              <p className="text-lg font-black text-amber-300">{bonusSpins}</p>
+            </div>
           </div>
 
           <div className="mt-3 rounded-[12px] border border-white/30 bg-[#06061a]/60 px-4 py-2.5 text-center">
