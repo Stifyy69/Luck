@@ -62,7 +62,7 @@ export default function FarmatPage() {
   const [plicuriAlbe, setPlicuriAlbe] = useState(saved?.plicuriAlbe ?? 0);
   const [plicuriAlbastre, setPlicuriAlbastre] = useState(saved?.plicuriAlbastre ?? 0);
   const [baniMurdari, setBaniMurdari] = useState(saved?.baniMurdari ?? 0);
-  const [baniCurati, setBaniCurati] = useState(saved?.baniCurati ?? 5_000_000);
+  const [baniCurati, setBaniCurati] = useState(saved?.cashBalance ?? saved?.baniCurati ?? 1_000_000);
 
   const [activeAction, setActiveAction] = useState<ActionKey | null>(null);
   const [timer, setTimer] = useState(0);
@@ -98,7 +98,7 @@ export default function FarmatPage() {
       processedBlue: processedAlbastre,
       rouletteSpent,
       rouletteWon,
-      cashBalance: saved?.cashBalance ?? 5_000_000,
+      cashBalance: baniCurati,
       fragments: saved?.fragments ?? 0,
       ogCoinsBalance: saved?.ogCoinsBalance ?? 0,
       bonusSpins: saved?.bonusSpins ?? 0,
@@ -118,17 +118,39 @@ export default function FarmatPage() {
 
   const canRun = activeAction === null;
 
+  const convertCleanToDirty = (neededDirty: number) => {
+    const missingDirty = Math.max(0, neededDirty - baniMurdari);
+    if (!missingDirty) return true;
+
+    const cleanNeeded = Math.ceil(missingDirty * 0.65);
+    if (baniCurati < cleanNeeded) return false;
+
+    setBaniCurati((current) => current - cleanNeeded);
+    setBaniMurdari((current) => current + missingDirty);
+    return true;
+  };
+
   const runAction = (key: ActionKey) => {
     if (!canRun) return;
     const action = actions[key];
 
-    if (key === 'process_pack' && (frunze < 2400 || baniMurdari < 2_000_000)) {
-      pushPopup('danger', 'Ai nevoie de 2400 frunze si 2.000.000 bani murdari.');
+    if (key === 'process_pack' && frunze < 2400) {
+      pushPopup('danger', 'Ai nevoie de 2400 frunze.');
       return;
     }
 
-    if (key === 'refine_pack' && (plicuriAlbe < 800 || baniMurdari < 250_000)) {
-      pushPopup('danger', 'Ai nevoie de 800 plicuri albe si 250.000 bani murdari.');
+    if (key === 'refine_pack' && plicuriAlbe < 800) {
+      pushPopup('danger', 'Ai nevoie de 800 plicuri albe.');
+      return;
+    }
+
+    if (key === 'process_pack' && !convertCleanToDirty(2_000_000)) {
+      pushPopup('danger', 'Nu ai fonduri. Mergi la Sleep ca sa faci bani curati.');
+      return;
+    }
+
+    if (key === 'refine_pack' && !convertCleanToDirty(250_000)) {
+      pushPopup('danger', 'Nu ai fonduri. Mergi la Sleep ca sa faci bani curati.');
       return;
     }
 
@@ -148,7 +170,7 @@ export default function FarmatPage() {
 
         if (caught) {
           loseAllInventory();
-          pushPopup('danger', 'Ai fost prins in control. Ai pierdut toata marfa de pe tine.');
+          pushPopup('danger', 'A VENIT RAZIIIAAAA!!!');
           setActiveAction(null);
           return;
         }
@@ -257,15 +279,21 @@ export default function FarmatPage() {
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             {(Object.keys(actions) as ActionKey[]).map((key, index) => {
               const action = actions[key];
-              const color = index === 0 ? 'from-emerald-500/25 to-emerald-700/10' : index === 1 ? 'from-sky-500/25 to-blue-700/10' : 'from-fuchsia-500/25 to-purple-700/10';
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => runAction(key)}
-                  disabled={!canRun}
-                  className={`rounded-xl border border-white/15 p-4 text-left transition ${canRun ? `bg-gradient-to-br ${color} hover:brightness-110` : 'bg-[#1d1a34] text-white/50'}`}
-                >
+          const color = index === 0 ? 'from-emerald-500/25 to-emerald-700/10' : index === 1 ? 'from-sky-500/25 to-blue-700/10' : 'from-fuchsia-500/25 to-purple-700/10';
+          const canRunAction =
+            key === 'collect_leaves'
+              ? canRun
+              : key === 'process_pack'
+                ? canRun && frunze >= 2400 && (baniMurdari >= 2_000_000 || baniCurati >= Math.ceil((2_000_000 - baniMurdari) * 0.65))
+                : canRun && plicuriAlbe >= 800 && (baniMurdari >= 250_000 || baniCurati >= Math.ceil((250_000 - baniMurdari) * 0.65));
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => runAction(key)}
+              disabled={!canRunAction}
+              className={`rounded-xl border border-white/15 p-4 text-left transition ${canRunAction ? `bg-gradient-to-br ${color} hover:brightness-110` : 'bg-[#1d1a34] text-white/50'}`}
+            >
                   <p className="text-base font-black">{action.title}</p>
                   <p className="mt-1 text-sm">Durata: {action.duration}s</p>
                   <p className="text-sm">{action.run}</p>

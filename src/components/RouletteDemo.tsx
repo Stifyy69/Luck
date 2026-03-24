@@ -148,13 +148,15 @@ export default function RouletteDemo() {
   const [fragments, setFragments] = useState(saved?.fragments ?? 0);
   const [ogCoinsBalance, setOgCoinsBalance] = useState(saved?.ogCoinsBalance ?? 0);
   const [bonusSpins, setBonusSpins] = useState(saved?.bonusSpins ?? 0);
-  const [cashBalance, setCashBalance] = useState(saved?.cashBalance ?? 5_000_000);
+  const [cashBalance, setCashBalance] = useState(saved?.cashBalance ?? 1_000_000);
   const [rouletteSpent, setRouletteSpent] = useState(saved?.rouletteSpent ?? 0);
   const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
   const [timeLostFarm, setTimeLostFarm] = useState(saved?.timeLostFarm ?? 0);
   const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
   const [processedWhite, setProcessedWhite] = useState(saved?.processedWhite ?? 0);
   const [processedBlue, setProcessedBlue] = useState(saved?.processedBlue ?? 0);
+  const [spinCount, setSpinCount] = useState(0);
+  const [nearMissHint, setNearMissHint] = useState('');
 
   const trackRewards = useMemo(
     () => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(),
@@ -316,6 +318,7 @@ export default function RouletteDemo() {
     } else {
       setOgCoinsBalance((current) => current - 30);
     }
+    setSpinCount((count) => count + 1);
 
     currentIndexRef.current = targetIndex;
     setTranslateX(getTranslateForIndex(targetIndex, viewportWidth));
@@ -325,7 +328,7 @@ export default function RouletteDemo() {
       setIsSpinning(false);
       setSelectedReward(winner);
       setHighlightIndex(targetIndex);
-      setLatestWins((current) => [winner, ...current].slice(0, 10));
+      setLatestWins((current) => [winner, ...current].slice(0, 5));
 
       if (winner.name === 'Fragmente ruleta') {
         setFragments((current) => {
@@ -350,6 +353,11 @@ export default function RouletteDemo() {
       if (winner.payout > 0) {
         setCashBalance((current) => current + winner.payout);
         setRouletteWon((current) => current + winner.payout);
+      }
+
+      if ((spinCount + 1) % 3 === 0 && winner.name !== 'Vehicul Suvenir') {
+        setNearMissHint('Aproape de Vehicul Suvenir! Mai încearcă!');
+        scheduleTask(() => setNearMissHint(''), 2200);
       }
 
       playWinSound();
@@ -469,6 +477,12 @@ export default function RouletteDemo() {
               <p className="text-lg font-black text-amber-300">{bonusSpins}</p>
             </div>
           </div>
+
+          {nearMissHint ? (
+            <div className="mt-2 rounded-lg border border-amber-300/30 bg-amber-500/10 px-3 py-2 text-center text-sm font-bold text-amber-200">
+              {nearMissHint}
+            </div>
+          ) : null}
 
           </div>
 
