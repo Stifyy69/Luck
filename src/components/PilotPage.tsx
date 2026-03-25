@@ -78,7 +78,7 @@ export default function PilotPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#110d28] px-4 pb-10 pt-20 text-white sm:px-6">
+    <div className="min-h-screen bg-transparent px-4 pb-10 pt-20 text-white sm:px-6">
       <div className="mx-auto grid max-w-[1340px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="hud-panel p-6 text-center backdrop-blur-xl">
           <div className="mx-auto mb-4 flex h-36 w-36 items-center justify-center rounded-full border border-white/20 bg-black/25 text-7xl">🛩️</div>

@@ -53,7 +53,7 @@ export default function SharedStatsPanel() {
 
   return (
     <div className="hud-panel p-4">
-      <p className="text-xs uppercase tracking-[0.2em] text-white/55">Stats</p>
+      <p className="text-xs uppercase tracking-[0.2em] text-[#d9e7ff]">Stats</p>
       <div className="mt-3 grid grid-cols-2 gap-2.5 text-sm">
         <div className="space-y-2">
           <Card label="Bani Curati" value={`${(stats.cash ?? 0).toLocaleString('ro-RO')} $`} />
@@ -79,7 +79,7 @@ function Card({ label, value }: { label: string; value: string }) {
   return (
     <div className="hud-card p-2.5">
       <p className="text-[11px] text-white/60">{label}</p>
-      <p className="text-sm font-black leading-tight text-white">{value}</p>
+      <p className="text-sm font-black leading-tight text-[#f5f7ff]">{value}</p>
     </div>
   );
 }

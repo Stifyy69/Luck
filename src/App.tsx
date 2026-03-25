@@ -36,11 +36,11 @@ export default function App() {
   };
 
   return (
-    <div className="relative">
+    <div className="relative min-h-screen">
       <button
         type="button"
         onClick={() => setMenuOpen((current) => !current)}
-        className="fixed left-2 top-4 z-[70] inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-[#070913]/95 text-white shadow-[0_18px_35px_rgba(0,0,0,0.45)] backdrop-blur md:hidden"
+        className="fixed left-2 top-4 z-[70] inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-[#1d2947]/90 text-white shadow-[0_18px_35px_rgba(0,0,0,0.35)] backdrop-blur md:hidden"
         aria-label={menuOpen ? 'Închide meniul' : 'Deschide meniul'}
       >
         <span className="text-lg leading-none">{menuOpen ? '◀' : '▶'}</span>
