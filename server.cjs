@@ -13,7 +13,9 @@ const ADMIN_PASS = 'Fifi23';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'adminpanelv2-secret';
 const USER_SECRET = process.env.USER_SECRET || 'cityflow-user-secret';
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+const pool = hasDatabaseUrl ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
+let dbReady = false;
 
 const signAdminToken = (value) => {
   const sig = crypto.createHmac('sha256', ADMIN_SECRET).update(value).digest('hex');
@@ -56,6 +58,10 @@ const getLocation = (req) => ({
 });
 
 async function initDb() {
+  if (!pool) {
+    throw new Error('DATABASE_URL is not configured');
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS player_stats (
       player_id TEXT PRIMARY KEY,
@@ -145,6 +151,16 @@ async function initDb() {
 app.use(cookieParser());
 app.use(express.json({ limit: '256kb' }));
 
+const requireDb = (_req, res, next) => {
+  if (!dbReady || !pool) {
+    return res.status(503).json({
+      error: 'database unavailable',
+      message: 'Set DATABASE_URL to a reachable Postgres instance for database-backed features.',
+    });
+  }
+  next();
+};
+
 const requireUser = async (req, res, next) => {
   const userId = verifyUserToken(req.cookies.cityflow_user_token);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
@@ -152,7 +168,7 @@ const requireUser = async (req, res, next) => {
   next();
 };
 
-app.post('/api/stats/sync', async (req, res) => {
+app.post('/api/stats/sync', requireDb, async (req, res) => {
   try {
     const { playerId, stats = {}, path: currentPath } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
@@ -220,7 +236,7 @@ app.post('/api/stats/sync', async (req, res) => {
   }
 });
 
-app.post('/api/activity/heartbeat', async (req, res) => {
+app.post('/api/activity/heartbeat', requireDb, async (req, res) => {
   try {
     const { playerId, path: currentPath } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
@@ -269,7 +285,7 @@ app.post('/api/adminpanelv2/login', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', requireDb, async (req, res) => {
   try {
     const { username, email, password, passwordConfirm } = req.body || {};
     if (!username || !email || !password) return res.status(400).json({ error: 'missing fields' });
@@ -296,7 +312,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', requireDb, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
   const result = await pool.query(`SELECT id, username, email, password FROM users WHERE username = $1`, [String(username).trim()]);
@@ -319,7 +335,7 @@ app.post('/api/auth/logout', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/auth/me', async (req, res) => {
+app.get('/api/auth/me', requireDb, async (req, res) => {
   const userId = verifyUserToken(req.cookies.cityflow_user_token);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
   const result = await pool.query(`SELECT id, username, email FROM users WHERE id = $1`, [userId]);
@@ -327,12 +343,12 @@ app.get('/api/auth/me', async (req, res) => {
   res.json({ user: result.rows[0] });
 });
 
-app.get('/api/account/state', requireUser, async (req, res) => {
+app.get('/api/account/state', requireDb, requireUser, async (req, res) => {
   const result = await pool.query(`SELECT game_state FROM user_profiles WHERE user_id = $1`, [req.userId]);
   res.json({ state: result.rows[0]?.game_state || {} });
 });
 
-app.post('/api/account/state', requireUser, async (req, res) => {
+app.post('/api/account/state', requireDb, requireUser, async (req, res) => {
   const { state } = req.body || {};
   await pool.query(
     `INSERT INTO user_profiles (user_id, game_state, updated_at)
@@ -343,7 +359,7 @@ app.post('/api/account/state', requireUser, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/inventory', requireUser, async (req, res) => {
+app.get('/api/inventory', requireDb, requireUser, async (req, res) => {
   const result = await pool.query(
     `SELECT item_key, item_name, item_type, quantity FROM user_inventory WHERE user_id = $1 ORDER BY item_type, item_name`,
     [req.userId],
@@ -351,7 +367,7 @@ app.get('/api/inventory', requireUser, async (req, res) => {
   res.json({ items: result.rows });
 });
 
-app.get('/api/market/posts', async (_req, res) => {
+app.get('/api/market/posts', requireDb, async (_req, res) => {
   const result = await pool.query(
     `SELECT id, item_key, item_name, item_type, image_url, price, bot_name, created_at
      FROM market_posts
@@ -362,7 +378,7 @@ app.get('/api/market/posts', async (_req, res) => {
   res.json({ posts: result.rows });
 });
 
-app.post('/api/market/buy', requireUser, async (req, res) => {
+app.post('/api/market/buy', requireDb, requireUser, async (req, res) => {
   const { postId } = req.body || {};
   const postResult = await pool.query(`SELECT * FROM market_posts WHERE id = $1 AND active = TRUE`, [postId]);
   const post = postResult.rows[0];
@@ -379,7 +395,7 @@ app.post('/api/market/buy', requireUser, async (req, res) => {
   res.json({ ok: true, item: post });
 });
 
-app.post('/api/market/offer', requireUser, async (req, res) => {
+app.post('/api/market/offer', requireDb, requireUser, async (req, res) => {
   const { postId, offerPrice } = req.body || {};
   const postResult = await pool.query(`SELECT * FROM market_posts WHERE id = $1 AND active = TRUE`, [postId]);
   const post = postResult.rows[0];
@@ -425,7 +441,7 @@ async function seedBotPosts() {
   }
 }
 
-app.get('/api/adminpanelv2/dashboard', async (req, res) => {
+app.get('/api/adminpanelv2/dashboard', requireDb, async (req, res) => {
   if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
     return res.status(401).json({ error: 'unauthorized' });
   }
@@ -489,17 +505,30 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-initDb()
-  .then(() => {
-    seedBotPosts().catch(() => {});
-    setInterval(() => {
-      seedBotPosts().catch(() => {});
-    }, 5 * 60 * 1000);
-    app.listen(port, '0.0.0.0', () => {
-      console.log(`Server listening on port ${port}`);
-    });
-  })
-  .catch((err) => {
-    console.error('DB init failed', err);
-    process.exit(1);
+const startServer = () => {
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Server listening on port ${port}`);
+    if (!dbReady) {
+      console.warn('Database is unavailable. DB-backed API routes will return 503.');
+    }
   });
+};
+
+if (!pool) {
+  console.warn('DATABASE_URL is missing. Starting server in degraded mode.');
+  startServer();
+} else {
+  initDb()
+    .then(() => {
+      dbReady = true;
+      seedBotPosts().catch(() => {});
+      setInterval(() => {
+        seedBotPosts().catch(() => {});
+      }, 5 * 60 * 1000);
+      startServer();
+    })
+    .catch((err) => {
+      console.error('DB init failed. Starting server in degraded mode.', err);
+      startServer();
+    });
+}
