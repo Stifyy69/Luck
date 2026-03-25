@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg-main: #10131d;
+  --bg-alt: #171b26;
+  --panel: #221a17;
+  --text-main: #f8f6f2;
+  --text-muted: #d2c7bd;
+  --gold: #ffd95a;
+  --orange: #ff8a2a;
+  --cyan: #6ed8ff;
+  --sunset: #ffb347;
+  --coral: #ff6b57;
+  --pink: #ff7aa2;
+  --success: #45d483;
+  --danger: #ff5e62;
+  --soft-border: rgba(255, 255, 255, 0.1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background:
+    radial-gradient(1500px 800px at 6% -10%, rgba(255, 179, 71, 0.42), transparent 60%),
+    radial-gradient(1300px 750px at 92% 8%, rgba(255, 122, 162, 0.28), transparent 60%),
+    radial-gradient(1000px 560px at 52% 108%, rgba(255, 138, 42, 0.24), transparent 62%),
+    linear-gradient(180deg, #1d1b21 0%, #171922 44%, #12151d 100%);
+  color: var(--text-main);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.hud-panel {
+  border: 1px solid var(--soft-border);
+  background:
+    linear-gradient(180deg, rgba(42, 34, 48, 0.95) 0%, rgba(34, 26, 23, 0.93) 100%),
+    radial-gradient(760px 260px at 8% 0%, rgba(255, 179, 71, 0.24), transparent 72%),
+    radial-gradient(760px 260px at 92% 0%, rgba(255, 107, 87, 0.2), transparent 75%);
+  box-shadow: 0 18px 50px rgba(20, 11, 8, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+}
+
+.hud-card {
+  border: 1px solid var(--soft-border);
+  background: linear-gradient(180deg, rgba(34, 26, 23, 0.95) 0%, rgba(29, 23, 33, 0.92) 100%);
+  border-radius: 12px;
+}
+
+.btn-primary {
+  background: linear-gradient(90deg, var(--orange), var(--gold));
+  color: #1b1200;
+  font-weight: 800;
+  box-shadow: 0 8px 24px rgba(255, 138, 42, 0.35);
+}
+
+.btn-secondary {
+  border: 1px solid rgba(255, 179, 71, 0.45);
+  background: linear-gradient(180deg, rgba(55, 38, 31, 0.96) 0%, rgba(42, 34, 48, 0.94) 100%);
+  color: #fff1dc;
+}
+
+.btn-ghost {
+  border: 1px solid var(--soft-border);
+  background: rgba(60, 42, 39, 0.45);
+  color: #f6ddc6;
+}
+
+.btn-danger {
+  background: linear-gradient(90deg, #d34257, var(--danger));
+  color: #fff;
+}
+
+.input-dark {
+  border: 1px solid var(--soft-border);
+  background: rgba(10, 14, 28, 0.85);
+  color: var(--text-main);
+}
+
+.muted-text {
+  color: var(--text-muted);
+}
