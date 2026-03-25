@@ -43,7 +43,7 @@ export default function PilotPage() {
 
       if ((state.pilotEndsAt ?? 0) > 0 && (state.pilotEndsAt ?? 0) <= now && !state.pilotRewardClaimed) {
         const nextCash = Number(state.cashBalance ?? 1_000_000) + 100_000;
-        const nextPilot = Number(state.timePilot ?? 0) + 0.25;
+        const nextPilot = Number(state.timePilot ?? 0) + 0.5;
         saveGameState({
           ...state,
           cashBalance: nextCash,
@@ -83,7 +83,8 @@ export default function PilotPage() {
         <div className="rounded-2xl border border-white/15 bg-[#171438]/72 p-6 text-center shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl">
           <div className="mx-auto mb-4 flex h-36 w-36 items-center justify-center rounded-full border border-white/20 bg-black/25 text-7xl">🛩️</div>
           <h1 className="text-4xl font-black uppercase">Pilot</h1>
-          <p className="mt-2 text-white/70">Pilot task 3s, reward +100.000 curat, cooldown 30s, +0.25h timp pilot.</p>
+          <p className="mt-2 text-white/80">Baga 2 curse la pilot.</p>
+          <p className="text-white/70">Primesti 100.000$.</p>
 
           <button
             type="button"

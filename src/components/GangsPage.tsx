@@ -5,6 +5,7 @@ import PageDisclaimer from './PageDisclaimer';
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
 const LEAVE_INTERVAL_MS = 3 * 60 * 1000;
+const GANG_RAZIA_CHANCE = 0.05;
 
 const MEMBER_POOL = [
   'Enzo', 'Fifi', 'Adi', 'Camataru', 'Capdemied', 'Fra', 'Tavi', 'Babal', 'Nacho', 'dexter', 'Sebi', 'Darius',
@@ -223,7 +224,7 @@ export default function GangsPage() {
     setGangData((current) => ({ ...current, onlineNow: online }));
 
     window.setTimeout(() => {
-      const razia = Math.random() < 0.1;
+      const razia = Math.random() < GANG_RAZIA_CHANCE;
       if (razia) {
         setGangData((current) => ({ ...current, frunze: 0, white: 0, blue: 0, onlineNow: 0 }));
         pushPopup('A VENIT RAZIIIAAAA!!! Gang-ul a pierdut tot stocul.');
@@ -297,7 +298,7 @@ export default function GangsPage() {
     const chunks = Math.min(Math.floor(gangData.blue / 100), online);
     const qty = chunks * 100;
     if (qty <= 0) return;
-    const caught = Math.random() < 0.1;
+    const caught = Math.random() < GANG_RAZIA_CHANCE;
     if (caught) {
       setGangData((current) => ({ ...current, blue: current.blue - qty }));
       setTimeFarm((current) => current + 0.25);

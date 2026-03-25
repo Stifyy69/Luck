@@ -36,7 +36,7 @@ export default function App() {
   };
 
   return (
-    <div className="relative">
+    <div className="relative bg-[#08061a]">
       <button
         type="button"
         onClick={() => setMenuOpen((current) => !current)}
@@ -46,8 +46,11 @@ export default function App() {
         <span className="text-lg leading-none">{menuOpen ? '◀' : '▶'}</span>
       </button>
 
-      <div className={`fixed inset-y-0 left-0 z-[60] w-[236px] rounded-r-2xl border-r border-white/15 bg-gradient-to-b from-[#0d1227]/95 to-[#070913]/95 p-4 shadow-[0_25px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl transition-transform md:left-6 md:top-6 md:h-auto md:w-[220px] md:rounded-2xl md:border md:border-white/15 md:rounded-r-2xl ${menuOpen ? 'translate-x-0' : '-translate-x-[86%] md:translate-x-0'}`}>
-        <div className="mb-4 border-b border-white/10 pb-3">
+      <div className={`fixed inset-y-0 left-0 z-[60] w-[242px] rounded-r-2xl border-r border-white/15 bg-gradient-to-b from-[#0b1128]/96 to-[#060812]/98 p-4 shadow-[0_28px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-transform md:left-5 md:top-4 md:h-[calc(100vh-2rem)] md:w-[226px] md:rounded-2xl md:border md:border-white/15 md:rounded-r-2xl ${menuOpen ? 'translate-x-0' : '-translate-x-[86%] md:translate-x-0'}`}>
+        <div className="mb-4 border-b border-white/10 pb-4">
+          <div className="mb-3 rounded-xl border border-[#f8c144]/35 bg-gradient-to-r from-[#f8c144]/18 to-transparent px-3 py-2">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#ffd36a]">CityFlow No-RP</p>
+          </div>
           <p className="inline-block rounded-full border border-white/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.28em] text-white/55">
             OG Stifyy
           </p>

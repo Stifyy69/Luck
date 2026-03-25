@@ -52,9 +52,9 @@ export default function SharedStatsPanel() {
   const totalTime = (stats.timeFarm ?? 0) + (stats.timeSleep ?? 0) + (stats.timePilot ?? 0);
 
   return (
-    <div className="rounded-2xl border border-white/15 bg-[#13112d]/72 p-4">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-white/45">Stats</p>
-      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+    <div className="rounded-2xl border border-white/15 bg-[#0f0d29]/86 p-4 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
+      <p className="text-xs uppercase tracking-[0.2em] text-white/55">Stats</p>
+      <div className="mt-3 grid grid-cols-2 gap-2.5 text-sm">
         <div className="space-y-2">
           <Card label="Bani Curati" value={`${(stats.cash ?? 0).toLocaleString('ro-RO')} $`} />
           <Card label="Bani Murdari" value={`${(stats.dirty ?? 0).toLocaleString('ro-RO')} $`} />
@@ -77,9 +77,9 @@ export default function SharedStatsPanel() {
 
 function Card({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/25 p-2.5">
-      <p className="text-[11px] text-white/55">{label}</p>
-      <p className="text-sm font-black text-white">{value}</p>
+    <div className="rounded-lg border border-white/10 bg-[#0a0920]/95 p-2.5">
+      <p className="text-[11px] text-white/60">{label}</p>
+      <p className="text-sm font-black leading-tight text-white">{value}</p>
     </div>
   );
 }
