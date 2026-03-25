@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Brand {
+  DRAVIA
+  BERVIK
+  AURON
+  FERANO
+  VORTEK
+}
+
+enum ClothingRarity {
+  BLUE
+  LIGHT_PURPLE
+  DARK_PURPLE
+  RED
+  YELLOW
+}
+
+enum ClothingCategory {
+  TSHIRT
+  PANTS
+  SHOES
+}
+
+enum ItemType {
+  MYSTERY_BOX
+  ROULETTE_FRAGMENTS
+  SLOT_VEHICLE
+  VOUCHER_SHOWROOM
+  JOB_BOOST_PILOT
+  JOB_BOOST_SLEEP
+  TAX_EXEMPTION
+  XENON_VEHICLE
+  CLOTHING
+  VIP_GOLD
+  VIP_SILVER
+}
+
+enum BoostType {
+  VIP_GOLD
+  VIP_SILVER
+  JOB_PILOT
+  JOB_SLEEP
+}
+
+model Player {
+  playerId              String         @id @map("player_id")
+  cleanMoney            BigInt         @default(1000000) @map("clean_money")
+  flowCoins             Int            @default(0) @map("flow_coins")
+  rouletteFragments     Int            @default(0) @map("roulette_fragments")
+  vehicleSlotsBase      Int            @default(5) @map("vehicle_slots_base")
+  vehicleSlotsExtra     Int            @default(0) @map("vehicle_slots_extra")
+  nextTaxCollectionAt   DateTime?      @map("next_tax_collection_at")
+  skipNextTax           Boolean        @default(false) @map("skip_next_tax")
+  updatedAt             DateTime       @default(now()) @updatedAt @map("updated_at")
+
+  ownedVehicles         OwnedVehicle[]
+  inventoryItems        InventoryItem[]
+  activeBoosts          ActiveBoost[]
+
+  @@map("players")
+}
+
+model VehicleModel {
+  id          Int            @id @default(autoincrement())
+  brand       Brand
+  name        String         @unique
+  basePrice   BigInt         @map("base_price")
+  isJackpot   Boolean        @default(false) @map("is_jackpot")
+  stock       Int            @default(10)
+
+  ownedVehicles OwnedVehicle[]
+
+  @@map("vehicle_models")
+}
+
+model OwnedVehicle {
+  id            Int          @id @default(autoincrement())
+  playerId      String       @map("player_id")
+  modelId       Int          @map("model_id")
+  purchasePrice BigInt       @map("purchase_price")
+  purchasedAt   DateTime     @default(now()) @map("purchased_at")
+
+  player        Player       @relation(fields: [playerId], references: [playerId])
+  vehicleModel  VehicleModel @relation(fields: [modelId], references: [id])
+
+  @@map("owned_vehicles")
+}
+
+model InventoryItem {
+  id         Int      @id @default(autoincrement())
+  playerId   String   @map("player_id")
+  itemType   ItemType @map("item_type")
+  metadata   Json     @default("{}")
+  quantity   Int      @default(1)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  player     Player   @relation(fields: [playerId], references: [playerId])
+
+  @@map("inventory_items")
+}
+
+model ClothingItem {
+  id        Int              @id @default(autoincrement())
+  name      String           @unique
+  category  ClothingCategory
+  rarity    ClothingRarity
+  minValue  BigInt           @map("min_value")
+  maxValue  BigInt           @map("max_value")
+
+  @@map("clothing_items")
+}
+
+model ActiveBoost {
+  id         Int       @id @default(autoincrement())
+  playerId   String    @map("player_id")
+  boostType  BoostType @map("boost_type")
+  expiresAt  DateTime  @map("expires_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  player     Player    @relation(fields: [playerId], references: [playerId])
+
+  @@map("active_boosts")
+}
