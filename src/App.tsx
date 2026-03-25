@@ -6,6 +6,7 @@ import AdminPanelV2 from './components/AdminPanelV2';
 import PilotPage from './components/PilotPage';
 import CarsPage from './components/CarsPage';
 import GangsPage from './components/GangsPage';
+import CNNMarketplace from './components/CNNMarketplace';
 import { startGameSync } from './lib/gameSync';
 
 export default function App() {
@@ -13,7 +14,8 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep' && path !== '/pilot' && path !== '/cars' && path !== '/gangs' && path !== '/adminpanelv2')) {
+    const valid = ['/ruleta', '/farmat', '/sleep', '/pilot', '/cars', '/gangs', '/adminpanelv2', '/cnn'];
+    if (path === '/' || !valid.includes(path)) {
       window.history.replaceState({}, '', '/ruleta');
       setPath('/ruleta');
     }
@@ -28,7 +30,7 @@ export default function App() {
     return () => stop?.();
   }, []);
 
-  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/cars' | '/gangs' | '/adminpanelv2') => {
+  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/cars' | '/gangs' | '/adminpanelv2' | '/cnn') => {
     if (nextPath === path) return;
     window.history.pushState({}, '', nextPath);
     setPath(nextPath);
@@ -98,6 +100,13 @@ export default function App() {
         >
           Gangs
         </button>
+        <button
+          type="button"
+          onClick={() => goTo('/cnn')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/cnn' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          📡 CNN
+        </button>
       </div>
 
       <main className="md:pl-[250px] md:pr-3">
@@ -111,6 +120,8 @@ export default function App() {
                 ? <CarsPage />
                 : path === '/gangs'
                   ? <GangsPage />
+                  : path === '/cnn'
+                    ? <CNNMarketplace />
             : path === '/adminpanelv2'
               ? <AdminPanelV2 />
               : <RouletteDemo />}
