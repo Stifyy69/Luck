@@ -13,5 +13,6 @@
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-  background: #100d25;
+  background: radial-gradient(circle at top, #22115a 0%, #0f0b2a 38%, #070613 100%);
+  color: #f5f6ff;
 }

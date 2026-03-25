@@ -100,19 +100,21 @@ export default function App() {
         </button>
       </div>
 
-      {path === '/farmat'
-        ? <FarmatPage />
-        : path === '/sleep'
-          ? <SleepPage />
-          : path === '/pilot'
-            ? <PilotPage />
-            : path === '/cars'
-              ? <CarsPage />
-              : path === '/gangs'
-                ? <GangsPage />
-          : path === '/adminpanelv2'
-            ? <AdminPanelV2 />
-            : <RouletteDemo />}
+      <main className="md:pl-[250px] md:pr-3">
+        {path === '/farmat'
+          ? <FarmatPage />
+          : path === '/sleep'
+            ? <SleepPage />
+            : path === '/pilot'
+              ? <PilotPage />
+              : path === '/cars'
+                ? <CarsPage />
+                : path === '/gangs'
+                  ? <GangsPage />
+            : path === '/adminpanelv2'
+              ? <AdminPanelV2 />
+              : <RouletteDemo />}
+      </main>
     </div>
   );
 }
