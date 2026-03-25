@@ -315,7 +315,7 @@ export default function GangsPage() {
   return (
     <div className="min-h-screen bg-[#110d28] px-4 pb-10 pt-20 text-white sm:px-6">
       <div className="mx-auto grid max-w-[1460px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="rounded-2xl border border-white/15 bg-[#171438]/72 p-4 shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl sm:p-6">
+        <div className="hud-panel p-4 backdrop-blur-xl sm:p-6">
           <h1 className="text-center text-4xl font-black uppercase tracking-tight">Gangs</h1>
           {!formed ? (
             <div className="mx-auto mt-6 max-w-xl rounded-xl border border-white/15 bg-black/25 p-4">

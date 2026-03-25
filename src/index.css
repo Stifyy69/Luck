@@ -4,6 +4,17 @@
 
 :root {
   color-scheme: dark;
+  --bg-main: #060913;
+  --bg-alt: #0b1020;
+  --panel: #11182b;
+  --text-main: #f5f7ff;
+  --text-muted: #9fb0d0;
+  --gold: #f7b500;
+  --orange: #ff8a2a;
+  --cyan: #6ed8ff;
+  --success: #45d483;
+  --danger: #ff5e62;
+  --soft-border: rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -13,6 +24,61 @@
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-  background: radial-gradient(circle at top, #22115a 0%, #0f0b2a 38%, #070613 100%);
-  color: #f5f6ff;
+  background:
+    radial-gradient(1200px 700px at 12% -10%, rgba(255, 138, 42, 0.16), transparent 60%),
+    radial-gradient(1100px 600px at 92% 8%, rgba(110, 216, 255, 0.15), transparent 60%),
+    radial-gradient(900px 500px at 50% 100%, rgba(247, 181, 0, 0.08), transparent 60%),
+    linear-gradient(180deg, #0a0f1f 0%, #060913 48%, #05070f 100%);
+  color: var(--text-main);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.hud-panel {
+  border: 1px solid var(--soft-border);
+  background: linear-gradient(180deg, rgba(17, 24, 43, 0.92) 0%, rgba(12, 18, 33, 0.92) 100%);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border-radius: 16px;
+}
+
+.hud-card {
+  border: 1px solid var(--soft-border);
+  background: rgba(8, 12, 24, 0.82);
+  border-radius: 12px;
+}
+
+.btn-primary {
+  background: linear-gradient(90deg, var(--orange), var(--gold));
+  color: #1b1200;
+  font-weight: 800;
+  box-shadow: 0 8px 24px rgba(255, 138, 42, 0.25);
+}
+
+.btn-secondary {
+  border: 1px solid rgba(110, 216, 255, 0.35);
+  background: rgba(17, 24, 43, 0.88);
+  color: #d9e8ff;
+}
+
+.btn-ghost {
+  border: 1px solid var(--soft-border);
+  background: rgba(255, 255, 255, 0.02);
+  color: #c3d3f4;
+}
+
+.btn-danger {
+  background: linear-gradient(90deg, #d34257, var(--danger));
+  color: #fff;
+}
+
+.input-dark {
+  border: 1px solid var(--soft-border);
+  background: rgba(10, 14, 28, 0.85);
+  color: var(--text-main);
+}
+
+.muted-text {
+  color: var(--text-muted);
 }

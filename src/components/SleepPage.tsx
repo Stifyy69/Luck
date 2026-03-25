@@ -112,7 +112,7 @@ export default function SleepPage() {
   return (
     <div className="min-h-screen bg-[#110d28] px-4 pb-10 pt-20 text-white sm:px-6">
       <div className="mx-auto grid max-w-[1340px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="rounded-2xl border border-white/15 bg-[#171438]/72 p-6 text-center shadow-[0_25px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+      <div className="hud-panel p-6 text-center backdrop-blur-xl">
         <div className="mx-auto mb-4 flex h-36 w-36 items-center justify-center rounded-full border border-white/20 bg-black/25 text-7xl">
           😴
         </div>
@@ -125,7 +125,7 @@ export default function SleepPage() {
           type="button"
           onClick={startSleep}
           disabled={isSleeping || cooldown > 0}
-          className={`mt-6 rounded-xl px-6 py-3 text-base font-black ${isSleeping || cooldown > 0 ? 'bg-[#2a2744] text-white/50' : 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white'}`}
+          className={`mt-6 rounded-xl px-6 py-3 text-base font-black ${isSleeping || cooldown > 0 ? 'btn-ghost text-white/50' : 'btn-primary'}`}
         >
           {isSleeping ? `Dormii... ${timer}s` : cooldown > 0 ? `Abia ai dormit (${cooldown}s)` : 'Sleep 24h'}
         </button>
