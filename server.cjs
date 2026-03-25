@@ -13,6 +13,24 @@ const ADMIN_PASS = 'Fifi23';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'adminpanelv2-secret';
 
 // ---------------------------------------------------------------------------
+// Simple in-memory rate limiter (no external package required)
+// ---------------------------------------------------------------------------
+function createRateLimiter(windowMs, max) {
+  const hits = new Map();
+  setInterval(() => hits.clear(), windowMs);
+  return (req, res, next) => {
+    const key = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').toString().split(',')[0].trim();
+    const count = (hits.get(key) || 0) + 1;
+    hits.set(key, count);
+    if (count > max) return res.status(429).json({ error: 'Too many requests, slow down.' });
+    return next();
+  };
+}
+
+// Market endpoints: 60 requests per minute per IP
+const marketRateLimit = createRateLimiter(60_000, 60);
+
+// ---------------------------------------------------------------------------
 // CORS – allow frontend dev server and production same-origin
 // ---------------------------------------------------------------------------
 app.use((req, res, next) => {
@@ -219,6 +237,66 @@ async function initDb() {
       [c.name, c.category, c.rarity, c.min_value, c.max_value],
     );
   }
+
+  // ---- Batch B: Marketplace tables ----
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS npc_sellers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      emoji TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS market_listings (
+      id SERIAL PRIMARY KEY,
+      seller_type TEXT NOT NULL,
+      seller_player_id TEXT,
+      seller_npc_id INT,
+      asset_type TEXT NOT NULL,
+      asset_ref_id INT,
+      asset_name TEXT NOT NULL,
+      asset_metadata JSONB NOT NULL DEFAULT '{}',
+      ask_price BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS market_offers (
+      id SERIAL PRIMARY KEY,
+      listing_id INT NOT NULL REFERENCES market_listings(id),
+      buyer_player_id TEXT NOT NULL,
+      offered_price BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // Seed NPC sellers (idempotent)
+  const npcSellers = [
+    { name: 'Shadow Dealer', emoji: '🕵️' },
+    { name: 'Gold Rush',     emoji: '🤑' },
+    { name: 'Street King',   emoji: '👑' },
+    { name: 'Lucky Star',    emoji: '⭐' },
+    { name: 'Neon Ghost',    emoji: '👻' },
+    { name: 'Iron Mike',     emoji: '💪' },
+    { name: 'Silver Fox',    emoji: '🦊' },
+    { name: 'The Broker',    emoji: '💼' },
+  ];
+
+  for (const npc of npcSellers) {
+    await pool.query(
+      `INSERT INTO npc_sellers (name, emoji) SELECT $1, $2
+       WHERE NOT EXISTS (SELECT 1 FROM npc_sellers WHERE name = $1)`,
+      [npc.name, npc.emoji],
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +422,91 @@ function randomMult5k(min, max) {
 function randomVoucherDiscount() {
   if (Math.random() < 0.05) return 50;
   return randomInt(10, 49);
+}
+
+// ---------------------------------------------------------------------------
+// Batch B: NPC marketplace listing generation
+// ---------------------------------------------------------------------------
+
+// Clothing volatility multiplier: 0.5x to 2.5x for "alive market" feel
+function clothingVolatilityMultiplier() {
+  // Gaussian-like: mostly near 1.0 but with fat tails
+  const r1 = Math.random();
+  const r2 = Math.random();
+  // Box-Muller simplified: produces spread around 1.0
+  const base = 0.5 + r1 * 2.0; // 0.5 to 2.5
+  // Additional random spike 10% of the time
+  if (r2 < 0.1) return base * (1.5 + Math.random() * 2.0);
+  return base;
+}
+
+async function refreshNpcListings() {
+  try {
+    // Cancel old NPC listings (not sold)
+    await pool.query(
+      `UPDATE market_listings SET status = 'CANCELLED', updated_at = NOW()
+       WHERE seller_type = 'NPC' AND status = 'ACTIVE'`,
+    );
+
+    // Get all NPC sellers
+    const npcsRes = await pool.query(`SELECT id, name, emoji FROM npc_sellers`);
+    const allNpcs = npcsRes.rows;
+    if (allNpcs.length === 0) return;
+
+    // Pick 1-5 random NPCs
+    const shuffled = allNpcs.sort(() => Math.random() - 0.5);
+    const activeNpcs = shuffled.slice(0, randomInt(1, Math.min(5, shuffled.length)));
+
+    // Get vehicle models (non-jackpot)
+    const vehiclesRes = await pool.query(
+      `SELECT id, name, brand, base_price FROM vehicle_models WHERE is_jackpot = FALSE`,
+    );
+    const vehicles = vehiclesRes.rows;
+
+    // Get clothing items
+    const clothingRes = await pool.query(
+      `SELECT id, name, category, rarity, min_value, max_value FROM clothing_items`,
+    );
+    const clothingItems = clothingRes.rows;
+
+    for (const npc of activeNpcs) {
+      const listingCount = randomInt(1, 3);
+      for (let i = 0; i < listingCount; i++) {
+        // Alternate between vehicles and clothing
+        const doVehicle = Math.random() < 0.5 && vehicles.length > 0;
+        if (doVehicle) {
+          const vehicle = vehicles[Math.floor(Math.random() * vehicles.length)];
+          const priceMult = 0.9 + Math.random() * 0.6; // 90%-150%
+          const askPrice = Math.floor(Number(vehicle.base_price) * priceMult);
+          await pool.query(
+            `INSERT INTO market_listings
+               (seller_type, seller_npc_id, asset_type, asset_name, asset_metadata, ask_price)
+             VALUES ('NPC', $1, 'VEHICLE', $2, $3, $4)`,
+            [npc.id, vehicle.name, JSON.stringify({ brand: vehicle.brand, modelId: vehicle.id }), askPrice],
+          );
+        } else if (clothingItems.length > 0) {
+          const clothing = clothingItems[Math.floor(Math.random() * clothingItems.length)];
+          const range = Number(clothing.max_value) - Number(clothing.min_value);
+          const rawValue = Number(clothing.min_value) + Math.random() * range;
+          const askPrice = Math.max(1000, Math.floor(rawValue * clothingVolatilityMultiplier()));
+          await pool.query(
+            `INSERT INTO market_listings
+               (seller_type, seller_npc_id, asset_type, asset_name, asset_metadata, ask_price)
+             VALUES ('NPC', $1, 'CLOTHING', $2, $3, $4)`,
+            [
+              npc.id,
+              clothing.name,
+              JSON.stringify({ clothingId: clothing.id, rarity: clothing.rarity, category: clothing.category }),
+              askPrice,
+            ],
+          );
+        }
+      }
+    }
+    console.log(`NPC listings refreshed: ${activeNpcs.length} sellers active`);
+  } catch (e) {
+    console.error('NPC refresh error:', e);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,6 +1335,613 @@ app.get('/api/adminpanelv2/dashboard', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Batch B: Marketplace API endpoints
+// ---------------------------------------------------------------------------
+
+/** GET /api/market/listings?playerId=xxx  — all active listings with seller info */
+app.get('/api/market/listings', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    const result = await pool.query(
+      `SELECT
+         ml.id, ml.seller_type, ml.seller_player_id, ml.seller_npc_id,
+         ml.asset_type, ml.asset_ref_id, ml.asset_name, ml.asset_metadata,
+         ml.ask_price, ml.status, ml.created_at,
+         ns.name AS npc_name, ns.emoji AS npc_emoji
+       FROM market_listings ml
+       LEFT JOIN npc_sellers ns ON ns.id = ml.seller_npc_id
+       WHERE ml.status = 'ACTIVE'
+       ORDER BY ml.created_at DESC`,
+    );
+
+    const listings = result.rows.map((r) => ({
+      id: r.id,
+      sellerType: r.seller_type,
+      sellerPlayerId: r.seller_player_id,
+      sellerName: r.seller_type === 'NPC' ? r.npc_name : r.seller_player_id,
+      sellerEmoji: r.seller_type === 'NPC' ? r.npc_emoji : '👤',
+      assetType: r.asset_type,
+      assetRefId: r.asset_ref_id,
+      assetName: r.asset_name,
+      assetMetadata: r.asset_metadata,
+      askPrice: Number(r.ask_price),
+      isOwn: playerId ? r.seller_player_id === playerId : false,
+      createdAt: r.created_at,
+    }));
+
+    res.json({ listings });
+  } catch (e) {
+    console.error('market/listings error', e);
+    res.status(500).json({ error: 'listings failed' });
+  }
+});
+
+/** POST /api/market/list — player creates a listing */
+app.post('/api/market/list', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId, assetType, assetRefId, askPrice } = req.body || {};
+    if (!playerId || !assetType || !askPrice) {
+      return res.status(400).json({ error: 'playerId, assetType, askPrice required' });
+    }
+    if (Number(askPrice) <= 0) return res.status(400).json({ error: 'askPrice must be positive' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      let assetName = '';
+      let assetMetadata = {};
+
+      if (assetType === 'VEHICLE') {
+        if (!assetRefId) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'assetRefId required for VEHICLE' }); }
+        // Verify ownership
+        const vRes = await client.query(
+          `SELECT ov.id, vm.name, vm.brand, ov.purchase_price
+           FROM owned_vehicles ov JOIN vehicle_models vm ON vm.id = ov.model_id
+           WHERE ov.id = $1 AND ov.player_id = $2 FOR UPDATE`,
+          [assetRefId, playerId],
+        );
+        if (vRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Vehicle not found or not owned' }); }
+        // Check not already listed
+        const dupRes = await client.query(
+          `SELECT id FROM market_listings WHERE asset_type='VEHICLE' AND asset_ref_id=$1 AND status='ACTIVE'`,
+          [assetRefId],
+        );
+        if (dupRes.rows.length > 0) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Vehicle already listed' }); }
+        assetName = vRes.rows[0].name;
+        assetMetadata = { brand: vRes.rows[0].brand, purchasePrice: Number(vRes.rows[0].purchase_price) };
+      } else if (assetType === 'CLOTHING') {
+        if (!assetRefId) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'assetRefId required for CLOTHING' }); }
+        const iRes = await client.query(
+          `SELECT id, metadata FROM inventory_items
+           WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0 FOR UPDATE`,
+          [assetRefId, playerId],
+        );
+        if (iRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Clothing not found in inventory' }); }
+        const dupRes = await client.query(
+          `SELECT id FROM market_listings WHERE asset_type='CLOTHING' AND asset_ref_id=$1 AND status='ACTIVE'`,
+          [assetRefId],
+        );
+        if (dupRes.rows.length > 0) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Clothing already listed' }); }
+        assetName = iRes.rows[0].metadata?.name || 'Clothing';
+        assetMetadata = iRes.rows[0].metadata;
+      } else if (assetType === 'XENON_VEHICLE') {
+        if (!assetRefId) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'assetRefId required for XENON_VEHICLE' }); }
+        const iRes = await client.query(
+          `SELECT id, metadata FROM inventory_items
+           WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0 FOR UPDATE`,
+          [assetRefId, playerId],
+        );
+        if (iRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Xenon item not found in inventory' }); }
+        const dupRes = await client.query(
+          `SELECT id FROM market_listings WHERE asset_type='XENON_VEHICLE' AND asset_ref_id=$1 AND status='ACTIVE'`,
+          [assetRefId],
+        );
+        if (dupRes.rows.length > 0) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Xenon item already listed' }); }
+        assetName = 'Xenon Vehicul';
+        assetMetadata = iRes.rows[0].metadata;
+      } else {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Unsupported assetType. Use VEHICLE, CLOTHING, or XENON_VEHICLE' });
+      }
+
+      const insertRes = await client.query(
+        `INSERT INTO market_listings
+           (seller_type, seller_player_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price)
+         VALUES ('PLAYER', $1, $2, $3, $4, $5, $6)
+         RETURNING id, created_at`,
+        [playerId, assetType, assetRefId || null, assetName, JSON.stringify(assetMetadata), askPrice],
+      );
+
+      await client.query('COMMIT');
+      res.json({ ok: true, listingId: insertRes.rows[0].id, createdAt: insertRes.rows[0].created_at });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('market/list error', e);
+    res.status(500).json({ error: 'listing failed' });
+  }
+});
+
+/** POST /api/market/offer — buyer submits an offer */
+app.post('/api/market/offer', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId, listingId, offeredPrice } = req.body || {};
+    if (!playerId || !listingId || !offeredPrice) {
+      return res.status(400).json({ error: 'playerId, listingId, offeredPrice required' });
+    }
+    if (Number(offeredPrice) <= 0) return res.status(400).json({ error: 'offeredPrice must be positive' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const listRes = await client.query(
+        `SELECT id, seller_type, seller_player_id, ask_price FROM market_listings
+         WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE`,
+        [listingId],
+      );
+      if (listRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Listing not found or not active' }); }
+
+      const listing = listRes.rows[0];
+      if (listing.seller_type === 'PLAYER' && listing.seller_player_id === playerId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Cannot offer on your own listing' });
+      }
+
+      // Verify buyer has funds
+      await client.query(
+        `INSERT INTO players (player_id) VALUES ($1) ON CONFLICT DO NOTHING`,
+        [playerId],
+      );
+      const buyerRes = await client.query(
+        `SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`,
+        [playerId],
+      );
+      if (Number(buyerRes.rows[0].clean_money) < Number(offeredPrice)) {
+        await client.query('ROLLBACK');
+        return res.status(402).json({ error: 'Insufficient funds for offer' });
+      }
+
+      const offerRes = await client.query(
+        `INSERT INTO market_offers (listing_id, buyer_player_id, offered_price)
+         VALUES ($1, $2, $3) RETURNING id, created_at`,
+        [listingId, playerId, offeredPrice],
+      );
+
+      await client.query('COMMIT');
+      res.json({ ok: true, offerId: offerRes.rows[0].id, createdAt: offerRes.rows[0].created_at });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('market/offer error', e);
+    res.status(500).json({ error: 'offer failed' });
+  }
+});
+
+/** POST /api/market/offer/accept — seller accepts an offer */
+app.post('/api/market/offer/accept', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'playerId and offerId required' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const offerRes = await client.query(
+        `SELECT mo.id, mo.listing_id, mo.buyer_player_id, mo.offered_price, mo.status,
+                ml.seller_type, ml.seller_player_id, ml.asset_type, ml.asset_ref_id, ml.asset_name, ml.asset_metadata
+         FROM market_offers mo
+         JOIN market_listings ml ON ml.id = mo.listing_id
+         WHERE mo.id = $1 AND mo.status = 'PENDING' FOR UPDATE OF mo, ml`,
+        [offerId],
+      );
+
+      if (offerRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Offer not found or not pending' }); }
+
+      const offer = offerRes.rows[0];
+
+      // Only the seller can accept (NPC listings cannot be accepted this way)
+      if (offer.seller_type === 'NPC') { await client.query('ROLLBACK'); return res.status(400).json({ error: 'NPC listings do not accept offers; use buy-now' }); }
+      if (offer.seller_player_id !== playerId) { await client.query('ROLLBACK'); return res.status(403).json({ error: 'Not the seller' }); }
+
+      if (offer.status !== 'PENDING') { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Offer already resolved' }); }
+
+      const offeredPrice = Number(offer.offered_price);
+      const buyerPlayerId = offer.buyer_player_id;
+
+      // Verify buyer still has funds
+      const buyerRes = await client.query(
+        `SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`,
+        [buyerPlayerId],
+      );
+      if (!buyerRes.rows[0] || Number(buyerRes.rows[0].clean_money) < offeredPrice) {
+        await client.query('ROLLBACK');
+        return res.status(402).json({ error: 'Buyer has insufficient funds' });
+      }
+
+      // Deduct from buyer
+      await client.query(
+        `UPDATE players SET clean_money = clean_money - $1, updated_at = NOW() WHERE player_id = $2`,
+        [offeredPrice, buyerPlayerId],
+      );
+
+      // Add to seller
+      await client.query(
+        `UPDATE players SET clean_money = clean_money + $1, updated_at = NOW() WHERE player_id = $2`,
+        [offeredPrice, playerId],
+      );
+
+      // Transfer asset
+      await transferAsset(client, offer.asset_type, offer.asset_ref_id, offer.asset_metadata, playerId, buyerPlayerId, offeredPrice);
+
+      // Close listing
+      await client.query(
+        `UPDATE market_listings SET status = 'SOLD', updated_at = NOW() WHERE id = $1`,
+        [offer.listing_id],
+      );
+
+      // Accept this offer, reject others
+      await client.query(
+        `UPDATE market_offers SET status = 'ACCEPTED', updated_at = NOW() WHERE id = $1`,
+        [offerId],
+      );
+      await client.query(
+        `UPDATE market_offers SET status = 'REJECTED', updated_at = NOW()
+         WHERE listing_id = $1 AND id != $2 AND status = 'PENDING'`,
+        [offer.listing_id, offerId],
+      );
+
+      await client.query('COMMIT');
+      res.json({ ok: true, soldFor: offeredPrice });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('market/offer/accept error', e);
+    res.status(500).json({ error: 'accept failed' });
+  }
+});
+
+/** POST /api/market/offer/reject — seller rejects an offer */
+app.post('/api/market/offer/reject', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'playerId and offerId required' });
+
+    const result = await pool.query(
+      `UPDATE market_offers mo SET status = 'REJECTED', updated_at = NOW()
+       FROM market_listings ml
+       WHERE mo.id = $1 AND mo.status = 'PENDING'
+         AND mo.listing_id = ml.id AND ml.seller_player_id = $2
+       RETURNING mo.id`,
+      [offerId, playerId],
+    );
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Offer not found, not pending, or not your listing' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('market/offer/reject error', e);
+    res.status(500).json({ error: 'reject failed' });
+  }
+});
+
+/** POST /api/market/buy — direct buy at ask price */
+app.post('/api/market/buy', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId, listingId } = req.body || {};
+    if (!playerId || !listingId) return res.status(400).json({ error: 'playerId and listingId required' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const listRes = await client.query(
+        `SELECT id, seller_type, seller_player_id, seller_npc_id,
+                asset_type, asset_ref_id, asset_name, asset_metadata, ask_price
+         FROM market_listings WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE`,
+        [listingId],
+      );
+      if (listRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Listing not found or not active' }); }
+
+      const listing = listRes.rows[0];
+      const askPrice = Number(listing.ask_price);
+
+      if (listing.seller_type === 'PLAYER' && listing.seller_player_id === playerId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Cannot buy your own listing' });
+      }
+
+      await client.query(`INSERT INTO players (player_id) VALUES ($1) ON CONFLICT DO NOTHING`, [playerId]);
+
+      const buyerRes = await client.query(
+        `SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`,
+        [playerId],
+      );
+      if (Number(buyerRes.rows[0].clean_money) < askPrice) {
+        await client.query('ROLLBACK');
+        return res.status(402).json({ error: 'Insufficient funds' });
+      }
+
+      // Deduct from buyer
+      await client.query(
+        `UPDATE players SET clean_money = clean_money - $1, updated_at = NOW() WHERE player_id = $2`,
+        [askPrice, playerId],
+      );
+
+      // Pay seller (player only; NPC money disappears)
+      if (listing.seller_type === 'PLAYER' && listing.seller_player_id) {
+        await client.query(
+          `UPDATE players SET clean_money = clean_money + $1, updated_at = NOW() WHERE player_id = $2`,
+          [askPrice, listing.seller_player_id],
+        );
+      }
+
+      // Transfer asset
+      await transferAsset(client, listing.asset_type, listing.asset_ref_id, listing.asset_metadata, listing.seller_player_id, playerId, askPrice);
+
+      // Close listing
+      await client.query(
+        `UPDATE market_listings SET status = 'SOLD', updated_at = NOW() WHERE id = $1`,
+        [listingId],
+      );
+
+      // Reject all pending offers on this listing
+      await client.query(
+        `UPDATE market_offers SET status = 'REJECTED', updated_at = NOW()
+         WHERE listing_id = $1 AND status = 'PENDING'`,
+        [listingId],
+      );
+
+      await client.query('COMMIT');
+      res.json({ ok: true, boughtFor: askPrice });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('market/buy error', e);
+    res.status(500).json({ error: 'buy failed' });
+  }
+});
+
+/** GET /api/market/seller?playerId=xxx — seller's own listings + incoming offers */
+app.get('/api/market/seller', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId required' });
+
+    const [listingsRes, offersRes] = await Promise.all([
+      pool.query(
+        `SELECT id, asset_type, asset_name, asset_metadata, ask_price, status, created_at
+         FROM market_listings
+         WHERE seller_player_id = $1
+         ORDER BY created_at DESC`,
+        [playerId],
+      ),
+      pool.query(
+        `SELECT mo.id, mo.listing_id, mo.buyer_player_id, mo.offered_price, mo.status, mo.created_at,
+                ml.asset_name, ml.asset_type, ml.ask_price
+         FROM market_offers mo
+         JOIN market_listings ml ON ml.id = mo.listing_id
+         WHERE ml.seller_player_id = $1
+         ORDER BY mo.created_at DESC`,
+        [playerId],
+      ),
+    ]);
+
+    res.json({
+      listings: listingsRes.rows.map((r) => ({
+        id: r.id,
+        assetType: r.asset_type,
+        assetName: r.asset_name,
+        assetMetadata: r.asset_metadata,
+        askPrice: Number(r.ask_price),
+        status: r.status,
+        createdAt: r.created_at,
+      })),
+      incomingOffers: offersRes.rows.map((r) => ({
+        id: r.id,
+        listingId: r.listing_id,
+        buyerPlayerId: r.buyer_player_id,
+        offeredPrice: Number(r.offered_price),
+        status: r.status,
+        createdAt: r.created_at,
+        assetName: r.asset_name,
+        assetType: r.asset_type,
+        askPrice: Number(r.ask_price),
+      })),
+    });
+  } catch (e) {
+    console.error('market/seller error', e);
+    res.status(500).json({ error: 'seller panel failed' });
+  }
+});
+
+/** GET /api/market/buyer?playerId=xxx — buyer's outgoing offers */
+app.get('/api/market/buyer', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId required' });
+
+    const result = await pool.query(
+      `SELECT mo.id, mo.listing_id, mo.offered_price, mo.status, mo.created_at,
+              ml.asset_name, ml.asset_type, ml.ask_price, ml.status AS listing_status
+       FROM market_offers mo
+       JOIN market_listings ml ON ml.id = mo.listing_id
+       WHERE mo.buyer_player_id = $1
+       ORDER BY mo.created_at DESC`,
+      [playerId],
+    );
+
+    res.json({
+      offers: result.rows.map((r) => ({
+        id: r.id,
+        listingId: r.listing_id,
+        offeredPrice: Number(r.offered_price),
+        status: r.status,
+        createdAt: r.created_at,
+        assetName: r.asset_name,
+        assetType: r.asset_type,
+        askPrice: Number(r.ask_price),
+        listingStatus: r.listing_status,
+      })),
+    });
+  } catch (e) {
+    console.error('market/buyer error', e);
+    res.status(500).json({ error: 'buyer panel failed' });
+  }
+});
+
+/** POST /api/market/npc/refresh — manually trigger NPC listing refresh */
+app.post('/api/market/npc/refresh', marketRateLimit, async (_req, res) => {
+  try {
+    await refreshNpcListings();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('npc/refresh error', e);
+    res.status(500).json({ error: 'refresh failed' });
+  }
+});
+
+/** POST /api/market/listing/cancel — seller cancels their own active listing */
+app.post('/api/market/listing/cancel', marketRateLimit, async (req, res) => {
+  try {
+    const { playerId, listingId } = req.body || {};
+    if (!playerId || !listingId) return res.status(400).json({ error: 'playerId and listingId required' });
+
+    const result = await pool.query(
+      `UPDATE market_listings SET status = 'CANCELLED', updated_at = NOW()
+       WHERE id = $1 AND seller_player_id = $2 AND status = 'ACTIVE'
+       RETURNING id`,
+      [listingId, playerId],
+    );
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Listing not found, not yours, or not active' });
+
+    // Reject all pending offers
+    await pool.query(
+      `UPDATE market_offers SET status = 'REJECTED', updated_at = NOW()
+       WHERE listing_id = $1 AND status = 'PENDING'`,
+      [listingId],
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('market/listing/cancel error', e);
+    res.status(500).json({ error: 'cancel failed' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Batch B: Asset transfer helper
+// ---------------------------------------------------------------------------
+async function transferAsset(client, assetType, assetRefId, assetMetadata, sellerPlayerId, buyerPlayerId, price) {
+  if (assetType === 'VEHICLE') {
+    if (assetRefId && sellerPlayerId) {
+      // Transfer existing owned_vehicle to buyer
+      await client.query(
+        `UPDATE owned_vehicles SET player_id = $1 WHERE id = $2 AND player_id = $3`,
+        [buyerPlayerId, assetRefId, sellerPlayerId],
+      );
+    } else {
+      // NPC sale: create new owned_vehicle for buyer (NPC has no real asset)
+      const modelId = assetMetadata?.modelId;
+      if (modelId) {
+        // Check buyer slot
+        const slotsRes = await client.query(
+          `SELECT vehicle_slots_base + vehicle_slots_extra AS total,
+           (SELECT COUNT(*)::int FROM owned_vehicles WHERE player_id = $1) AS used
+           FROM players WHERE player_id = $1`,
+          [buyerPlayerId],
+        );
+        const { total, used } = slotsRes.rows[0];
+        if (Number(used) >= Number(total)) {
+          await client.query(
+            `UPDATE players SET vehicle_slots_extra = vehicle_slots_extra + 1 WHERE player_id = $1`,
+            [buyerPlayerId],
+          );
+        }
+        await client.query(
+          `UPDATE players SET next_tax_collection_at =
+           COALESCE(next_tax_collection_at, NOW() + INTERVAL '10 minutes')
+           WHERE player_id = $1`,
+          [buyerPlayerId],
+        );
+        await client.query(
+          `INSERT INTO owned_vehicles (player_id, model_id, purchase_price) VALUES ($1,$2,$3)`,
+          [buyerPlayerId, modelId, price],
+        );
+      }
+    }
+    // Start tax collection for buyer if not started
+    await client.query(
+      `UPDATE players SET next_tax_collection_at =
+       COALESCE(next_tax_collection_at, NOW() + INTERVAL '10 minutes')
+       WHERE player_id = $1`,
+      [buyerPlayerId],
+    );
+  } else if (assetType === 'CLOTHING') {
+    if (assetRefId && sellerPlayerId) {
+      // Transfer existing inventory item
+      await client.query(
+        `UPDATE inventory_items SET player_id = $1 WHERE id = $2 AND player_id = $3`,
+        [buyerPlayerId, assetRefId, sellerPlayerId],
+      );
+    } else {
+      // NPC sale: create new clothing inventory item for buyer
+      const meta = assetMetadata || {};
+      const clothingId = meta.clothingId;
+      if (clothingId) {
+        // Get clothing details
+        const clothRes = await client.query(
+          `SELECT name, category, rarity, min_value, max_value FROM clothing_items WHERE id = $1`,
+          [clothingId],
+        );
+        if (clothRes.rows.length > 0) {
+          const cloth = clothRes.rows[0];
+          const range = Number(cloth.max_value) - Number(cloth.min_value);
+          const marketValue = Math.floor(Number(cloth.min_value) + Math.random() * range);
+          await client.query(
+            `INSERT INTO inventory_items (player_id, item_type, metadata, quantity)
+             VALUES ($1, 'CLOTHING', $2, 1)`,
+            [buyerPlayerId, JSON.stringify({ clothingId, name: cloth.name, rarity: cloth.rarity, category: cloth.category, marketValue })],
+          );
+        }
+      }
+    }
+  } else if (assetType === 'XENON_VEHICLE') {
+    if (assetRefId && sellerPlayerId) {
+      await client.query(
+        `UPDATE inventory_items SET player_id = $1 WHERE id = $2 AND player_id = $3`,
+        [buyerPlayerId, assetRefId, sellerPlayerId],
+      );
+    } else {
+      // NPC sale: create new xenon item
+      await client.query(
+        `INSERT INTO inventory_items (player_id, item_type, metadata, quantity)
+         VALUES ($1, 'XENON_VEHICLE', '{}', 1)`,
+        [buyerPlayerId],
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Static / SPA fallback
 // ---------------------------------------------------------------------------
 app.use(express.static(distPath));
@@ -1186,6 +1956,9 @@ initDb()
   .then(() => {
     // Run tax processor every 60 seconds
     setInterval(processTaxes, 60_000);
+    // Refresh NPC listings every 5 minutes, and once at startup
+    refreshNpcListings();
+    setInterval(refreshNpcListings, 5 * 60_000);
 
     app.listen(port, '0.0.0.0', () => {
       console.log(`Server listening on port ${port}`);

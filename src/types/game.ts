@@ -17,6 +17,10 @@ export type ItemType =
   | 'VIP_GOLD'
   | 'VIP_SILVER';
 
+export type MarketAssetType = 'VEHICLE' | 'CLOTHING' | 'XENON_VEHICLE';
+export type MarketListingStatus = 'ACTIVE' | 'SOLD' | 'CANCELLED';
+export type MarketOfferStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
+
 export interface InventoryItem {
   id: number;
   itemType: ItemType;
@@ -100,4 +104,75 @@ export interface InventoryUseResult {
   ok: boolean;
   effect: string;
   metadata: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Batch B: Marketplace types
+// ---------------------------------------------------------------------------
+
+export interface MarketListing {
+  id: number;
+  sellerType: 'PLAYER' | 'NPC';
+  sellerPlayerId: string | null;
+  sellerName: string;
+  sellerEmoji: string;
+  assetType: MarketAssetType;
+  assetRefId: number | null;
+  assetName: string;
+  assetMetadata: Record<string, unknown>;
+  askPrice: number;
+  isOwn: boolean;
+  createdAt: string;
+}
+
+export interface MarketOffer {
+  id: number;
+  listingId: number;
+  buyerPlayerId?: string;
+  offeredPrice: number;
+  status: MarketOfferStatus;
+  createdAt: string;
+  assetName: string;
+  assetType: MarketAssetType;
+  askPrice: number;
+  listingStatus?: MarketListingStatus;
+}
+
+export interface MarketListingsResponse {
+  listings: MarketListing[];
+}
+
+export interface MarketSellerResponse {
+  listings: Array<{
+    id: number;
+    assetType: MarketAssetType;
+    assetName: string;
+    assetMetadata: Record<string, unknown>;
+    askPrice: number;
+    status: MarketListingStatus;
+    createdAt: string;
+  }>;
+  incomingOffers: Array<MarketOffer & { buyerPlayerId: string }>;
+}
+
+export interface MarketBuyerResponse {
+  offers: MarketOffer[];
+}
+
+export interface MarketListResult {
+  ok: boolean;
+  listingId: number;
+  createdAt: string;
+}
+
+export interface MarketOfferResult {
+  ok: boolean;
+  offerId: number;
+  createdAt: string;
+}
+
+export interface MarketActionResult {
+  ok: boolean;
+  soldFor?: number;
+  boughtFor?: number;
 }
