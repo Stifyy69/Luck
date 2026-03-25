@@ -37,6 +37,13 @@ export interface OwnedVehicle {
   purchasedAt: string;
 }
 
+export interface OwnedClothingMetadata {
+  name: string;
+  category: ClothingCategory;
+  rarity: ClothingRarity;
+  marketValue: number;
+}
+
 export interface ActiveBoost {
   id: number;
   boostType: BoostType;
@@ -98,6 +105,7 @@ export interface ShowroomBuyResult {
   vehicle: OwnedVehicle;
   newBalance: number;
   stockRemaining: number;
+  discountPct?: number;
 }
 
 export interface InventoryUseResult {
