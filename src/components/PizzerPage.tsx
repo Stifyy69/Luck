@@ -6,15 +6,9 @@ import type { PizzerOrderOption, PizzerStateResponse } from '../types/game';
 type Popup = { text: string; isError?: boolean } | null;
 
 const PACKING_STEPS = [
-  { key: 'PICK_BOXES', label: 'Take pizza boxes' },
-  { key: 'ADD_DRINKS', label: 'Add drinks' },
-  { key: 'CONFIRM_ORDER', label: 'Confirm packed order' },
-];
-
-const HANDOVER_VARIANTS = [
-  { key: 'GATE', label: 'Client at gate' },
-  { key: 'STAIR', label: 'Client at building entry' },
-  { key: 'DOOR', label: 'Client at door' },
+  { key: 'PICK_BOXES', label: 'Pizza' },
+  { key: 'ADD_DRINKS', label: 'Drink' },
+  { key: 'CONFIRM_ORDER', label: 'Confirm' },
 ];
 
 function fmt(n: number) {
@@ -28,7 +22,7 @@ function orderTypeBadge(orderType: string) {
 }
 
 export default function PizzerPage() {
-  const { player, playerId } = usePlayer();
+  const { player, playerId, refresh } = usePlayer();
   const [state, setState] = useState<PizzerStateResponse | null>(null);
   const [options, setOptions] = useState<PizzerOrderOption[]>([]);
   const [busy, setBusy] = useState(false);
@@ -138,28 +132,20 @@ export default function PizzerPage() {
     }
   };
 
-  const reportDamage = async (damageDelta: number) => {
+  const handover = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      const next = await api.pizzerDamageReport(playerId, damageDelta);
-      setState(next);
-    } catch (e) {
-      pushPopup(e instanceof Error ? e.message : 'Damage report failed', true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handover = async (handoverVariant: string) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const payload = await api.pizzerHandover(playerId, handoverVariant);
+      const payload = await api.pizzerHandover(playerId, 'DOOR');
       setState(payload.state);
+      refresh();
       pushPopup(`Delivery finished: +${fmt(payload.result.breakdown.totalReward)} $ / +${payload.result.breakdown.xpGained} XP`);
-      const data = await api.pizzerOrderOptions(playerId);
-      setOptions(data.options || []);
+      window.setTimeout(() => {
+        api
+          .pizzerOrderOptions(playerId)
+          .then((data) => setOptions(data.options || []))
+          .catch(() => {});
+      }, 550);
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Handover failed', true);
     } finally {
@@ -246,6 +232,19 @@ export default function PizzerPage() {
                   <p className="mt-2 text-sm text-white/70">Distance: {fmt(option.distanceMeters)}m</p>
                   <p className="text-sm text-white/70">ETA: {option.estimatedTimeSec}s</p>
                   <p className="text-sm text-white/70">Difficulty: {option.difficulty}</p>
+                  <div className="mt-2 rounded-lg border border-white/10 bg-black/20 p-2">
+                    <p className="text-[11px] font-black uppercase tracking-wide text-[#ffd95a]">Order</p>
+                    {option.pizzas.map((item) => (
+                      <p key={`pizza-${option.orderId}-${item.name}`} className="text-xs text-white/75">
+                        {item.quantity} x {item.name}
+                      </p>
+                    ))}
+                    {option.drinks.map((item) => (
+                      <p key={`drink-${option.orderId}-${item.name}`} className="text-xs text-[#9fe7ff]">
+                        {item.quantity} x {item.name}
+                      </p>
+                    ))}
+                  </div>
                   <p className="mt-2 font-black text-[#ffd95a]">~{fmt(option.estimatedReward)} $</p>
                   <p className="text-sm font-bold text-[#45d483]">~{option.estimatedXp} XP</p>
                 </button>
@@ -257,6 +256,7 @@ export default function PizzerPage() {
         {(canPack || canDeliver) && active && (
           <div className="hud-panel p-5">
             <h2 className="text-lg font-black text-white">Active Delivery · {active.orderType}</h2>
+            <p className="mt-1 text-xs font-bold uppercase tracking-[0.16em] text-[#ffe48e]">Flow: Pizza - Drink - Confirm</p>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
               <Stat label="Target" value={active.targetLabel} />
               <Stat label="Time Left" value={`${active.timeLeftSec}s`} />
@@ -265,19 +265,42 @@ export default function PizzerPage() {
               <Stat label="Streak" value={String(state?.streak ?? 0)} />
             </div>
 
+            <div className="mt-4 rounded-xl border border-white/15 bg-black/20 p-3">
+              <p className="text-xs font-black uppercase tracking-wide text-[#ffd95a]">Comanda</p>
+              <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                <div>
+                  <p className="text-[11px] font-bold uppercase text-white/55">Pizza</p>
+                  {active.pizzas.map((item) => (
+                    <p key={`active-pizza-${item.name}`} className="text-sm text-white/80">
+                      {item.quantity} x {item.name}
+                    </p>
+                  ))}
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold uppercase text-white/55">Drink</p>
+                  {active.drinks.map((item) => (
+                    <p key={`active-drink-${item.name}`} className="text-sm text-[#9fe7ff]">
+                      {item.quantity} x {item.name}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             {canPack && (
               <div className="mt-4 grid gap-2 sm:grid-cols-3">
                 {PACKING_STEPS.map((step) => {
                   const done = active.packingStepsDone.includes(step.key);
+                  const isNext = !done && active.nextPackingStep === step.key;
                   return (
                     <button
                       key={step.key}
                       type="button"
                       onClick={() => doPackingStep(step.key)}
                       disabled={busy || done}
-                      className={`rounded-xl border px-4 py-3 text-sm font-bold transition ${done ? 'border-green-500/45 bg-green-900/30 text-green-200' : 'border-white/20 bg-white/5 text-white/80 hover:bg-white/10'} disabled:opacity-60`}
+                      className={`rounded-xl border px-4 py-3 text-sm font-bold transition ${done ? 'border-green-500/45 bg-green-900/30 text-green-200' : isNext ? 'border-yellow-400/60 bg-yellow-500/20 text-yellow-100 hover:bg-yellow-500/30' : 'border-white/20 bg-white/5 text-white/80 hover:bg-white/10'} disabled:opacity-60`}
                     >
-                      {done ? `Done: ${step.label}` : step.label}
+                      {done ? `Done: ${step.label}` : isNext ? `Next: ${step.label}` : step.label}
                     </button>
                   );
                 })}
@@ -285,39 +308,16 @@ export default function PizzerPage() {
             )}
 
             {canDeliver && (
-              <>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => reportDamage(8)}
-                    disabled={busy}
-                    className="rounded-xl border border-orange-500/40 bg-orange-900/20 px-4 py-2 text-sm font-bold text-orange-100 disabled:opacity-60"
-                  >
-                    Report Small Bump
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => reportDamage(18)}
-                    disabled={busy}
-                    className="rounded-xl border border-red-500/45 bg-red-900/20 px-4 py-2 text-sm font-bold text-red-200 disabled:opacity-60"
-                  >
-                    Report Big Damage
-                  </button>
-                </div>
-                <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                  {HANDOVER_VARIANTS.map((variant) => (
-                    <button
-                      key={variant.key}
-                      type="button"
-                      onClick={() => handover(variant.key)}
-                      disabled={busy}
-                      className="rounded-xl border border-[#ffd95a]/35 bg-[#ffd95a]/10 px-4 py-3 text-sm font-bold text-[#ffe7a4] hover:bg-[#ffd95a]/20 disabled:opacity-60"
-                    >
-                      {variant.label}
-                    </button>
-                  ))}
-                </div>
-              </>
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => handover().catch(() => {})}
+                  disabled={busy}
+                  className="rounded-xl border border-[#ffd95a]/35 bg-[#ffd95a]/10 px-4 py-3 text-sm font-bold text-[#ffe7a4] hover:bg-[#ffd95a]/20 disabled:opacity-60"
+                >
+                  Deliver Order
+                </button>
+              </div>
             )}
           </div>
         )}

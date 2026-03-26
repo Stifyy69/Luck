@@ -210,6 +210,11 @@ export interface PlayerProfileResponse {
 export type PizzerOrderType = 'STANDARD' | 'URGENTA' | 'VIP';
 export type PizzerShiftState = 'IDLE' | 'SELECTING_ORDER' | 'PACKING_ORDER' | 'DELIVERY_ACTIVE' | 'DELIVERY_RESULT';
 
+export interface PizzerOrderLineItem {
+  name: string;
+  quantity: number;
+}
+
 export interface PizzerProgress {
   level: number;
   xp: number;
@@ -229,6 +234,8 @@ export interface PizzerOrderOption {
   estimatedXp: number;
   estimatedTimeSec: number;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  pizzas: PizzerOrderLineItem[];
+  drinks: PizzerOrderLineItem[];
 }
 
 export interface PizzerStateResponse {
@@ -247,6 +254,9 @@ export interface PizzerStateResponse {
     damagePercent: number;
     packingStepsDone: string[];
     packingStepsRequired: string[];
+    nextPackingStep: string | null;
+    pizzas: PizzerOrderLineItem[];
+    drinks: PizzerOrderLineItem[];
   } | null;
   lastResult?: PizzerDeliveryResult | null;
 }
