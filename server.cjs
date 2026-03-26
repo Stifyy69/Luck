@@ -935,8 +935,9 @@ app.post('/api/market/offer', requireDb, async (req, res) => {
   }
 });
 
-app.get('/api/market/listings', requireDb, async (req, res) => {
+app.get('/api/market/listings', async (req, res) => {
   try {
+    if (!dbReady || !pool) return res.json({ listings: [] });
     const { playerId } = req.query;
     const npcCount = await pool.query(
       `SELECT COUNT(*)::INT AS count FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`,
@@ -1007,8 +1008,9 @@ app.post('/api/market/list', requireDb, async (req, res) => {
   }
 });
 
-app.get('/api/market/seller', requireDb, async (req, res) => {
+app.get('/api/market/seller', async (req, res) => {
   try {
+    if (!dbReady || !pool) return res.json({ listings: [], incomingOffers: [] });
     const { playerId } = req.query;
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
@@ -1066,8 +1068,9 @@ app.get('/api/market/seller', requireDb, async (req, res) => {
   }
 });
 
-app.get('/api/market/buyer', requireDb, async (req, res) => {
+app.get('/api/market/buyer', async (req, res) => {
   try {
+    if (!dbReady || !pool) return res.json({ offers: [] });
     const { playerId } = req.query;
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
@@ -1179,8 +1182,9 @@ app.post('/api/market/listing/cancel', requireDb, async (req, res) => {
   }
 });
 
-app.post('/api/market/npc/refresh', requireDb, async (_req, res) => {
+app.post('/api/market/npc/refresh', async (_req, res) => {
   try {
+    if (!dbReady || !pool) return res.json({ ok: true });
     await refreshNpcListings();
     res.json({ ok: true });
   } catch (error) {
@@ -1556,11 +1560,7 @@ app.post('/api/inventory/use', requireDb, async (req, res) => {
         );
         effect = 'pilot_boost_activated';
       } else if (item.item_type === 'JOB_BOOST_SLEEP') {
-        await db.query(
-          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'JOB_SLEEP', NOW() + INTERVAL '12 hours')`,
-          [playerId],
-        );
-        effect = 'sleep_boost_activated';
+        effect = 'sleep_boost_reserved';
       } else if (item.item_type === 'VIP_GOLD') {
         await db.query(
           `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'VIP_GOLD', NOW() + INTERVAL '10 minutes')`,

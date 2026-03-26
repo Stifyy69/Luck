@@ -25,6 +25,10 @@ function loadGameState() {
 export default function SharedStatsPanel() {
   const [stats, setStats] = useState<Record<string, number>>({});
 
+  if (typeof window !== 'undefined' && window.location.pathname !== '/profile') {
+    return null;
+  }
+
   useEffect(() => {
     const refresh = () => {
       const s = loadGameState() || {};
@@ -56,19 +60,19 @@ export default function SharedStatsPanel() {
       <p className="text-xs uppercase tracking-[0.2em] text-[#ffe1b2]">Stats</p>
       <div className="mt-3 grid grid-cols-2 gap-2.5 text-sm">
         <div className="space-y-2">
-          <Card label="Bani Curati" value={`${(stats.cash ?? 0).toLocaleString('ro-RO')} $`} />
-          <Card label="Bani Murdari" value={`${(stats.dirty ?? 0).toLocaleString('ro-RO')} $`} />
-          <Card label="Castigat Farm" value={`${(stats.farmEarned ?? 0).toLocaleString('ro-RO')} $`} />
-          <Card label="Cheltuit Ruleta" value={`${(stats.spent ?? 0).toLocaleString('ro-RO')} $`} />
-          <Card label="Castigat Ruleta" value={`${(stats.won ?? 0).toLocaleString('ro-RO')} $`} />
-          <Card label="Total NET" value={`${(stats.net ?? 0).toLocaleString('ro-RO')} $`} />
+          <Card label="Clean Money" value={`${(stats.cash ?? 0).toLocaleString('en-US')} $`} />
+          <Card label="Dirty Money" value={`${(stats.dirty ?? 0).toLocaleString('en-US')} $`} />
+          <Card label="Farm Earnings" value={`${(stats.farmEarned ?? 0).toLocaleString('en-US')} $`} />
+          <Card label="Roulette Spent" value={`${(stats.spent ?? 0).toLocaleString('en-US')} $`} />
+          <Card label="Roulette Won" value={`${(stats.won ?? 0).toLocaleString('en-US')} $`} />
+          <Card label="Total NET" value={`${(stats.net ?? 0).toLocaleString('en-US')} $`} />
         </div>
         <div className="space-y-2">
-          <Card label="Timp Petrecut Farm" value={`${(stats.timeFarm ?? 0).toLocaleString('ro-RO')}h`} />
-          <Card label="Procesat (F/A/B)" value={`${(stats.procF ?? 0).toLocaleString('ro-RO')} / ${(stats.procA ?? 0).toLocaleString('ro-RO')} / ${(stats.procB ?? 0).toLocaleString('ro-RO')}`} />
-          <Card label="Timp Sleep" value={`${(stats.timeSleep ?? 0).toLocaleString('ro-RO')}h`} />
-          <Card label="Timp Petrecut Pilot" value={`${(stats.timePilot ?? 0).toLocaleString('ro-RO')}h`} />
-          <Card label="Timp total" value={`${totalTime.toLocaleString('ro-RO')}h`} />
+          <Card label="Farm Time" value={`${(stats.timeFarm ?? 0).toLocaleString('en-US')}h`} />
+          <Card label="Processed (L/W/B)" value={`${(stats.procF ?? 0).toLocaleString('en-US')} / ${(stats.procA ?? 0).toLocaleString('en-US')} / ${(stats.procB ?? 0).toLocaleString('en-US')}`} />
+          <Card label="Sleep Time" value={`${(stats.timeSleep ?? 0).toLocaleString('en-US')}h`} />
+          <Card label="Pilot Time" value={`${(stats.timePilot ?? 0).toLocaleString('en-US')}h`} />
+          <Card label="Total Time" value={`${totalTime.toLocaleString('en-US')}h`} />
         </div>
       </div>
     </div>

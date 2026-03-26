@@ -17,6 +17,23 @@ import type {
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
 
+async function resolveApiError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    const raw = String(data?.error ?? data?.message ?? '').trim();
+    if (!raw) return res.statusText || 'request failed';
+    if (raw.toLowerCase().includes('insufficient funds')) return 'insufficient';
+    if (raw.toLowerCase().includes('service unavailable')) return 'service unavailable';
+    return raw;
+  } catch {
+    const text = await res.text().catch(() => res.statusText);
+    const normalized = String(text || res.statusText || 'request failed').trim();
+    if (normalized.toLowerCase().includes('insufficient funds')) return 'insufficient';
+    if (normalized.toLowerCase().includes('service unavailable')) return 'service unavailable';
+    return normalized;
+  }
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -24,8 +41,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${path} failed: ${text}`);
+    throw new Error(await resolveApiError(res));
   }
   return res.json() as Promise<T>;
 }
@@ -34,8 +50,7 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
   const url = params ? `${BASE}${path}?${new URLSearchParams(params)}` : `${BASE}${path}`;
   const res = await fetch(url);
   if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${path} failed: ${text}`);
+    throw new Error(await resolveApiError(res));
   }
   return res.json() as Promise<T>;
 }

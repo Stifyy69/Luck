@@ -21,7 +21,7 @@ const BRAND_LABEL: Record<string, string> = {
 };
 
 function fmt(n: number) {
-  return n.toLocaleString('ro-RO') + ' $';
+  return n.toLocaleString('en-US') + ' $';
 }
 
 interface BuyModal {
@@ -60,11 +60,11 @@ export default function ShowroomPage() {
       setBuyModal(null);
       refresh();
       load();
-      const discountMsg = result.discountPct ? ` (reducere ${result.discountPct}%)` : '';
-      showPopup(`✅ Ai cumpărat ${buyModal.model.name}${discountMsg}!`);
+      const discountMsg = result.discountPct ? ` (discount ${result.discountPct}%)` : '';
+      showPopup(`Purchased ${buyModal.model.name}${discountMsg}.`);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Cumpărarea a eșuat';
-      showPopup(`❌ ${msg}`, true);
+      const msg = e instanceof Error ? e.message : 'Purchase failed';
+      showPopup(msg, true);
     } finally {
       setBusy(false);
     }
@@ -98,17 +98,17 @@ export default function ShowroomPage() {
             {player && (
               <>
                 <div className="hud-card px-3 py-2 text-center">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Bani</p>
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Money</p>
                   <p className="text-sm font-black text-[#ffd95a]">{fmt(player.cleanMoney)}</p>
                 </div>
                 <div className="hud-card px-3 py-2 text-center">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Sloturi libere</p>
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Free slots</p>
                   <p className={`text-sm font-black ${slotsFull ? 'text-red-400' : 'text-[#45d483]'}`}>
                     {player.usedSlots}/{player.totalSlots}
                   </p>
                 </div>
                 <div className="hud-card px-3 py-2 text-center">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Vouchere</p>
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Vouchers</p>
                   <p className={`text-sm font-black ${voucherCount > 0 ? 'text-amber-300' : 'text-white/40'}`}>
                     🎟️ {voucherCount}
                   </p>
@@ -120,13 +120,13 @@ export default function ShowroomPage() {
 
         {slotsFull && (
           <div className="mb-4 rounded-xl border border-red-400/40 bg-red-900/30 px-4 py-3 text-sm font-bold text-red-300">
-            ⚠️ Toate sloturile de vehicule sunt ocupate! Folosește un item <strong>Slot Vehicle</strong> din inventar pentru mai mult spațiu.
+            ⚠️ All vehicle slots are full. Use a <strong>Slot Vehicle</strong> item from inventory to add more space.
           </div>
         )}
 
         {loading && (
           <div className="flex items-center justify-center py-20">
-            <p className="text-sm font-bold uppercase tracking-widest text-white/50">Se încarcă...</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-white/50">Loading...</p>
           </div>
         )}
 
@@ -170,11 +170,11 @@ export default function ShowroomPage() {
             <p className="mb-4 text-sm text-white/60">{BRAND_LABEL[buyModal.model.brand] ?? buyModal.model.brand}</p>
 
             <div className="mb-4 space-y-2">
-              <InfoRow label="Preț de bază" value={fmt(buyModal.model.basePrice)} />
+              <InfoRow label="Base price" value={fmt(buyModal.model.basePrice)} />
               {buyModal.useVoucher && voucherCount > 0 && (
-                <InfoRow label="Cu voucher" value="reducere aplicată 🎟️" className="text-amber-300" />
+                <InfoRow label="With voucher" value="discount applied 🎟️" className="text-amber-300" />
               )}
-              <InfoRow label="Stoc rămas" value={String(buyModal.model.stock)} />
+              <InfoRow label="Stock left" value={String(buyModal.model.stock)} />
             </div>
 
             {voucherCount > 0 && (
@@ -186,7 +186,7 @@ export default function ShowroomPage() {
                   className="h-4 w-4 accent-amber-400"
                 />
                 <span className="text-sm font-bold text-amber-300">
-                  Folosește voucher ({voucherCount} disponibil{voucherCount !== 1 ? 'e' : ''})
+                  Use voucher ({voucherCount} available)
                 </span>
               </label>
             )}
@@ -197,7 +197,7 @@ export default function ShowroomPage() {
                 onClick={() => setBuyModal(null)}
                 className="btn-ghost flex-1 rounded-xl px-4 py-2.5 text-sm font-bold transition hover:brightness-110"
               >
-                Anulează
+                Cancel
               </button>
               <button
                 type="button"
@@ -205,7 +205,7 @@ export default function ShowroomPage() {
                 disabled={busy || slotsFull}
                 className="btn-primary flex-1 rounded-xl px-4 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busy ? 'Se procesează...' : 'Cumpără'}
+                {busy ? 'Processing...' : 'Buy'}
               </button>
             </div>
           </div>
@@ -251,12 +251,12 @@ function VehicleCard({
       <div className="flex items-center justify-between gap-2 text-sm">
         <span className="font-black text-[#ffd95a]">{fmt(model.basePrice)}</span>
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${model.stock > 0 ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>
-          {model.stock > 0 ? `${model.stock} în stoc` : 'Epuizat'}
+          {model.stock > 0 ? `${model.stock} in stock` : 'Sold out'}
         </span>
       </div>
 
       {slotsFull && !outOfStock && (
-        <p className="text-[11px] text-red-400">⚠️ Sloturi pline ({slotsAvailable} libere)</p>
+        <p className="text-[11px] text-red-400">⚠️ Slots full ({slotsAvailable} free)</p>
       )}
 
       <div className="mt-auto flex gap-2">
@@ -266,14 +266,14 @@ function VehicleCard({
           disabled={!canBuy}
           className="btn-secondary flex-1 rounded-xl px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Cumpără
+          Buy
         </button>
         {voucherCount > 0 && (
           <button
             type="button"
             onClick={() => onBuy(true)}
             disabled={!canBuy}
-            title="Cumpără cu voucher"
+            title="Buy with voucher"
             className="rounded-xl border border-amber-400/45 bg-amber-900/20 px-3 py-2 text-xs font-bold text-amber-300 transition hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             🎟️

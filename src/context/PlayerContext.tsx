@@ -41,7 +41,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       .bootstrap(playerId)
       .then((data) => setPlayer(data))
       .catch((e: unknown) =>
-        setError(e instanceof Error ? e.message : 'Eroare la încărcarea datelor'),
+        setError(e instanceof Error ? e.message : 'Failed to load player data'),
       )
       .finally(() => setLoading(false));
   }, [playerId]);

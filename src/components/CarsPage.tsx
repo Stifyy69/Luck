@@ -80,7 +80,7 @@ export default function CarsPage() {
 
   const buyCar = (car: CarOffer) => {
     if (cashBalance < car.price) {
-      setPopup('Nu ai bani curati suficienti.');
+      setPopup('You do not have bani curati suficienti.');
       window.setTimeout(() => setPopup(null), 2200);
       return;
     }

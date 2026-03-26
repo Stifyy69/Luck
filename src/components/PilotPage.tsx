@@ -54,7 +54,7 @@ export default function PilotPage() {
           pilotRewardClaimed: true,
           pilotCooldownUntil: now + 30_000,
         });
-        setPopup('+100,000 bani curati · cooldown 30s');
+        setPopup('+100,000 clean money · cooldown 30s');
         window.setTimeout(() => setPopup(null), 2200);
       }
     };
@@ -102,7 +102,7 @@ export default function PilotPage() {
       {(popup || timer > 0) ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-sky-300/40 bg-sky-500/20 px-5 py-5 text-center text-base font-semibold text-sky-100 shadow-xl">
-            {timer > 0 ? `Pilot task în curs... ${timer}s` : popup}
+            {timer > 0 ? `Pilot task running... ${timer}s` : popup}
           </div>
         </div>
       ) : null}

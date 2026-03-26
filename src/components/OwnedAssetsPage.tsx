@@ -28,20 +28,20 @@ const RARITY_COLORS: Record<string, string> = {
 };
 
 const RARITY_LABEL: Record<string, string> = {
-  BLUE: 'Albastru',
-  LIGHT_PURPLE: 'Mov Deschis',
-  DARK_PURPLE: 'Mov Închis',
-  RED: 'Roșu',
-  YELLOW: 'Galben',
+  BLUE: 'Blue',
+  LIGHT_PURPLE: 'Light Purple',
+  DARK_PURPLE: 'Dark Purple',
+  RED: 'Red',
+  YELLOW: 'Yellow',
 };
 
 function fmt(n: number) {
-  return n.toLocaleString('ro-RO') + ' $';
+  return n.toLocaleString('en-US') + ' $';
 }
 
 function fmtDate(dateStr: string) {
   try {
-    return new Date(dateStr).toLocaleDateString('ro-RO', {
+    return new Date(dateStr).toLocaleDateString('en-US', {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
@@ -61,8 +61,8 @@ export default function OwnedAssetsPage() {
   const clothingItems = (player?.inventory ?? []).filter((i) => i.itemType === 'CLOTHING');
 
   const tabs: { id: Tab; label: string; count: number }[] = [
-    { id: 'vehicles', label: '🚗 Vehicule Deținute', count: vehicles.length },
-    { id: 'clothes', label: '👕 Haine Deținute', count: clothingItems.length },
+    { id: 'vehicles', label: '🚗 Owned Vehicles', count: vehicles.length },
+    { id: 'clothes', label: '👕 Owned Clothing', count: clothingItems.length },
   ];
 
   return (
@@ -70,7 +70,7 @@ export default function OwnedAssetsPage() {
       <div className="mx-auto max-w-[1100px]">
         <div className="mb-6">
           <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-white/45">CityFlow No-RP</p>
-          <h1 className="text-3xl font-black uppercase tracking-tight text-white">📁 Active Deținute</h1>
+          <h1 className="text-3xl font-black uppercase tracking-tight text-white">📁 Owned Assets</h1>
         </div>
 
         {/* Tabs */}
@@ -94,7 +94,7 @@ export default function OwnedAssetsPage() {
 
         {!player && (
           <div className="flex items-center justify-center py-20">
-            <p className="text-sm font-bold uppercase tracking-widest text-white/50">Se încarcă...</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-white/50">Loading...</p>
           </div>
         )}
 
@@ -102,7 +102,7 @@ export default function OwnedAssetsPage() {
         {tab === 'vehicles' && player && (
           <>
             {vehicles.length === 0 ? (
-              <EmptyState icon="🚗" title="Niciun vehicul deținut" sub="Cumpără vehicule din Showroom sau câștigă la Ruletă." />
+              <EmptyState icon="🚗" title="No owned vehicles" sub="Buy vehicles from Showroom or win them in Roulette." />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {vehicles.map((v) => (
@@ -117,7 +117,7 @@ export default function OwnedAssetsPage() {
         {tab === 'clothes' && player && (
           <>
             {clothingItems.length === 0 ? (
-              <EmptyState icon="👕" title="Nicio haină deținută" sub="Deschide Mystery Box din inventar pentru haine." />
+              <EmptyState icon="👕" title="No owned clothing" sub="Open Mystery Boxes from Inventory to get clothing." />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {clothingItems.map((item) => {
@@ -153,8 +153,8 @@ function VehicleCard({ vehicle }: { vehicle: OwnedVehicle }) {
         </div>
       </div>
       <div className="space-y-1.5 border-t border-white/8 pt-2">
-        <Row label="Preț plătit" value={fmt(vehicle.purchasePrice)} />
-        <Row label="Achiziționat" value={fmtDate(vehicle.purchasedAt)} />
+        <Row label="Paid price" value={fmt(vehicle.purchasePrice)} />
+        <Row label="Purchased" value={fmtDate(vehicle.purchasedAt)} />
       </div>
     </div>
   );
@@ -168,14 +168,14 @@ function ClothingCard({ meta, quantity }: { meta: Partial<OwnedClothingMetadata>
       <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
         <img
           src={getClothingImagePath(meta.name ?? '')}
-          alt={meta.name ?? 'Haină'}
+          alt={meta.name ?? 'Clothing'}
           className="h-28 w-full object-contain"
         />
       </div>
       <div className="flex items-start gap-3">
         <span className="text-3xl leading-none">👕</span>
         <div className="min-w-0 flex-1">
-          <p className="font-black text-white">{meta.name ?? 'Haină'}</p>
+          <p className="font-black text-white">{meta.name ?? 'Clothing'}</p>
           <p className="mt-0.5 text-[11px] text-white/50">{meta.category ?? ''}</p>
         </div>
         <div className="flex flex-col items-end gap-1">
@@ -189,7 +189,7 @@ function ClothingCard({ meta, quantity }: { meta: Partial<OwnedClothingMetadata>
       </div>
       {meta.marketValue != null && (
         <p className="border-t border-white/8 pt-2 text-xs font-bold text-[#ffd95a]">
-          Valoare piață: {meta.marketValue.toLocaleString('ro-RO')} $
+          Market value: {meta.marketValue.toLocaleString('en-US')} $
         </p>
       )}
     </div>

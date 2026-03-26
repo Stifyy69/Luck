@@ -128,11 +128,11 @@ export default function GangsPage() {
   const formGang = () => {
     if (formed) return;
     if (!gangNameInput.trim()) {
-      pushPopup('Pune un nume pentru gang.');
+      pushPopup('Set a gang name.');
       return;
     }
     if (baniMurdari < 10_000_000) {
-      pushPopup('Ai nevoie de 10.000.000 murdari pentru formare.');
+      pushPopup('You need 10,000,000 dirty cash to create the gang.');
       return;
     }
     const starters = MEMBER_POOL.slice(0, 4);
@@ -145,13 +145,13 @@ export default function GangsPage() {
     };
     setBaniMurdari(nextDirty);
     setGangData(nextGangData);
-    pushPopup('Gang format cu succes.');
+    pushPopup('Gang created successfully.');
   };
 
   const startRecruit = () => {
     if (!formed || actionType) return;
     if (gangData.members.length >= maxMembers) {
-      pushPopup('Ai atins limita de membri pentru nivelul curent.');
+      pushPopup('You reached the member limit for your current level.');
       return;
     }
     const duration = 5 + Math.floor(Math.random() * 6);
@@ -165,7 +165,7 @@ export default function GangsPage() {
         if (!candidate) return current;
         if (current.members.length >= maxMembers) return current;
         const next = { ...current, members: [...current.members, candidate] };
-        pushPopup(`L-ai recrutat pe ${candidate}.`);
+        pushPopup(`You recruited ${candidate}.`);
         return next;
       });
     }, duration * 1000);
@@ -174,7 +174,7 @@ export default function GangsPage() {
   const runGangAction = (type: GangAction) => {
     if (!formed || actionType) return;
     if (activeWorkers <= 0) {
-      pushPopup('Ai nevoie de mașini în stoc pentru membri.');
+      pushPopup('You need vehicles in stock for members.');
       return;
     }
 
@@ -187,7 +187,7 @@ export default function GangsPage() {
     }
 
     if (type !== 'collect' && processUnits <= 0) {
-      pushPopup(type === 'white' ? 'Nu ai frunze de procesat.' : 'Nu ai plicuri albe de procesat.');
+      pushPopup(type === 'white' ? 'You do not have leaves to process.' : 'You do not have white packs to process.');
       return;
     }
 
@@ -196,7 +196,7 @@ export default function GangsPage() {
       const maxUnitsByMoney = Math.floor((baniMurdari + Math.floor(cashBalance / 0.65)) / dirtyCostPerUnit);
       processUnits = Math.min(processUnits, Math.max(0, maxUnitsByMoney));
       if (processUnits <= 0) {
-        pushPopup('Nu ai bani suficienți pentru procesare.');
+        pushPopup('You do not have enough money for processing.');
         return;
       }
       const needsDirty = processUnits * dirtyCostPerUnit;
@@ -204,7 +204,7 @@ export default function GangsPage() {
         const needed = needsDirty - baniMurdari;
         const cleanCost = Math.ceil(needed * 0.65);
         if (cashBalance < cleanCost) {
-          pushPopup(`Nu ai ${needsDirty.toLocaleString('ro-RO')} bani murdari.`);
+          pushPopup(`You do not have ${needsDirty.toLocaleString('en-US')} dirty cash.`);
           return;
         }
         setConfirmConvert({ type, needed, cleanCost, online, units: processUnits });
@@ -227,7 +227,7 @@ export default function GangsPage() {
       const razia = Math.random() < GANG_RAZIA_CHANCE;
       if (razia) {
         setGangData((current) => ({ ...current, frunze: 0, white: 0, blue: 0, onlineNow: 0 }));
-        pushPopup('A VENIT RAZIIIAAAA!!! Gang-ul a pierdut tot stocul.');
+        pushPopup('POLICE RAID!!! The gang lost all stock.');
         setActionType(null);
         setActionTimer(0);
         return;
@@ -255,7 +255,7 @@ export default function GangsPage() {
         }));
         if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
       }
-      pushPopup(`Acțiune finalizată cu ${online} membri online.`);
+      pushPopup(`Action completed with ${online} members online.`);
       setActionType(null);
       setActionTimer(0);
     }, 5 * 1000);
@@ -278,7 +278,7 @@ export default function GangsPage() {
     const gainClean = Math.floor(baniMurdari * 0.65);
     setBaniMurdari(0);
     setCashBalance((current) => current + gainClean);
-    pushPopup(`Convertit în curat: +${gainClean.toLocaleString('ro-RO')}.`);
+    pushPopup(`Converted to clean: +${gainClean.toLocaleString('en-US')}.`);
   };
 
   const sellGangBlue = () => {
@@ -286,12 +286,12 @@ export default function GangsPage() {
     const gain = gangData.blue * 2300;
     setBaniMurdari((current) => current + gain);
     setGangData((current) => ({ ...current, blue: 0, dirtyEarned: current.dirtyEarned + gain }));
-    pushPopup(`Vânzare gang: +${gain.toLocaleString('ro-RO')} murdari.`);
+    pushPopup(`Gang sale: +${gain.toLocaleString('en-US')} dirty cash.`);
   };
 
   const deliverGangBlue = () => {
     if (!formed || gangData.blue < 100) {
-      pushPopup('Ai nevoie de minim 100 albastru pentru livrare.');
+      pushPopup('You need at least 100 blue units for delivery.');
       return;
     }
     const online = Math.max(1, Math.floor(Math.max(1, activeWorkers) * (0.5 + Math.random() * 0.5)));
@@ -302,14 +302,14 @@ export default function GangsPage() {
     if (caught) {
       setGangData((current) => ({ ...current, blue: current.blue - qty }));
       setTimeFarm((current) => current + 0.25);
-      pushPopup(`A VENIT RAZIIIAAAA!!! Ai pierdut ${qty} albastru.`);
+      pushPopup(`POLICE RAID!!! You lost ${qty} blue units.`);
       return;
     }
     const gain = qty * 3179;
     setGangData((current) => ({ ...current, blue: current.blue - qty, dirtyEarned: current.dirtyEarned + gain }));
     setBaniMurdari((current) => current + gain);
     setTimeFarm((current) => current + 0.25);
-    pushPopup(`Livrare reușită (${qty}): +${gain.toLocaleString('ro-RO')} murdari.`);
+    pushPopup(`Delivery successful (${qty}): +${gain.toLocaleString('en-US')} dirty cash.`);
   };
 
   return (
@@ -319,48 +319,48 @@ export default function GangsPage() {
           <h1 className="text-center text-4xl font-black uppercase tracking-tight">Gangs</h1>
           {!formed ? (
             <div className="mx-auto mt-6 max-w-xl rounded-xl border border-white/15 bg-black/25 p-4">
-              <p className="text-sm text-white/75">Formează Gang Nerecunoscut (cost: 10.000.000 murdari)</p>
-              <input value={gangNameInput} onChange={(e) => setGangNameInput(e.target.value)} placeholder="Nume gang" className="mt-3 w-full rounded-lg border border-white/15 bg-black/35 px-3 py-2" />
-              <button type="button" onClick={formGang} className="mt-3 w-full rounded-lg bg-rose-500/80 px-4 py-2 font-black">Formează gang</button>
+              <p className="text-sm text-white/75">Create Unrecognized Gang (cost: 10,000,000 dirty cash)</p>
+              <input value={gangNameInput} onChange={(e) => setGangNameInput(e.target.value)} placeholder="Gang name" className="mt-3 w-full rounded-lg border border-white/15 bg-black/35 px-3 py-2" />
+              <button type="button" onClick={formGang} className="mt-3 w-full rounded-lg bg-rose-500/80 px-4 py-2 font-black">Create gang</button>
             </div>
           ) : (
             <>
               <div className="mt-4 grid gap-2 sm:grid-cols-3">
                 <Card label="Gang" value={gangData.name} />
-                <Card label="Nivel" value={level.name} />
-                <Card label="Membri" value={`${gangData.members.length}/${maxMembers}`} />
-                <Card label="Membri cu mașină" value={`${activeWorkers}`} />
-                <Card label="Online curent" value={`${gangData.onlineNow}`} />
-                <Card label="Dirty făcut total" value={`${gangData.dirtyEarned.toLocaleString('ro-RO')} $`} />
+                <Card label="Level" value={level.name} />
+                <Card label="Members" value={`${gangData.members.length}/${maxMembers}`} />
+                <Card label="Members with vehicle" value={`${activeWorkers}`} />
+                <Card label="Current online" value={`${gangData.onlineNow}`} />
+                <Card label="Total dirty earned" value={`${gangData.dirtyEarned.toLocaleString('en-US')} $`} />
               </div>
               <p className="mt-3 text-sm text-white/70">
-                {level.nextDirty ? `Următor nivel la ${level.nextDirty.toLocaleString('ro-RO')} murdari.` : 'Nivel maxim atins.'}
+                {level.nextDirty ? `Next level at ${level.nextDirty.toLocaleString('en-US')} dirty cash.` : 'Max level reached.'}
               </p>
 
               <div className="mt-4 rounded-xl border border-white/15 bg-black/25 p-4">
-                <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Recrutare</p>
+                <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Recruitment</p>
                 <button type="button" onClick={startRecruit} disabled={recruitTimer > 0 || actionType !== null} className={`mt-3 rounded-lg px-4 py-2 font-black ${recruitTimer > 0 || actionType ? 'bg-[#2a2744] text-white/50' : 'bg-cyan-500/80'}`}>
-                  {recruitTimer > 0 ? `Caută om... ${recruitTimer}s` : 'Caută om (5-10s)'}
+                  {recruitTimer > 0 ? `Recruiting... ${recruitTimer}s` : 'Recruit member (5-10s)'}
                 </button>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <ActionButton title="Farm frunze gang" detail="+1200 / om online" onClick={() => runGangAction('collect')} disabled={Boolean(actionType)} />
-                <ActionButton title="Procesare alb gang" detail="1200 frunze + 900k / unitate" onClick={() => runGangAction('white')} disabled={Boolean(actionType)} />
-                <ActionButton title="Procesare albastru gang" detail="400 alb + 100k / unitate" onClick={() => runGangAction('blue')} disabled={Boolean(actionType)} />
+                <ActionButton title="Gang leaf farm" detail="+1200 / online member" onClick={() => runGangAction('collect')} disabled={Boolean(actionType)} />
+                <ActionButton title="Gang white processing" detail="1200 leaves + 900k / unit" onClick={() => runGangAction('white')} disabled={Boolean(actionType)} />
+                <ActionButton title="Gang blue processing" detail="400 white + 100k / unit" onClick={() => runGangAction('blue')} disabled={Boolean(actionType)} />
               </div>
 
               <div className="mt-4 grid gap-2 sm:grid-cols-4">
-                <Card label="Frunze gang" value={gangData.frunze.toLocaleString('ro-RO')} />
-                <Card label="Alb gang" value={gangData.white.toLocaleString('ro-RO')} />
-                <Card label="Albastru gang" value={gangData.blue.toLocaleString('ro-RO')} />
+                <Card label="Leaves gang" value={gangData.frunze.toLocaleString('en-US')} />
+                <Card label="White gang" value={gangData.white.toLocaleString('en-US')} />
+                <Card label="Blue gang" value={gangData.blue.toLocaleString('en-US')} />
                 <button type="button" onClick={sellGangBlue} className={`rounded-xl border border-white/15 p-3 text-sm font-black ${gangData.blue > 0 ? 'bg-emerald-500/70' : 'bg-[#2a2744] text-white/50'}`} disabled={gangData.blue <= 0}>
-                  Vinde tot blue
+                  Sell all blue
                 </button>
               </div>
               <div className="mt-2">
                 <button type="button" onClick={deliverGangBlue} className={`rounded-xl border border-white/15 px-4 py-2 text-sm font-black ${gangData.blue >= 100 ? 'bg-sky-500/70' : 'bg-[#2a2744] text-white/50'}`} disabled={gangData.blue < 100}>
-                  Livrare 100 / om online (3179)
+                  Deliver 100 / online member (3179)
                 </button>
               </div>
               <div className="mt-2">
@@ -370,12 +370,12 @@ export default function GangsPage() {
                   disabled={baniMurdari <= 0 || Boolean(actionType)}
                   className={`rounded-xl border border-white/15 px-4 py-2 text-sm font-black ${baniMurdari > 0 && !actionType ? 'bg-amber-500/70' : 'bg-[#2a2744] text-white/50'}`}
                 >
-                  Convert murdari în curati
+                  Convert dirty to clean
                 </button>
               </div>
 
               <div className="mt-5 rounded-xl border border-white/15 bg-black/25 p-3">
-                <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Membri</p>
+                <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Members</p>
                 <p className="mt-2 text-sm text-white/75">{gangData.members.join(', ') || '-'}</p>
               </div>
             </>
@@ -383,7 +383,7 @@ export default function GangsPage() {
 
           {actionType ? (
             <div className="mt-4 rounded-xl border border-violet-300/30 bg-violet-500/15 p-4 text-center">
-              <p className="text-sm text-white/75">Gang în acțiune...</p>
+              <p className="text-sm text-white/75">Gang in action...</p>
               <p className="mt-1 text-2xl font-black text-violet-200">{actionTimer}s</p>
             </div>
           ) : null}
@@ -403,13 +403,13 @@ export default function GangsPage() {
       {confirmConvert ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !isConverting && setConfirmConvert(null)}>
           <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white" onClick={(event) => event.stopPropagation()}>
-            <p className="text-lg font-black">Convert la banii curați în murdari pentru gang?</p>
+            <p className="text-lg font-black">Convert clean money into dirty money for gang?</p>
             <p className="mt-2 text-sm text-white/70">
-              Necesari murdari: {confirmConvert.needed.toLocaleString('ro-RO')} · Cost curat: {confirmConvert.cleanCost.toLocaleString('ro-RO')}
+              Required dirty: {confirmConvert.needed.toLocaleString('en-US')} · Clean cost: {confirmConvert.cleanCost.toLocaleString('en-US')}
             </p>
             <div className="mt-4 flex gap-2">
-              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold disabled:opacity-60" onClick={confirmConvertAndStart} type="button" disabled={isConverting}>Da</button>
-              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold disabled:opacity-60" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>Nu</button>
+              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold disabled:opacity-60" onClick={confirmConvertAndStart} type="button" disabled={isConverting}>Yes</button>
+              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold disabled:opacity-60" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>No</button>
             </div>
           </div>
         </div>

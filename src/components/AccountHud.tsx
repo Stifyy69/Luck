@@ -88,7 +88,7 @@ export default function AccountHud() {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      setStatus('A eșuat autentificarea.');
+      setStatus('Authentication failed.');
       return;
     }
     await loadMe();
@@ -121,10 +121,10 @@ export default function AccountHud() {
               <button type="button" className={`rounded-lg px-3 py-2 text-sm font-bold ${mode === 'login' ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => setMode('login')}>Login</button>
               <button type="button" className={`rounded-lg px-3 py-2 text-sm font-bold ${mode === 'register' ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => setMode('register')}>Create account</button>
             </div>
-            <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="Cont" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
             {mode === 'register' ? <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} /> : null}
-            <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" type="password" placeholder="Parola" value={password} onChange={(e) => setPassword(e.target.value)} />
-            {mode === 'register' ? <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" type="password" placeholder="Confirmă parola" value={passwordConfirm} onChange={(e) => setPasswordConfirm(e.target.value)} /> : null}
+            <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            {mode === 'register' ? <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" type="password" placeholder="Confirm password" value={passwordConfirm} onChange={(e) => setPasswordConfirm(e.target.value)} /> : null}
             {status ? <p className="mb-2 text-sm text-rose-300">{status}</p> : null}
             <button type="button" onClick={submit} className="btn-primary w-full rounded-lg px-3 py-2 text-sm font-bold">{mode === 'login' ? 'Login' : 'Create account'}</button>
           </div>

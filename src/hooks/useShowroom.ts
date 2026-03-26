@@ -14,7 +14,7 @@ export function useShowroom() {
       .showroom()
       .then((data) => setShowroom(data))
       .catch((e: unknown) =>
-        setError(e instanceof Error ? e.message : 'Eroare la încărcarea showroom-ului'),
+        setError(e instanceof Error ? e.message : 'Failed to load showroom'),
       )
       .finally(() => setLoading(false));
   }, []);

@@ -35,32 +35,32 @@ function saveGameState(data: unknown) {
 
 const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeSpentHours: number; run: string }> = {
   collect_leaves: {
-    title: 'Culege Frunze',
+    title: 'Collect Leaves',
     duration: 5,
     risk: 10,
     timeSpentHours: 0.5,
-    run: '+1200 frunze',
+    run: '+1200 leaves',
   },
   process_pack: {
-    title: 'Procesare Plicuri Albe',
+    title: 'Process White Packs',
     duration: 5,
     risk: 10,
     timeSpentHours: 0.5,
-    run: '1200 frunze + 900.000 murdari -> 400 plicuri albe',
+    run: '1200 leaves + 900,000 dirty cash -> 400 white packs',
   },
   refine_pack: {
-    title: 'Procesare Albastru',
+    title: 'Process Blue Packs',
     duration: 5,
     risk: 10,
     timeSpentHours: 1,
-    run: '400 plicuri albe + 100.000 murdari -> 800 plicuri albastre',
+    run: '400 white packs + 100,000 dirty cash -> 800 blue packs',
   },
 };
 
 export default function FarmatPage() {
   const saved = typeof window !== 'undefined' ? loadGameState() : null;
 
-  const [frunze, setFrunze] = useState(saved?.frunze ?? 0);
+  const [frunze, setLeaves] = useState(saved?.frunze ?? 0);
   const [plicuriAlbe, setPlicuriAlbe] = useState(saved?.plicuriAlbe ?? 0);
   const [plicuriAlbastre, setPlicuriAlbastre] = useState(saved?.plicuriAlbastre ?? 0);
   const [baniMurdari, setBaniMurdari] = useState(saved?.baniMurdari ?? 0);
@@ -71,7 +71,7 @@ export default function FarmatPage() {
 
   const [timeFarm, setTimeFarm] = useState(saved?.timeFarm ?? saved?.timeLostFarm ?? 0);
   const [timeSleep, setTimeSleep] = useState(saved?.timeSleep ?? 0);
-  const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
+  const [processedLeaves, setProcessedLeaves] = useState(saved?.processedLeaves ?? 0);
   const [processedAlbe, setProcessedAlbe] = useState(saved?.processedWhite ?? 0);
   const [processedAlbastre, setProcessedAlbastre] = useState(saved?.processedBlue ?? 0);
   const [farmEarned, setFarmEarned] = useState(saved?.farmEarned ?? 0);
@@ -100,7 +100,7 @@ export default function FarmatPage() {
       baniCurati,
       timeFarm,
       timeSleep,
-      processedFrunze,
+      processedLeaves,
       processedWhite: processedAlbe,
       processedBlue: processedAlbastre,
       farmEarned,
@@ -111,7 +111,7 @@ export default function FarmatPage() {
       ogCoinsBalance: saved?.ogCoinsBalance ?? 0,
       bonusSpins: saved?.bonusSpins ?? 0,
     });
-  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeFarm, timeSleep, processedFrunze, processedAlbe, processedAlbastre, farmEarned, rouletteSpent, rouletteWon, saved]);
+  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeFarm, timeSleep, processedLeaves, processedAlbe, processedAlbastre, farmEarned, rouletteSpent, rouletteWon, saved]);
 
   const pushPopup = (type: PopupType, text: string) => {
     setPopup({ type, text });
@@ -142,7 +142,7 @@ export default function FarmatPage() {
 
         if (caught) {
           if (key === 'process_pack') {
-            setFrunze((current) => Math.max(0, current - 1200));
+            setLeaves((current) => Math.max(0, current - 1200));
             if (dirtyDebit > 0) {
               setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
             }
@@ -153,25 +153,25 @@ export default function FarmatPage() {
               setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
             }
           }
-          pushPopup('danger', 'A VENIT RAZIIIAAAA!!!');
+          pushPopup('danger', 'POLICE RAID!!!');
           setActiveAction(null);
           return;
         }
 
         if (key === 'collect_leaves') {
-          setFrunze((current) => current + 1200);
-          setProcessedFrunze((current) => current + 1200);
-          pushPopup('success', '+1200 frunze.');
+          setLeaves((current) => current + 1200);
+          setProcessedLeaves((current) => current + 1200);
+          pushPopup('success', '+1200 leaves.');
         }
 
         if (key === 'process_pack') {
-          setFrunze((current) => current - 1200);
+          setLeaves((current) => current - 1200);
           setPlicuriAlbe((current) => current + 400);
           if (dirtyDebit > 0) {
             setBaniMurdari((current) => current - dirtyDebit);
           }
           setProcessedAlbe((current) => current + 400);
-          pushPopup('success', 'Conversie facuta: 1200 frunze -> 400 plicuri albe.');
+          pushPopup('success', 'Conversion complete: 1200 leaves -> 400 white packs.');
         }
 
         if (key === 'refine_pack') {
@@ -181,7 +181,7 @@ export default function FarmatPage() {
             setBaniMurdari((current) => current - dirtyDebit);
           }
           setProcessedAlbastre((current) => current + 800);
-          pushPopup('success', 'Conversie facuta: 400 plicuri albe -> 800 plicuri albastre.');
+          pushPopup('success', 'Conversion complete: 400 white packs -> 800 blue packs.');
         }
 
         setActiveAction(null);
@@ -193,12 +193,12 @@ export default function FarmatPage() {
     if (!canRun) return;
 
     if (key === 'process_pack' && frunze < 1200) {
-      pushPopup('danger', 'Ai nevoie de 1200 frunze.');
+      pushPopup('danger', 'You need 1200 leaves.');
       return;
     }
 
     if (key === 'refine_pack' && plicuriAlbe < 400) {
-      pushPopup('danger', 'Ai nevoie de 400 plicuri albe.');
+      pushPopup('danger', 'You need 400 white packs.');
       return;
     }
 
@@ -206,7 +206,7 @@ export default function FarmatPage() {
       const needed = 900_000 - baniMurdari;
       const cleanCost = Math.ceil(needed * 0.65);
       if (baniCurati < cleanCost) {
-        pushPopup('danger', 'Nu ai bani curați suficienți pentru materiale.');
+        pushPopup('danger', 'You do not have enough clean money for materials.');
         return;
       }
       setConfirmConvert({ key, needed, cleanCost });
@@ -217,7 +217,7 @@ export default function FarmatPage() {
       const needed = 100_000 - baniMurdari;
       const cleanCost = Math.ceil(needed * 0.65);
       if (baniCurati < cleanCost) {
-        pushPopup('danger', 'Nu ai bani curați suficienți pentru materiale.');
+        pushPopup('danger', 'You do not have enough clean money for materials.');
         return;
       }
       setConfirmConvert({ key, needed, cleanCost });
@@ -246,12 +246,12 @@ export default function FarmatPage() {
     const gainClean = Math.floor(baniMurdari * 0.65);
     setBaniMurdari(0);
     setBaniCurati((current) => current + gainClean);
-    pushPopup('success', `Convert reusit: +${gainClean.toLocaleString('ro-RO')} bani curati.`);
+    pushPopup('success', `Conversion successful: +${gainClean.toLocaleString('en-US')} clean money.`);
   };
 
   const sellBulk = () => {
     if (!plicuriAlbastre) {
-      pushPopup('danger', 'Nu ai marfa pentru vanzare bulk.');
+      pushPopup('danger', 'You do not have goods for bulk sale.');
       return;
     }
 
@@ -259,19 +259,19 @@ export default function FarmatPage() {
     setBaniMurdari((current) => current + payout);
     setFarmEarned((current) => current + payout);
     setPlicuriAlbastre(0);
-    pushPopup('success', `Vanzare bulk: +${payout.toLocaleString('ro-RO')} bani murdari.`);
+    pushPopup('success', `Bulk sale: +${payout.toLocaleString('en-US')} dirty cash.`);
   };
 
   const deliver100 = () => {
     if (plicuriAlbastre < 100) {
-      pushPopup('danger', 'Ai nevoie de minim 100 plicuri albastre.');
+      pushPopup('danger', 'You need at least 100 blue packs.');
       return;
     }
 
     const caught = Math.random() < 0.1;
     if (caught) {
       setPlicuriAlbastre((current) => current - 100);
-      pushPopup('danger', 'A VENIT RAZIIIAAAA!!! Ai pierdut 100 bucati.');
+      pushPopup('danger', 'POLICE RAID!!! You lost 100 units.');
       return;
     }
 
@@ -280,7 +280,7 @@ export default function FarmatPage() {
     setBaniMurdari((current) => current + payout);
     setFarmEarned((current) => current + payout);
     setTimeFarm((current) => current + 0.25);
-    pushPopup('success', `Livrare reusita: +${payout.toLocaleString('ro-RO')} bani murdari.`);
+    pushPopup('success', `Delivery successful: +${payout.toLocaleString('en-US')} dirty cash.`);
   };
 
   return (
@@ -290,15 +290,15 @@ export default function FarmatPage() {
           <h1 className="text-center text-4xl font-black uppercase tracking-tight text-white">Cayo</h1>
 
           <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-5">
-            <StatCard label="Frunze" value={frunze} />
-            <StatCard label="Plicuri Albe" value={plicuriAlbe} />
-            <StatCard label="Plicuri Albastre" value={plicuriAlbastre} />
-            <StatCard label="Bani Murdari" value={baniMurdari} money />
-            <StatCard label="Bani Curati" value={baniCurati} money />
+            <StatCard label="Leaves" value={frunze} />
+            <StatCard label="White Packs" value={plicuriAlbe} />
+            <StatCard label="Blue Packs" value={plicuriAlbastre} />
+            <StatCard label="Dirty Cash" value={baniMurdari} money />
+            <StatCard label="Clean Money" value={baniCurati} money />
           </div>
 
           <div className="mt-4 rounded-xl border border-white/15 bg-black/25 p-3">
-            <p className="text-sm font-semibold text-white/75">1200 Frunze -&gt; 400 Plicuri Albe -&gt; 800 Plicuri Albastre</p>
+            <p className="text-sm font-semibold text-white/75">1200 Leaves -&gt; 400 White Packs -&gt; 800 Blue Packs</p>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -338,22 +338,22 @@ export default function FarmatPage() {
                   className={`rounded-xl border border-white/15 p-4 text-left transition ${buttonClasses}`}
                 >
                   <p className="text-base font-black">{action.title}</p>
-                  <p className="mt-1 text-sm">Durata: {action.duration}s</p>
+                  <p className="mt-1 text-sm">Duration: {action.duration}s</p>
                   <p className="text-sm">{action.run}</p>
-                  <p className="text-sm">Timp joc: {action.timeSpentHours}h</p>
+                  <p className="text-sm">Game time: {action.timeSpentHours}h</p>
                 </button>
               );
             })}
           </div>
 
           <div className="mt-6 rounded-xl border border-white/15 bg-black/25 p-4">
-            <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Vanzare</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Sales</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button type="button" onClick={sellBulk} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre ? 'bg-emerald-500/80' : 'bg-[#2a2744] text-white/50'}`}>
-                Vanzare bulk tot (2300/buc)
+                Sell all in bulk (2300/unit)
               </button>
               <button type="button" onClick={deliver100} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre >= 100 ? 'bg-sky-500/80' : 'bg-[#2a2744] text-white/50'}`}>
-                Livrare 100 buc (3179/buc)
+                Deliver 100 units (3179/unit)
               </button>
               <button
                 type="button"
@@ -361,14 +361,14 @@ export default function FarmatPage() {
                 disabled={baniMurdari <= 0 || Boolean(activeAction)}
                 className={`rounded-lg px-4 py-2 text-sm font-bold ${baniMurdari > 0 && !activeAction ? 'bg-amber-500/80 text-white' : 'bg-[#2a2744] text-white/50'}`}
               >
-                Convert murdari în curati
+                Convert dirty to clean
               </button>
             </div>
           </div>
 
           {activeAction ? (
             <div className="mt-4 rounded-xl border border-violet-300/30 bg-violet-500/15 p-4 text-center">
-              <p className="text-sm text-white/75">Actiune in curs...</p>
+              <p className="text-sm text-white/75">Action in progress...</p>
               <p className="mt-1 text-2xl font-black text-violet-200">{timer}s</p>
             </div>
           ) : null}
@@ -392,13 +392,13 @@ export default function FarmatPage() {
       {confirmConvert ? (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !isConverting && setConfirmConvert(null)}>
           <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white" onClick={(event) => event.stopPropagation()}>
-            <p className="text-lg font-black">Convert la banii curați în murdari pentru materiale?</p>
+            <p className="text-lg font-black">Convert clean money into dirty money for materials?</p>
             <p className="mt-2 text-sm text-white/70">
-              Necesari murdari: {confirmConvert.needed.toLocaleString('ro-RO')} · Cost curat: {confirmConvert.cleanCost.toLocaleString('ro-RO')}
+              Required dirty: {confirmConvert.needed.toLocaleString('en-US')} · Clean cost: {confirmConvert.cleanCost.toLocaleString('en-US')}
             </p>
             <div className="mt-4 flex gap-2">
-              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold disabled:opacity-60" onClick={confirmConvertAndRun} type="button" disabled={isConverting}>Da</button>
-              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold disabled:opacity-60" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>Nu</button>
+              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold disabled:opacity-60" onClick={confirmConvertAndRun} type="button" disabled={isConverting}>Yes</button>
+              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold disabled:opacity-60" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>No</button>
             </div>
           </div>
         </div>
@@ -412,7 +412,7 @@ function StatCard({ label, value, money = false }: { label: string; value: numbe
     <div className="rounded-xl border border-white/15 bg-black/25 p-3 text-center">
       <p className="text-[11px] uppercase tracking-[0.2em] text-white/45">{label}</p>
       <p className="mt-1 text-xl font-black text-white">
-        {value.toLocaleString('ro-RO')}
+        {value.toLocaleString('en-US')}
         {money ? ' $' : ''}
       </p>
     </div>

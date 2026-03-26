@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import SharedStatsPanel from './SharedStatsPanel';
 
 const rewards = [
-  { name: 'Vehicul Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
+  { name: 'Vehicle Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
   { name: 'VIP Gold', subtitle: '6-12 zile', tier: 'epic', emoji: '💎' },
   { name: 'VIP Silver', subtitle: '6-12 zile', tier: 'epic', emoji: '💠' },
   { name: 'Mystery Box', subtitle: 'Obiecte unice', tier: 'epic', emoji: '📦' },
@@ -13,8 +13,8 @@ const rewards = [
   { name: 'Slot Vehicle', subtitle: '1 slot', tier: 'rare', emoji: '➕' },
   { name: 'Voucher Showroom', subtitle: '1 voucher', tier: 'rare', emoji: '🎟️' },
   { name: 'Job Boost', subtitle: '12 de ore', tier: 'uncommon', emoji: '📈' },
-  { name: 'Scutire Taxe', subtitle: '24 de ore', tier: 'uncommon', emoji: '💸' },
-  { name: 'Xenon Vehicul', subtitle: '1 pachet xenon', tier: 'common', emoji: '🔩' },
+  { name: 'Exemption Taxe', subtitle: '24 de ore', tier: 'uncommon', emoji: '💸' },
+  { name: 'Xenon Vehicle', subtitle: '1 pachet xenon', tier: 'common', emoji: '🔩' },
   { name: 'Bani', subtitle: 'suma de bani', tier: 'common', emoji: '💵' },
 ];
 
@@ -91,7 +91,7 @@ function randomMultipleOfFiveThousand(min, max) {
 }
 
 function resolveRewardOutcome(baseReward) {
-  if (baseReward.name === 'Vehicul Suvenir') {
+  if (baseReward.name === 'Vehicle Suvenir') {
     const value = Math.random() < 0.5 ? 2_000_000 : 5_000_000;
     return { ...baseReward, payout: value };
   }
@@ -102,7 +102,7 @@ function resolveRewardOutcome(baseReward) {
     return { ...baseReward, payout: value };
   }
 
-  if (baseReward.name === 'Xenon Vehicul') {
+  if (baseReward.name === 'Xenon Vehicle') {
     const value = Math.random() < 0.8 ? 5_000 : 150_000;
     return { ...baseReward, payout: value };
   }
@@ -363,9 +363,9 @@ export default function RouletteDemo() {
         setRouletteWon((current) => current + winner.payout);
       }
 
-      if ((spinCount + 1) % 5 === 0 && winner.name !== 'Vehicul Suvenir') {
+      if ((spinCount + 1) % 5 === 0 && winner.name !== 'Vehicle Suvenir') {
         const neighbor = targetIndex + (Math.random() > 0.5 ? 1 : -1);
-        if ((trackRewards[neighbor] || {}).name === 'Vehicul Suvenir') setNearVehicleIndex(neighbor);
+        if ((trackRewards[neighbor] || {}).name === 'Vehicle Suvenir') setNearVehicleIndex(neighbor);
       }
 
       playWinSound();
@@ -416,9 +416,9 @@ export default function RouletteDemo() {
       <div className="relative mx-auto grid min-h-screen w-full max-w-[1440px] grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[190px_minmax(0,1fr)_230px] lg:gap-6 lg:px-7">
         <aside className="hidden lg:flex lg:flex-col lg:pt-7">
           <p className="pl-1 text-left text-[24px] font-black uppercase italic leading-[0.9] tracking-tight text-white/90">
-            Ultimele
+            Latest
             <br />
-            castiguri
+            wins
           </p>
           <div className="mt-4 space-y-2 opacity-45">
             {latestWins.map((reward, index) => (
@@ -519,7 +519,7 @@ export default function RouletteDemo() {
           <section className="mx-auto mt-7 w-full max-w-[1120px]">
             <div className="mb-2.5 flex items-end justify-between gap-4">
               <h2 className="text-center text-2xl font-black uppercase italic tracking-tight text-white sm:w-full sm:text-[35px]">
-                Poti castiga premiile
+                Available rewards
               </h2>
             </div>
 
@@ -530,16 +530,7 @@ export default function RouletteDemo() {
             </div>
           </section>
 
-          <footer className="mx-auto mt-auto w-full max-w-[1120px] pb-10">
-            <div className="rounded-[14px] border border-white/20 bg-black/35 px-4 py-5 text-center">
-              <p className="text-sm font-black uppercase tracking-[0.16em] text-amber-300">⚠️ Disclaimer ⚠️</p>
-              <p className="mt-2 text-sm leading-relaxed text-white/75">
-                Acest conținut este realizat de Stifyy exclusiv în scop de divertisment. Nu are nicio legătură cu
-                OGLAND și nu reflectă în niciun fel algoritmii, procentajele sau rezultatele reale ale jocurilor de
-                ruletă sau ale altor jocuri de noroc.
-              </p>
-            </div>
-          </footer>
+          <footer className="mx-auto mt-auto w-full max-w-[1120px] pb-10" />
         </div>
 
         <aside className="hidden lg:block lg:pt-[86px]"><SharedStatsPanel /></aside>
@@ -550,7 +541,7 @@ export default function RouletteDemo() {
           <div className="w-full max-w-md rounded-[32px] border border-white/10 bg-[#17142f]/96 p-6 shadow-[0_24px_90px_rgba(0,0,0,0.5)]">
             <div className="mx-auto h-1 w-20 rounded-full bg-white/10" />
             <p className="mt-5 text-center text-xs font-semibold uppercase tracking-[0.42em] text-white/45">
-              Ai castigat
+              You won
             </p>
 
             <div className={`mt-5 rounded-[28px] border p-5 ${tierStyles[selectedReward.tier]}`}>
@@ -568,7 +559,7 @@ export default function RouletteDemo() {
                 onClick={closeWinModal}
                 className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-bold uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
               >
-                Inchide
+                Close
               </button>
             </div>
           </div>

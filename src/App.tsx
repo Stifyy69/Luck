@@ -10,6 +10,7 @@ import ShowroomPage from './components/ShowroomPage';
 import InventoryPage from './components/InventoryPage';
 import OwnedAssetsPage from './components/OwnedAssetsPage';
 import PlayerStatusPage from './components/PlayerStatusPage';
+import MyProfilePage from './components/MyProfilePage';
 import AccountHud from './components/AccountHud';
 import { startGameSync } from './lib/gameSync';
 
@@ -22,6 +23,7 @@ type RoutePath =
   | '/inventory'
   | '/owned'
   | '/status'
+  | '/profile'
   | '/cnn'
   | '/gangs'
   | '/adminpanelv2';
@@ -35,6 +37,7 @@ const VALID_ROUTES: RoutePath[] = [
   '/inventory',
   '/owned',
   '/status',
+  '/profile',
   '/cnn',
   '/gangs',
   '/adminpanelv2',
@@ -82,7 +85,7 @@ export default function App() {
         type="button"
         onClick={() => setMenuOpen((current) => !current)}
         className="fixed left-2 top-4 z-[70] inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#ffd95a]/35 bg-[#3b2a2a]/90 text-white shadow-[0_18px_35px_rgba(0,0,0,0.35)] backdrop-blur md:hidden"
-        aria-label={menuOpen ? 'Închide meniul' : 'Deschide meniul'}
+        aria-label={menuOpen ? 'Close menu' : 'Open menu'}
       >
         <span className="text-lg leading-none">{menuOpen ? '◀' : '▶'}</span>
       </button>
@@ -102,14 +105,14 @@ export default function App() {
           onClick={() => goTo('/farmat')}
           className={`block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/farmat' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Cayo
+          Farm
         </button>
         <button
           type="button"
           onClick={() => goTo('/ruleta')}
           className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/ruleta' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Ruleta
+          Roulette
         </button>
         <button
           type="button"
@@ -140,14 +143,14 @@ export default function App() {
           onClick={() => goTo('/inventory')}
           className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/inventory' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Inventar
+          Inventory
         </button>
         <button
           type="button"
           onClick={() => goTo('/owned')}
           className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/owned' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Active
+          Owned
         </button>
         <button
           type="button"
@@ -155,6 +158,13 @@ export default function App() {
           className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/status' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
           Status
+        </button>
+        <button
+          type="button"
+          onClick={() => goTo('/profile')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/profile' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          My Profile
         </button>
         <button
           type="button"
@@ -190,6 +200,8 @@ export default function App() {
                     ? <OwnedAssetsPage />
                     : path === '/status'
                       ? <PlayerStatusPage />
+                      : path === '/profile'
+                        ? <MyProfilePage />
                 : path === '/gangs'
                   ? <GangsPage />
                   : path === '/cnn'

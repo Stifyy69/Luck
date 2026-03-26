@@ -35,11 +35,11 @@ const RARITY_COLOR: Record<string, string> = {
 };
 
 const RARITY_LABEL: Record<string, string> = {
-  BLUE: 'Albastru',
-  LIGHT_PURPLE: 'Mov Deschis',
-  DARK_PURPLE: 'Mov Închis',
-  RED: 'Roșu',
-  YELLOW: 'Galben',
+  BLUE: 'Blue',
+  LIGHT_PURPLE: 'Light Purple',
+  DARK_PURPLE: 'Dark Purple',
+  RED: 'Red',
+  YELLOW: 'Yellow',
 };
 
 const ASSET_EMOJI: Record<string, string> = {
@@ -91,21 +91,37 @@ export default function CNNMarketplace() {
   };
 
   const loadAll = useCallback(async () => {
+    setLoading(true);
     try {
-      const [playerData, listingsData, sellerData, buyerData] = await Promise.all([
+      const [playerData, listingsData, sellerData, buyerData] = await Promise.allSettled([
         api.bootstrap(playerId),
         api.marketListings(playerId),
         api.marketSeller(playerId),
         api.marketBuyer(playerId),
       ]);
-      setPlayer(playerData);
-      setListings(listingsData.listings);
-      setSellerListings(sellerData.listings as SellerListing[]);
-      setIncomingOffers(sellerData.incomingOffers as IncomingOffer[]);
-      setMyOffers(buyerData.offers);
+
+      if (playerData.status === 'fulfilled') setPlayer(playerData.value);
+      if (listingsData.status === 'fulfilled') setListings(listingsData.value.listings ?? []);
+      if (sellerData.status === 'fulfilled') {
+        setSellerListings((sellerData.value.listings ?? []) as SellerListing[]);
+        setIncomingOffers((sellerData.value.incomingOffers ?? []) as IncomingOffer[]);
+      } else {
+        setSellerListings([]);
+        setIncomingOffers([]);
+      }
+      if (buyerData.status === 'fulfilled') {
+        setMyOffers(buyerData.value.offers ?? []);
+      } else {
+        setMyOffers([]);
+      }
+
+      // If listings endpoint is down, keep page usable without hard error toast.
+      if (listingsData.status === 'rejected') {
+        setListings([]);
+      }
     } catch (e) {
       console.error('CNN load error', e);
-      showPopup('Eroare la încărcarea marketplace-ului.', true);
+      showPopup('Marketplace load failed.', true);
     } finally {
       setLoading(false);
     }
@@ -123,10 +139,10 @@ export default function CNNMarketplace() {
     setBusy(true);
     try {
       await api.marketBuy(playerId, listing.id);
-      showPopup(`✅ Ai cumpărat ${listing.assetName} cu ${fmt(listing.askPrice)}!`);
+      showPopup(`Purchased ${listing.assetName} for ${fmt(listing.askPrice)}.`);
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Eroare la cumpărare'), true);
+      showPopup(String(e instanceof Error ? e.message : 'Purchase failed'), true);
     } finally {
       setBusy(false);
     }
@@ -135,16 +151,16 @@ export default function CNNMarketplace() {
   const handleOfferSubmit = async () => {
     if (!offerModal || busy) return;
     const price = parseInt(offerPrice.replace(/\D/g, ''), 10);
-    if (!price || price <= 0) { showPopup('Introdu un preț valid.', true); return; }
+    if (!price || price <= 0) { showPopup('Enter a valid price.', true); return; }
     setBusy(true);
     try {
       await api.marketOffer(playerId, offerModal.listing.id, price);
-      showPopup(`✅ Ofertă de ${fmt(price)} trimisă!`);
+      showPopup(`Offer sent: ${fmt(price)}.`);
       setOfferModal(null);
       setOfferPrice('');
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Eroare la ofertă'), true);
+      showPopup(String(e instanceof Error ? e.message : 'Offer failed'), true);
     } finally {
       setBusy(false);
     }
@@ -155,10 +171,10 @@ export default function CNNMarketplace() {
     setBusy(true);
     try {
       const result = await api.marketOfferAccept(playerId, offerId);
-      showPopup(`✅ Ofertă acceptată! Ai primit ${fmt(result.soldFor ?? 0)}.`);
+      showPopup(`Offer accepted. You got ${fmt(result.soldFor ?? 0)}.`);
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Eroare la acceptare'), true);
+      showPopup(String(e instanceof Error ? e.message : 'Accept failed'), true);
     } finally {
       setBusy(false);
     }
@@ -169,10 +185,10 @@ export default function CNNMarketplace() {
     setBusy(true);
     try {
       await api.marketOfferReject(playerId, offerId);
-      showPopup('Ofertă respinsă.');
+      showPopup('Offer rejected.');
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Eroare la respingere'), true);
+      showPopup(String(e instanceof Error ? e.message : 'Reject failed'), true);
     } finally {
       setBusy(false);
     }
@@ -183,10 +199,10 @@ export default function CNNMarketplace() {
     setBusy(true);
     try {
       await api.marketListingCancel(playerId, listingId);
-      showPopup('Anunț retras.');
+      showPopup('Listing cancelled.');
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Eroare la retragere'), true);
+      showPopup(String(e instanceof Error ? e.message : 'Cancel failed'), true);
     } finally {
       setBusy(false);
     }
@@ -195,23 +211,23 @@ export default function CNNMarketplace() {
   const handleCreateListing = async () => {
     if (busy) return;
     const price = parseInt(createAskPrice.replace(/\D/g, ''), 10);
-    if (!price || price <= 0) { showPopup('Introdu un preț valid.', true); return; }
+    if (!price || price <= 0) { showPopup('Enter a valid price.', true); return; }
     if (createType !== 'VEHICLE' && createAssetId === null) {
-      showPopup('Selectează un item.', true); return;
+      showPopup('Select an item.', true); return;
     }
     if (createType === 'VEHICLE' && createAssetId === null) {
-      showPopup('Selectează o mașină.', true); return;
+      showPopup('Select a vehicle.', true); return;
     }
     setBusy(true);
     try {
       await api.marketList(playerId, createType, createAssetId, price);
-      showPopup('✅ Anunț publicat pe CNN!');
+      showPopup('Listing published on CNN.');
       setCreateAskPrice('');
       setCreateAssetId(null);
       setTab('myListings');
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Eroare la listare'), true);
+      showPopup(String(e instanceof Error ? e.message : 'Listing failed'), true);
     } finally {
       setBusy(false);
     }
@@ -222,10 +238,11 @@ export default function CNNMarketplace() {
     setBusy(true);
     try {
       await api.marketNpcRefresh();
-      showPopup('NPC sellers refreshed!');
+      showPopup('NPC sellers refreshed.');
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Eroare'), true);
+      // Soft fail: no noisy backend status message.
+      showPopup('Refresh unavailable.', true);
     } finally {
       setBusy(false);
     }
@@ -258,7 +275,7 @@ export default function CNNMarketplace() {
       <div className="flex min-h-screen items-center justify-center text-white/60">
         <div className="text-center">
           <div className="mb-3 text-4xl">📡</div>
-          <p className="text-sm font-bold uppercase tracking-widest">Se încarcă CNN Marketplace...</p>
+          <p className="text-sm font-bold uppercase tracking-widest">Loading CNN Marketplace...</p>
         </div>
       </div>
     );
@@ -283,15 +300,15 @@ export default function CNNMarketplace() {
       {offerModal && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="hud-panel w-full max-w-sm rounded-2xl p-6">
-            <h3 className="mb-1 text-lg font-black text-white">Trimite Ofertă</h3>
+            <h3 className="mb-1 text-lg font-black text-white">Send Offer</h3>
             <p className="mb-4 text-sm text-white/60">
-              {offerModal.listing.assetName} — preț cerut{' '}
+              {offerModal.listing.assetName} — asking price{' '}
               <span className="font-bold text-[#ffd95a]">{fmt(offerModal.listing.askPrice)}</span>
             </p>
             <input
               type="number"
               className="mb-4 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-[#ffd95a]/50"
-              placeholder="Suma ofertată ($)"
+              placeholder="Offer amount ($)"
               value={offerPrice}
               onChange={(e) => setOfferPrice(e.target.value)}
               min={1}
@@ -303,14 +320,14 @@ export default function CNNMarketplace() {
                 disabled={busy}
                 className="btn-primary flex-1 rounded-xl py-2 text-sm font-bold disabled:opacity-50"
               >
-                Trimite
+                Send
               </button>
               <button
                 type="button"
                 onClick={() => { setOfferModal(null); setOfferPrice(''); }}
                 className="flex-1 rounded-xl border border-white/20 py-2 text-sm font-bold text-white/70 hover:bg-white/5"
               >
-                Anulează
+                Cancel
               </button>
             </div>
           </div>
@@ -325,11 +342,11 @@ export default function CNNMarketplace() {
               <span className="text-2xl">📡</span>
               <h1 className="text-2xl font-black tracking-tight text-white">CNN Marketplace</h1>
             </div>
-            <p className="text-xs text-white/50">Cumpără, vinde, negociază — piața live</p>
+            <p className="text-xs text-white/50">Buy, sell, negotiate — live market.</p>
           </div>
           {player && (
             <div className="ml-auto rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-right">
-              <p className="text-xs text-white/50">Balanță</p>
+              <p className="text-xs text-white/50">Balance</p>
               <p className="text-lg font-black text-[#ffd95a]">{fmt(player.cleanMoney)}</p>
             </div>
           )}
@@ -339,10 +356,10 @@ export default function CNNMarketplace() {
         <div className="mb-5 flex flex-wrap gap-2">
           {(
             [
-              { key: 'listings', label: '🏪 Anunțuri Active', count: activeListings.length },
-              { key: 'myListings', label: '📋 Anunțurile Mele', count: ownListings.length, badge: pendingIncoming.length },
-              { key: 'myOffers', label: '💬 Ofertele Mele', count: myOffers.length },
-              { key: 'createListing', label: '➕ Publică Anunț' },
+              { key: 'listings', label: '🏪 Active Listings', count: activeListings.length },
+              { key: 'myListings', label: '📋 My Listings', count: ownListings.length, badge: pendingIncoming.length },
+              { key: 'myOffers', label: '💬 My Offers', count: myOffers.length },
+              { key: 'createListing', label: '➕ Create Listing' },
             ] as Array<{ key: Tab; label: string; count?: number; badge?: number }>
           ).map(({ key, label, count, badge }) => (
             <button
@@ -383,8 +400,8 @@ export default function CNNMarketplace() {
             {activeListings.length === 0 ? (
               <div className="rounded-2xl border border-white/10 bg-white/5 py-16 text-center text-white/40">
                 <p className="mb-2 text-4xl">📭</p>
-                <p className="font-bold">Nu există anunțuri active momentan.</p>
-                <p className="mt-1 text-sm">Revino mai târziu sau publică primul anunț!</p>
+                <p className="font-bold">No active listings right now.</p>
+                <p className="mt-1 text-sm">Check back later or publish the first one.</p>
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -409,7 +426,7 @@ export default function CNNMarketplace() {
             {pendingIncoming.length > 0 && (
               <div>
                 <h2 className="mb-3 text-sm font-black uppercase tracking-widest text-[#ffd95a]">
-                  📨 Oferte Primite ({pendingIncoming.length})
+                  📨 Incoming Offers ({pendingIncoming.length})
                 </h2>
                 <div className="space-y-2">
                   {pendingIncoming.map((offer) => (
@@ -420,7 +437,7 @@ export default function CNNMarketplace() {
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-bold text-white">{offer.assetName}</p>
                         <p className="text-xs text-white/50">
-                          De la:{' '}
+                          From:{' '}
                           <span className="font-bold text-white/70">
                             {offer.buyerPlayerId}
                           </span>
@@ -428,7 +445,7 @@ export default function CNNMarketplace() {
                       </div>
                       <div className="text-right">
                         <p className="font-black text-green-400">{fmt(offer.offeredPrice)}</p>
-                        <p className="text-xs text-white/40">preț cerut: {fmt(offer.askPrice)}</p>
+                        <p className="text-xs text-white/40">ask: {fmt(offer.askPrice)}</p>
                       </div>
                       <div className="flex gap-2">
                         <button
@@ -445,7 +462,7 @@ export default function CNNMarketplace() {
                           disabled={busy}
                           className="rounded-lg bg-red-700/60 px-3 py-1.5 text-xs font-bold text-red-200 hover:bg-red-600/60 disabled:opacity-50"
                         >
-                          ✗ Refuz
+                          ✗ Reject
                         </button>
                       </div>
                     </div>
@@ -457,12 +474,12 @@ export default function CNNMarketplace() {
             {/* My active listings */}
             <div>
               <h2 className="mb-3 text-sm font-black uppercase tracking-widest text-white/60">
-                📋 Anunțurile Mele Active ({ownListings.length})
+                📋 My Active Listings ({ownListings.length})
               </h2>
               {ownListings.length === 0 ? (
                 <div className="rounded-xl border border-white/10 bg-white/5 py-10 text-center text-white/40">
                   <p className="text-3xl mb-2">📭</p>
-                  <p className="font-bold text-sm">Nu ai anunțuri active.</p>
+                  <p className="font-bold text-sm">You have no active listings.</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -483,7 +500,7 @@ export default function CNNMarketplace() {
                         <div className="text-right">
                           <p className="font-black text-[#ffd95a]">{fmt(listing.askPrice)}</p>
                           {pendingCount > 0 && (
-                            <p className="text-xs text-orange-400 font-bold">{pendingCount} ofertă(e)</p>
+                            <p className="text-xs text-orange-400 font-bold">{pendingCount} offer(s)</p>
                           )}
                         </div>
                         <button
@@ -505,7 +522,7 @@ export default function CNNMarketplace() {
             {sellerListings.filter((l) => l.status !== 'ACTIVE').length > 0 && (
               <div>
                 <h2 className="mb-3 text-sm font-black uppercase tracking-widest text-white/40">
-                  Istoric
+                  History
                 </h2>
                 <div className="space-y-1">
                   {sellerListings
@@ -540,12 +557,12 @@ export default function CNNMarketplace() {
         {tab === 'myOffers' && (
           <div>
             <h2 className="mb-3 text-sm font-black uppercase tracking-widest text-white/60">
-              💬 Ofertele Mele ({myOffers.length})
+              💬 My Offers ({myOffers.length})
             </h2>
             {myOffers.length === 0 ? (
               <div className="rounded-xl border border-white/10 bg-white/5 py-10 text-center text-white/40">
                 <p className="text-3xl mb-2">💬</p>
-                <p className="font-bold text-sm">Nu ai trimis nicio ofertă.</p>
+                <p className="font-bold text-sm">You have not sent any offers.</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -557,7 +574,7 @@ export default function CNNMarketplace() {
                     <span className="text-2xl">{ASSET_EMOJI[offer.assetType]}</span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-bold text-white">{offer.assetName}</p>
-                      <p className="text-xs text-white/40">Preț cerut: {fmt(offer.askPrice)}</p>
+                      <p className="text-xs text-white/40">Ask: {fmt(offer.askPrice)}</p>
                     </div>
                     <div className="text-right">
                       <p className="font-black text-white">{fmt(offer.offeredPrice)}</p>
@@ -574,11 +591,11 @@ export default function CNNMarketplace() {
         {tab === 'createListing' && (
           <div className="mx-auto max-w-md">
             <div className="hud-panel rounded-2xl p-6">
-              <h2 className="mb-5 text-lg font-black text-white">📢 Publică Anunț Nou</h2>
+              <h2 className="mb-5 text-lg font-black text-white">📢 Create New Listing</h2>
 
               {/* Asset type selector */}
               <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-white/50">
-                Tip Asset
+                Asset Type
               </label>
               <div className="mb-4 flex gap-2">
                 {(['VEHICLE', 'CLOTHING', 'XENON_VEHICLE'] as MarketAssetType[]).map((t) => (
@@ -592,7 +609,7 @@ export default function CNNMarketplace() {
                         : 'border-white/10 text-white/50 hover:bg-white/5'
                     }`}
                   >
-                    {ASSET_EMOJI[t]} {t === 'XENON_VEHICLE' ? 'Xenon' : t === 'VEHICLE' ? 'Mașină' : 'Haină'}
+                    {ASSET_EMOJI[t]} {t === 'XENON_VEHICLE' ? 'Xenon' : t === 'VEHICLE' ? 'Vehicle' : 'Clothing'}
                   </button>
                 ))}
               </div>
@@ -601,11 +618,11 @@ export default function CNNMarketplace() {
               {createType === 'VEHICLE' && (
                 <>
                   <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-white/50">
-                    Selectează Mașina
+                    Select Vehicle
                   </label>
                   {listableVehicles.length === 0 ? (
                     <p className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/40">
-                      Nu ai mașini de vânzare.
+                      You have no vehicles to list.
                     </p>
                   ) : (
                     <select
@@ -613,10 +630,10 @@ export default function CNNMarketplace() {
                       value={createAssetId ?? ''}
                       onChange={(e) => setCreateAssetId(e.target.value ? Number(e.target.value) : null)}
                     >
-                      <option value="">— Alege mașina —</option>
+                      <option value="">— Select vehicle —</option>
                       {listableVehicles.map((v) => (
                         <option key={v.id} value={v.id}>
-                          {v.modelName} ({fmt(v.purchasePrice)} cumpărat)
+                          {v.modelName} (paid {fmt(v.purchasePrice)})
                         </option>
                       ))}
                     </select>
@@ -627,11 +644,11 @@ export default function CNNMarketplace() {
               {createType === 'CLOTHING' && (
                 <>
                   <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-white/50">
-                    Selectează Haina
+                    Select Clothing
                   </label>
                   {listableClothing.length === 0 ? (
                     <p className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/40">
-                      Nu ai haine de vânzare.
+                      You have no clothing to list.
                     </p>
                   ) : (
                     <select
@@ -639,7 +656,7 @@ export default function CNNMarketplace() {
                       value={createAssetId ?? ''}
                       onChange={(e) => setCreateAssetId(e.target.value ? Number(e.target.value) : null)}
                     >
-                      <option value="">— Alege haina —</option>
+                      <option value="">— Select clothing —</option>
                       {listableClothing.map((item) => {
                         const meta = item.metadata as Record<string, string>;
                         const rarity = RARITY_LABEL[meta.rarity] || meta.rarity;
@@ -657,11 +674,11 @@ export default function CNNMarketplace() {
               {createType === 'XENON_VEHICLE' && (
                 <>
                   <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-white/50">
-                    Selectează Xenon
+                    Select Xenon
                   </label>
                   {listableXenon.length === 0 ? (
                     <p className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/40">
-                      Nu ai Xenon Vehicul în inventar.
+                      You have no Xenon item in inventory.
                     </p>
                   ) : (
                     <select
@@ -669,10 +686,10 @@ export default function CNNMarketplace() {
                       value={createAssetId ?? ''}
                       onChange={(e) => setCreateAssetId(e.target.value ? Number(e.target.value) : null)}
                     >
-                      <option value="">— Alege Xenon —</option>
+                      <option value="">— Select xenon —</option>
                       {listableXenon.map((item) => (
                         <option key={item.id} value={item.id}>
-                          Xenon Vehicul #{item.id}
+                          Xenon Vehicle #{item.id}
                         </option>
                       ))}
                     </select>
@@ -682,7 +699,7 @@ export default function CNNMarketplace() {
 
               {/* Ask price */}
               <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-white/50">
-                Preț Cerut ($)
+                Ask Price ($)
               </label>
               <input
                 type="number"
@@ -699,7 +716,7 @@ export default function CNNMarketplace() {
                 disabled={busy}
                 className="btn-primary w-full rounded-xl py-3 font-black uppercase tracking-wider disabled:opacity-50"
               >
-                📢 Publică pe CNN
+                📢 Publish on CNN
               </button>
             </div>
           </div>
@@ -755,7 +772,7 @@ function ListingCard({
                 : 'bg-blue-900/60 text-blue-300'
             }`}
           >
-            {listing.sellerType === 'NPC' ? '🤖 NPC' : '👤 Jucător'}
+            {listing.sellerType === 'NPC' ? '🤖 NPC' : '👤 Player'}
           </span>
         </div>
         <span className="text-xl">{ASSET_EMOJI[listing.assetType]}</span>
@@ -776,7 +793,7 @@ function ListingCard({
 
       {/* Price */}
       <div className="mb-3 rounded-xl border border-[#ffd95a]/20 bg-[#ffd95a]/5 p-2 text-center">
-        <p className="text-xs text-white/40">Preț Cerut</p>
+        <p className="text-xs text-white/40">Ask Price</p>
         <p className="text-xl font-black text-[#ffd95a]">{fmt(listing.askPrice)}</p>
       </div>
 
@@ -788,7 +805,7 @@ function ListingCard({
           disabled={busy}
           className="btn-primary flex-1 rounded-xl py-2 text-sm font-bold disabled:opacity-50"
         >
-          💳 Cumpără
+          💳 Buy
         </button>
         <button
           type="button"
@@ -796,7 +813,7 @@ function ListingCard({
           disabled={busy}
           className="flex-1 rounded-xl border border-[#ffd95a]/30 py-2 text-sm font-bold text-[#ffd95a] hover:bg-[#ffd95a]/10 disabled:opacity-50"
         >
-          💬 Oferă
+          💬 Offer
         </button>
       </div>
     </div>
@@ -805,9 +822,9 @@ function ListingCard({
 
 function OfferStatusBadge({ status }: { status: string }) {
   const config = {
-    PENDING: { label: 'În așteptare', class: 'bg-yellow-900/60 text-yellow-300' },
-    ACCEPTED: { label: 'Acceptat ✅', class: 'bg-green-900/60 text-green-300' },
-    REJECTED: { label: 'Respins ✗', class: 'bg-red-900/60 text-red-300' },
+    PENDING: { label: 'Pending', class: 'bg-yellow-900/60 text-yellow-300' },
+    ACCEPTED: { label: 'Accepted ✅', class: 'bg-green-900/60 text-green-300' },
+    REJECTED: { label: 'Rejected ✗', class: 'bg-red-900/60 text-red-300' },
   }[status] ?? { label: status, class: 'bg-white/10 text-white/60' };
 
   return (
