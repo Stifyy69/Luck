@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import SharedStatsPanel from './SharedStatsPanel';
 import PageDisclaimer from './PageDisclaimer';
+import { usePlayer } from '../hooks/usePlayer';
+import { api } from '../lib/api';
 
 type ActionKey = 'collect_leaves' | 'process_pack' | 'refine_pack';
 type PopupType = 'success' | 'danger' | 'info';
@@ -58,6 +60,7 @@ const actions: Record<ActionKey, { title: string; duration: number; risk: number
 };
 
 export default function FarmatPage() {
+  const { player, playerId, refresh } = usePlayer();
   const saved = typeof window !== 'undefined' ? loadGameState() : null;
 
   const [frunze, setLeaves] = useState(saved?.frunze ?? 0);
@@ -65,6 +68,7 @@ export default function FarmatPage() {
   const [plicuriAlbastre, setPlicuriAlbastre] = useState(saved?.plicuriAlbastre ?? 0);
   const [baniMurdari, setBaniMurdari] = useState(saved?.baniMurdari ?? 0);
   const [baniCurati, setBaniCurati] = useState(saved?.cashBalance ?? saved?.baniCurati ?? 1_000_000);
+  const didReconcileCash = useRef(false);
 
   const [activeAction, setActiveAction] = useState<ActionKey | null>(null);
   const [timer, setTimer] = useState(0);
@@ -88,6 +92,36 @@ export default function FarmatPage() {
     setRouletteSpent(latest.rouletteSpent ?? 0);
     setRouletteWon(latest.rouletteWon ?? 0);
   }, []);
+
+  useEffect(() => {
+    if (!player || didReconcileCash.current) return;
+    didReconcileCash.current = true;
+
+    const backendCash = Number(player.cleanMoney ?? 0);
+    const latest = loadGameState() || {};
+    const localCash = Number(latest.cashBalance ?? latest.baniCurati ?? backendCash);
+
+    if (localCash > backendCash) {
+      const delta = localCash - backendCash;
+      api.playerCashAdjust(playerId, delta)
+        .then((result) => {
+          setBaniCurati(Number(result.cleanMoney));
+          const newest = loadGameState() || {};
+          saveGameState({
+            ...newest,
+            cashBalance: Number(result.cleanMoney),
+            baniCurati: Number(result.cleanMoney),
+          });
+          refresh();
+        })
+        .catch(() => {
+          setBaniCurati(backendCash);
+        });
+      return;
+    }
+
+    setBaniCurati(backendCash);
+  }, [player, playerId, refresh]);
 
   useEffect(() => {
     const existing = loadGameState() || {};
@@ -227,10 +261,25 @@ export default function FarmatPage() {
     startAction(key);
   };
 
-  const confirmConvertAndRun = () => {
+  const confirmConvertAndRun = async () => {
     if (!confirmConvert || isConverting) return;
     setIsConverting(true);
-    setBaniCurati((current) => current - confirmConvert.cleanCost);
+    try {
+      const adjusted = await api.playerCashAdjust(playerId, -confirmConvert.cleanCost);
+      setBaniCurati(Number(adjusted.cleanMoney));
+      const latest = loadGameState() || {};
+      saveGameState({
+        ...latest,
+        cashBalance: Number(adjusted.cleanMoney),
+        baniCurati: Number(adjusted.cleanMoney),
+      });
+      refresh();
+    } catch {
+      pushPopup('danger', 'You do not have enough clean money for materials.');
+      setIsConverting(false);
+      return;
+    }
+
     const actionKey = confirmConvert.key;
     const convertedDirtyCost = confirmConvert.needed;
     setConfirmConvert(null);
@@ -240,13 +289,25 @@ export default function FarmatPage() {
     }, 0);
   };
 
-  const convertDirtyToClean = () => {
+  const convertDirtyToClean = async () => {
     if (activeAction) return;
     if (baniMurdari <= 0) return;
     const gainClean = Math.floor(baniMurdari * 0.65);
-    setBaniMurdari(0);
-    setBaniCurati((current) => current + gainClean);
-    pushPopup('success', `Conversion successful: +${gainClean.toLocaleString('en-US')} clean money.`);
+    try {
+      const adjusted = await api.playerCashAdjust(playerId, gainClean);
+      setBaniMurdari(0);
+      setBaniCurati(Number(adjusted.cleanMoney));
+      const latest = loadGameState() || {};
+      saveGameState({
+        ...latest,
+        cashBalance: Number(adjusted.cleanMoney),
+        baniCurati: Number(adjusted.cleanMoney),
+      });
+      refresh();
+      pushPopup('success', `Conversion successful: +${gainClean.toLocaleString('en-US')} clean money.`);
+    } catch {
+      pushPopup('danger', 'Could not sync conversion with server.');
+    }
   };
 
   const sellBulk = () => {

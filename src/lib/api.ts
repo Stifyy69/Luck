@@ -14,6 +14,7 @@ import type {
   MarketActionResult,
   MarketAssetType,
   PlayerProfileResponse,
+  MarketListing,
 } from '../types/game';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -85,8 +86,20 @@ export const api = {
   marketList: (playerId: string, assetType: MarketAssetType, assetRefId: number | null, askPrice: number) =>
     post<MarketListResult>('/api/market/list', { playerId, assetType, assetRefId, askPrice }),
 
-  marketOffer: (playerId: string, listingId: number, offeredPrice: number) =>
-    post<MarketOfferResult>('/api/market/offer', { playerId, listingId, offeredPrice }),
+  marketOffer: (playerId: string, listingId: number, offeredPrice: number, listingHint?: Partial<MarketListing>) =>
+    post<MarketOfferResult>('/api/market/offer', {
+      playerId,
+      listingId,
+      offeredPrice,
+      listingHint: listingHint
+        ? {
+            sellerType: listingHint.sellerType,
+            sellerPlayerId: listingHint.sellerPlayerId,
+            assetType: listingHint.assetType,
+            assetRefId: listingHint.assetRefId,
+          }
+        : null,
+    }),
 
   marketOfferAccept: (playerId: string, offerId: number) =>
     post<MarketActionResult>('/api/market/offer/accept', { playerId, offerId }),
@@ -97,8 +110,19 @@ export const api = {
   marketOfferCancel: (playerId: string, offerId: number) =>
     post<{ ok: boolean }>('/api/market/offer/cancel', { playerId, offerId }),
 
-  marketBuy: (playerId: string, listingId: number) =>
-    post<MarketActionResult>('/api/market/buy', { playerId, listingId }),
+  marketBuy: (playerId: string, listingId: number, listingHint?: Partial<MarketListing>) =>
+    post<MarketActionResult>('/api/market/buy', {
+      playerId,
+      listingId,
+      listingHint: listingHint
+        ? {
+            sellerType: listingHint.sellerType,
+            sellerPlayerId: listingHint.sellerPlayerId,
+            assetType: listingHint.assetType,
+            assetRefId: listingHint.assetRefId,
+          }
+        : null,
+    }),
 
   marketSeller: (playerId: string) =>
     get<MarketSellerResponse>('/api/market/seller', { playerId }),
@@ -117,4 +141,7 @@ export const api = {
 
   playerRename: (playerId: string, displayName: string) =>
     post<{ ok: boolean; displayName: string }>('/api/player/profile/name', { playerId, displayName }),
+
+  playerCashAdjust: (playerId: string, delta: number) =>
+    post<{ ok: boolean; cleanMoney: number }>('/api/player/cash/adjust', { playerId, delta }),
 };

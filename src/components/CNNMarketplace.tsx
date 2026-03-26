@@ -156,11 +156,17 @@ export default function CNNMarketplace() {
     if (busy) return;
     setBusy(true);
     try {
-      await api.marketBuy(playerId, listing.id);
+      await api.marketBuy(playerId, listing.id, listing);
       showPopup(`Purchased ${listing.assetName} for ${fmt(listing.askPrice)}.`);
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Purchase failed'), true);
+      const message = String(e instanceof Error ? e.message : 'Purchase failed');
+      if (message.toLowerCase().includes('listing unavailable') || message.toLowerCase().includes('listing not found')) {
+        showPopup('Listing just changed. Refreshing market...', true);
+        await loadAll();
+      } else {
+        showPopup(message, true);
+      }
     } finally {
       setBusy(false);
     }
@@ -172,7 +178,7 @@ export default function CNNMarketplace() {
     if (!price || price <= 0) { showPopup('Enter a valid price.', true); return; }
     setBusy(true);
     try {
-      const result = await api.marketOffer(playerId, offerModal.listing.id, price);
+      const result = await api.marketOffer(playerId, offerModal.listing.id, price, offerModal.listing);
       const negotiation = result.negotiation as NpcNegotiationResult | null | undefined;
 
       if (negotiation?.isNpc) {
@@ -210,7 +216,15 @@ export default function CNNMarketplace() {
 
       await loadAll();
     } catch (e) {
-      showPopup(String(e instanceof Error ? e.message : 'Offer failed'), true);
+      const message = String(e instanceof Error ? e.message : 'Offer failed');
+      if (message.toLowerCase().includes('listing unavailable') || message.toLowerCase().includes('listing not found')) {
+        showPopup('Listing just changed. Refreshing market...', true);
+        setOfferModal(null);
+        setOfferPrice('');
+        await loadAll();
+      } else {
+        showPopup(message, true);
+      }
     } finally {
       setBusy(false);
     }

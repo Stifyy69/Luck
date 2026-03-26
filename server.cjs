@@ -368,7 +368,7 @@ function randomInt(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
 }
 
-const NPC_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
+const NPC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 function getNpcDynamicMultiplier() {
   // Common pricing swings: -20% to +40%, with rare hype spikes up to +200%.
@@ -678,6 +678,45 @@ async function buildMarketListingView(db, listing, viewerPlayerId) {
     isOwn: listing.seller_player_id === viewerPlayerId,
     createdAt: asIso(listing.created_at),
   };
+}
+
+async function findActiveListingByHint(db, hint) {
+  if (!hint) return null;
+
+  const assetType = String(hint.assetType || '');
+  const assetRefId = Number(hint.assetRefId);
+  if (!assetType || !Number.isInteger(assetRefId) || assetRefId <= 0) return null;
+
+  if (String(hint.sellerType || '').toUpperCase() === 'NPC') {
+    const npcMatch = await db.query(
+      `SELECT *
+       FROM market_listings
+       WHERE status = 'ACTIVE'
+         AND seller_npc_id IS NOT NULL
+         AND asset_type = $1
+         AND asset_ref_id = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [assetType, assetRefId],
+    );
+    return npcMatch.rows[0] || null;
+  }
+
+  const sellerPlayerId = String(hint.sellerPlayerId || '');
+  if (!sellerPlayerId) return null;
+
+  const playerMatch = await db.query(
+    `SELECT *
+     FROM market_listings
+     WHERE status = 'ACTIVE'
+       AND seller_player_id = $1
+       AND asset_type = $2
+       AND asset_ref_id = $3
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [sellerPlayerId, assetType, assetRefId],
+  );
+  return playerMatch.rows[0] || null;
 }
 
 async function settleListingSale(db, listing, buyerPlayerId, salePrice, acceptedOfferId = null) {
@@ -1096,7 +1135,7 @@ app.get('/api/market/posts', requireDb, async (_req, res) => {
 
 app.post('/api/market/buy', requireDb, async (req, res) => {
   try {
-    const { playerId, listingId } = req.body || {};
+    const { playerId, listingId, listingHint } = req.body || {};
     const normalizedListingId = Number(listingId);
     if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0) {
       return res.status(400).json({ error: 'missing fields' });
@@ -1108,8 +1147,11 @@ app.post('/api/market/buy', requireDb, async (req, res) => {
         `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
         [normalizedListingId],
       );
-      const listing = listingResult.rows[0];
-      if (!listing) throw new Error('listing not found');
+      let listing = listingResult.rows[0];
+      if (!listing) {
+        listing = await findActiveListingByHint(db, listingHint);
+      }
+      if (!listing) throw new Error('listing unavailable');
 
       await settleListingSale(db, listing, playerId, Number(listing.ask_price));
       return Number(listing.ask_price);
@@ -1123,7 +1165,7 @@ app.post('/api/market/buy', requireDb, async (req, res) => {
 
 app.post('/api/market/offer', requireDb, async (req, res) => {
   try {
-    const { playerId, listingId, offeredPrice } = req.body || {};
+    const { playerId, listingId, offeredPrice, listingHint } = req.body || {};
     const normalizedListingId = Number(listingId);
     const normalizedOfferPrice = Math.floor(Number(offeredPrice));
     if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0 || !Number.isFinite(normalizedOfferPrice) || normalizedOfferPrice <= 0) {
@@ -1136,8 +1178,11 @@ app.post('/api/market/offer', requireDb, async (req, res) => {
         `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
         [normalizedListingId],
       );
-      const listing = listingResult.rows[0];
-      if (!listing) throw new Error('listing not found');
+      let listing = listingResult.rows[0];
+      if (!listing) {
+        listing = await findActiveListingByHint(db, listingHint);
+      }
+      if (!listing) throw new Error('listing unavailable');
       if (listing.seller_player_id === playerId) throw new Error('cannot offer on your own listing');
 
       const buyerResult = await db.query(`SELECT clean_money FROM players WHERE player_id = $1`, [playerId]);
@@ -1668,6 +1713,40 @@ app.post('/api/player/profile/name', requireDb, async (req, res) => {
     res.json({ ok: true, displayName: safeName });
   } catch (error) {
     res.status(500).json({ error: 'profile update failed' });
+  }
+});
+
+app.post('/api/player/cash/adjust', requireDb, async (req, res) => {
+  try {
+    const { playerId, delta } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const normalizedDelta = Math.floor(Number(delta));
+    if (!Number.isFinite(normalizedDelta)) {
+      return res.status(400).json({ error: 'invalid delta' });
+    }
+
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const current = await db.query(
+        `SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`,
+        [playerId],
+      );
+      const currentMoney = Number(current.rows[0]?.clean_money ?? 0);
+      const nextMoney = currentMoney + normalizedDelta;
+      if (nextMoney < 0) throw new Error('insufficient funds');
+
+      const updated = await db.query(
+        `UPDATE players SET clean_money = $2, updated_at = NOW() WHERE player_id = $1 RETURNING clean_money`,
+        [playerId, nextMoney],
+      );
+
+      return Number(updated.rows[0].clean_money);
+    });
+
+    res.json({ ok: true, cleanMoney: result });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'cash adjust failed' });
   }
 });
 

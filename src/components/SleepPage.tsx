@@ -76,7 +76,6 @@ export default function SleepPage() {
       if (sleepEndsAt > 0 && sleepEndsAt <= now && !latest.sleepRewardClaimed) {
         const multiplier = Number(latest.sleepRewardMultiplier ?? 1);
         const reward = 300_000 * multiplier;
-        const nextCash = (latest.cashBalance ?? 1_000_000) + reward;
         const nextSleepTime = (latest.timeSleep ?? 0) + 24;
         const nextCooldownUntil = now + 30_000;
         const nextSleepCount = (latest.sleepCount ?? 0) + 1;
@@ -84,8 +83,8 @@ export default function SleepPage() {
 
         saveGameState({
           ...latest,
-          cashBalance: nextCash,
-          baniCurati: nextCash,
+          cashBalance: Number(player?.cleanMoney ?? latest.cashBalance ?? 0),
+          baniCurati: Number(player?.cleanMoney ?? latest.cashBalance ?? 0),
           timeSleep: nextSleepTime,
           sleepCount: nextSleepCount,
           sleepMoney: nextSleepMoney,
@@ -93,6 +92,21 @@ export default function SleepPage() {
           sleepRewardMultiplier: 1,
           sleepCooldownUntil: nextCooldownUntil,
         });
+
+        (async () => {
+          try {
+            const adjusted = await api.playerCashAdjust(playerId, reward);
+            const newest = loadGameState() || {};
+            saveGameState({
+              ...newest,
+              cashBalance: Number(adjusted.cleanMoney),
+              baniCurati: Number(adjusted.cleanMoney),
+            });
+            refresh();
+          } catch {
+            setPopup('Sleep finished, but cash sync failed. Retry page refresh.');
+          }
+        })();
 
         setPopup(`Sleep completed. +${reward.toLocaleString('en-US')} clean money. 30s cooldown.`);
         window.setTimeout(() => setPopup(null), 2500);
