@@ -14,7 +14,7 @@ export default function MyProfilePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const displayName = String(player?.displayName || player?.playerId || playerId);
+  const displayName = String(player?.displayName || 'Player');
 
   const openRename = () => {
     setNameInput(displayName);

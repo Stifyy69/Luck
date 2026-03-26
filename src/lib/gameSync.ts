@@ -53,14 +53,15 @@ function buildStatsPayload(state: Record<string, unknown>) {
 }
 
 export function startGameSync() {
-  const playerId = getPlayerId();
   let lastHash = '';
+
+  const currentPlayerId = () => getPlayerId();
 
   const heartbeat = () => {
     fetch('/api/activity/heartbeat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId, path: window.location.pathname }),
+      body: JSON.stringify({ playerId: currentPlayerId(), path: window.location.pathname }),
       keepalive: true,
     }).catch(() => {});
   };
@@ -77,7 +78,7 @@ export function startGameSync() {
     fetch('/api/stats/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId, stats, path: window.location.pathname }),
+      body: JSON.stringify({ playerId: currentPlayerId(), stats, path: window.location.pathname }),
       keepalive: true,
     }).catch(() => {});
   };

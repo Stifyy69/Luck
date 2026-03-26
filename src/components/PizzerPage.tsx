@@ -36,7 +36,7 @@ export default function PizzerPage() {
 
   const pushPopup = useCallback((text: string, isError = false) => {
     setPopup({ text, isError });
-    window.setTimeout(() => setPopup(null), 2600);
+    window.setTimeout(() => setPopup(null), 400);
   }, []);
 
   const loadState = useCallback(async () => {
@@ -185,13 +185,15 @@ export default function PizzerPage() {
   const canDeliver = state?.shiftState === 'DELIVERY_ACTIVE';
   const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
 
-  const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
+  const displayName = useMemo(() => String(player?.displayName || 'Player'), [player]);
 
   return (
     <div className="min-h-screen px-4 py-6 md:py-8">
       {popup && (
-        <div className={`fixed right-4 top-6 z-[80] max-w-sm rounded-xl border px-4 py-3 text-sm font-bold shadow-xl backdrop-blur ${popup.isError ? 'border-red-500/40 bg-red-900/80 text-red-200' : 'border-green-500/40 bg-green-900/80 text-green-200'}`}>
-          {popup.text}
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 p-4 backdrop-blur-[1px]">
+          <div className={`max-w-sm rounded-2xl border px-5 py-4 text-center text-sm font-bold shadow-2xl backdrop-blur ${popup.isError ? 'border-red-500/45 bg-red-950/90 text-red-200' : 'border-green-500/45 bg-green-950/90 text-green-200'}`}>
+            {popup.text}
+          </div>
         </div>
       )}
 

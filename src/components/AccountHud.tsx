@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
+const PLAYER_KEY = 'luck_player_id_v1';
 
 function signPayload(payload: unknown) {
   const raw = JSON.stringify(payload) + GAME_SALT;
@@ -28,7 +29,7 @@ function saveState(data: unknown) {
   } catch {}
 }
 
-type User = { id: number; username: string; email: string };
+type User = { id: number; username: string; email: string; playerId?: string };
 
 export default function AccountHud() {
   const [open, setOpen] = useState(false);
@@ -46,11 +47,36 @@ export default function AccountHud() {
     const payload = await response.json();
     setUser(payload.user);
 
+    const authPlayerId = String(payload.user?.playerId || '').trim();
+    if (authPlayerId) {
+      localStorage.setItem(PLAYER_KEY, authPlayerId);
+      window.dispatchEvent(new Event('luck-player-id-changed'));
+    }
+
     const stateResponse = await fetch('/api/account/state', { credentials: 'include' });
     if (stateResponse.ok) {
       const statePayload = await stateResponse.json();
-      if (statePayload?.state && Object.keys(statePayload.state).length > 0) {
-        saveState(statePayload.state);
+      const storedState = statePayload?.state && typeof statePayload.state === 'object' ? statePayload.state : {};
+      const nextState = {
+        ...storedState,
+        playerId: String(storedState?.playerId || authPlayerId || localStorage.getItem(PLAYER_KEY) || ''),
+      };
+      if (!nextState.playerId) {
+        nextState.playerId = `player_${String(payload.user?.id || Date.now()).padStart(6, '0')}`;
+      }
+      saveState(nextState);
+      if (nextState.playerId) {
+        localStorage.setItem(PLAYER_KEY, nextState.playerId);
+        window.dispatchEvent(new Event('luck-player-id-changed'));
+      }
+
+      if (Object.keys(nextState).length > 0) {
+        fetch('/api/account/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ state: nextState }),
+        }).catch(() => {});
       }
     }
   };

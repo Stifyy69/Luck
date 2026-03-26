@@ -57,6 +57,8 @@ const getLocation = (req) => ({
   city: req.headers['x-vercel-ip-city'] || null,
 });
 
+const createPlayerId = () => `player_${crypto.randomBytes(6).toString('hex')}`;
+
 async function initDb() {
   if (!pool) {
     throw new Error('DATABASE_URL is not configured');
@@ -271,9 +273,15 @@ async function initDb() {
       username TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
+      player_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS player_id TEXT;`);
+  await pool.query(`UPDATE users SET player_id = COALESCE(player_id, 'player_' || id::text) WHERE player_id IS NULL OR player_id = '';`);
+  await pool.query(`ALTER TABLE users ALTER COLUMN player_id SET NOT NULL;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_player_id_idx ON users(player_id);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_profiles (
@@ -1365,13 +1373,15 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
     const { username, email, password, passwordConfirm } = req.body || {};
     if (!username || !email || !password) return res.status(400).json({ error: 'missing fields' });
     if (password !== passwordConfirm) return res.status(400).json({ error: 'password mismatch' });
+    const playerId = createPlayerId();
 
     const inserted = await pool.query(
-      `INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email`,
-      [String(username).trim(), String(email).trim().toLowerCase(), String(password)],
+      `INSERT INTO users (username, email, password, player_id) VALUES ($1, $2, $3, $4) RETURNING id, username, email, player_id`,
+      [String(username).trim(), String(email).trim().toLowerCase(), String(password), playerId],
     );
     const user = inserted.rows[0];
     await pool.query(`INSERT INTO user_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [user.id]);
+    await ensurePlayer(pool, user.player_id);
 
     const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
     res.cookie('cityflow_user_token', signUserToken(`${user.id}|${expires}`), {
@@ -1381,7 +1391,7 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    return res.json({ ok: true, user });
+    return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
   } catch (error) {
     return res.status(400).json({ error: 'register failed' });
   }
@@ -1390,7 +1400,7 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
 app.post('/api/auth/login', requireDb, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
-  const result = await pool.query(`SELECT id, username, email, password FROM users WHERE username = $1`, [String(username).trim()]);
+  const result = await pool.query(`SELECT id, username, email, password, player_id FROM users WHERE username = $1`, [String(username).trim()]);
   const user = result.rows[0];
   if (!user || user.password !== password) return res.status(401).json({ error: 'invalid credentials' });
 
@@ -1402,7 +1412,7 @@ app.post('/api/auth/login', requireDb, async (req, res) => {
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 
-  return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email } });
+  return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
 });
 
 app.post('/api/auth/logout', (_req, res) => {
@@ -1413,9 +1423,10 @@ app.post('/api/auth/logout', (_req, res) => {
 app.get('/api/auth/me', requireDb, async (req, res) => {
   const userId = verifyUserToken(req.cookies.cityflow_user_token);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  const result = await pool.query(`SELECT id, username, email FROM users WHERE id = $1`, [userId]);
+  const result = await pool.query(`SELECT id, username, email, player_id FROM users WHERE id = $1`, [userId]);
   if (!result.rows[0]) return res.status(401).json({ error: 'unauthorized' });
-  res.json({ user: result.rows[0] });
+  const user = result.rows[0];
+  res.json({ user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
 });
 
 app.get('/api/account/state', requireDb, requireUser, async (req, res) => {
