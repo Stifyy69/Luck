@@ -250,6 +250,21 @@ async function initDb() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_fisher_progress (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      fisher_level INT NOT NULL DEFAULT 1,
+      fisher_xp INT NOT NULL DEFAULT 0,
+      fisher_total_catches INT NOT NULL DEFAULT 0,
+      fisher_perfect_catches INT NOT NULL DEFAULT 0,
+      fisher_best_streak INT NOT NULL DEFAULT 0,
+      fisher_total_earnings BIGINT NOT NULL DEFAULT 0,
+      fisher_rare_catches INT NOT NULL DEFAULT 0,
+      fisher_legendary_catches INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
   const requiredColumns = [
     ['farm_earned', "BIGINT NOT NULL DEFAULT 0"],
     ['time_pilot', "DOUBLE PRECISION NOT NULL DEFAULT 0"],
@@ -687,6 +702,329 @@ function enforcePizzerActionCooldown(session) {
     throw new Error('wait 0.5s between actions');
   }
   session.lastActionAt = now;
+}
+
+const FISHER_CONFIG = {
+  shiftStartCooldownMs: 15000,
+  optionsCooldownMs: 10000,
+  actionCooldownMs: 500,
+  reelTickCooldownMs: 220,
+  repairCooldownMs: 9000,
+  hookWindowMs: 1500,
+  castVisualDelayMs: 900,
+  hookVisualDelayMs: 900,
+  landVisualDelayMs: 950,
+  streakBonusPerStep: 0.05,
+  streakBonusMax: 0.2,
+  lineIntegrityPenaltyPerMiss: 16,
+  tensionRedThreshold: 88,
+  tensionFailThreshold: 100,
+  maxRedTicksBeforeSnap: 3,
+  randomPullEveryTicks: [2, 4],
+  randomPullWindowMs: 1300,
+  randomPullTensionPenalty: 18,
+  randomPullQualityPenalty: 0.08,
+  fishRarityRewardBase: {
+    COMMON: 220,
+    UNCOMMON: 360,
+    RARE: 680,
+    LEGENDARY: 1250,
+  },
+  fishRarityXpBase: {
+    COMMON: 22,
+    UNCOMMON: 34,
+    RARE: 52,
+    LEGENDARY: 80,
+  },
+  spots: {
+    COMMON: {
+      tier: 'COMMON',
+      label: 'Shore / Common Spot',
+      levelMin: 1,
+      difficulty: 'EASY',
+      castDifficulty: 'LOW',
+      reelDifficulty: 'LOW',
+      risk: 'LOW',
+      travelSecRange: [6, 12],
+      waitBiteSecRange: [4, 8],
+      spotMultiplier: 1,
+      rarityWeights: { COMMON: 0.7, UNCOMMON: 0.23, RARE: 0.06, LEGENDARY: 0.01 },
+      fishPool: ['caras', 'biban', 'macrou'],
+    },
+    BETTER: {
+      tier: 'BETTER',
+      label: 'River / Better Spot',
+      levelMin: 17,
+      difficulty: 'MEDIUM',
+      castDifficulty: 'MEDIUM',
+      reelDifficulty: 'MEDIUM',
+      risk: 'MEDIUM',
+      travelSecRange: [8, 14],
+      waitBiteSecRange: [5, 9],
+      spotMultiplier: 1.28,
+      rarityWeights: { COMMON: 0.45, UNCOMMON: 0.34, RARE: 0.17, LEGENDARY: 0.04 },
+      fishPool: ['stiuca', 'pastrav', 'clean'],
+    },
+    PREMIUM: {
+      tier: 'PREMIUM',
+      label: 'Deep / Premium Spot',
+      levelMin: 34,
+      difficulty: 'HARD',
+      castDifficulty: 'HIGH',
+      reelDifficulty: 'HIGH',
+      risk: 'HIGH',
+      travelSecRange: [10, 18],
+      waitBiteSecRange: [6, 11],
+      spotMultiplier: 1.65,
+      rarityWeights: { COMMON: 0.24, UNCOMMON: 0.32, RARE: 0.29, LEGENDARY: 0.15 },
+      fishPool: ['somn mare', 'ton', 'golden fish'],
+    },
+  },
+};
+
+const fisherSessions = new Map();
+
+function fisherXpForLevel(level) {
+  return pizzerXpForLevel(level);
+}
+
+function computeFisherLevel(xp) {
+  const safeXp = Math.max(0, Math.floor(Number(xp) || 0));
+  let level = 1;
+  for (let i = 2; i <= PIZZER_MAX_LEVEL; i += 1) {
+    if (safeXp >= fisherXpForLevel(i)) level = i;
+  }
+  return Math.min(PIZZER_MAX_LEVEL, level);
+}
+
+function fisherLevelStartXp(level) {
+  return fisherXpForLevel(level);
+}
+
+function fisherNextLevelXp(level) {
+  if (level >= PIZZER_MAX_LEVEL) return null;
+  return fisherXpForLevel(level + 1);
+}
+
+function fisherTierForLevel(level) {
+  if (level >= FISHER_CONFIG.spots.PREMIUM.levelMin) return 'PREMIUM';
+  if (level >= FISHER_CONFIG.spots.BETTER.levelMin) return 'BETTER';
+  return 'COMMON';
+}
+
+function fisherRodLabelForLevel(level) {
+  const tier = fisherTierForLevel(level);
+  if (tier === 'PREMIUM') return 'Pro Rod + Premium Bait';
+  if (tier === 'BETTER') return 'Improved Rod + Better Bait';
+  return 'Basic Rod + Common Bait';
+}
+
+function fisherAvailableSpotTiers(level) {
+  const result = ['COMMON'];
+  if (level >= FISHER_CONFIG.spots.BETTER.levelMin) result.push('BETTER');
+  if (level >= FISHER_CONFIG.spots.PREMIUM.levelMin) result.push('PREMIUM');
+  return result;
+}
+
+function fisherPickRarity(weights) {
+  const entries = Object.entries(weights);
+  const total = entries.reduce((acc, [, value]) => acc + Number(value), 0);
+  let roll = Math.random() * total;
+  for (const [key, value] of entries) {
+    roll -= Number(value);
+    if (roll <= 0) return key;
+  }
+  return entries[entries.length - 1][0];
+}
+
+function fisherCastScoreFromMeter(meter) {
+  const safe = Math.max(0, Math.min(100, Number(meter) || 0));
+  const distance = Math.abs(70 - safe);
+  if (distance <= 6) return { quality: 'PERFECT', score: 1, meter: safe };
+  if (distance <= 18) return { quality: 'GOOD', score: 0.78, meter: safe };
+  return { quality: 'BAD', score: 0.52, meter: safe };
+}
+
+function getFisherSession(playerId) {
+  return fisherSessions.get(playerId) || {
+    shiftState: 'IDLE',
+    streak: 0,
+    bestStreakShift: 0,
+    spotOptions: [],
+    optionsGeneratedAt: 0,
+    activeSpot: null,
+    activeCatch: null,
+    lastResult: null,
+    cooldownUntil: 0,
+    lastActionAt: 0,
+    lastReelTickAt: 0,
+    repairUntil: 0,
+    repairLabel: null,
+  };
+}
+
+function setFisherSession(playerId, session) {
+  fisherSessions.set(playerId, session);
+}
+
+function enforceFisherActionCooldown(session) {
+  const now = Date.now();
+  if (now - Number(session.lastActionAt || 0) < FISHER_CONFIG.actionCooldownMs) {
+    throw new Error('wait 0.5s between actions');
+  }
+  session.lastActionAt = now;
+}
+
+function enforceFisherReelTickCooldown(session) {
+  const now = Date.now();
+  if (now - Number(session.lastReelTickAt || 0) < FISHER_CONFIG.reelTickCooldownMs) {
+    throw new Error('reel tick too fast');
+  }
+  session.lastReelTickAt = now;
+}
+
+function enforceFisherRepairCooldown(session) {
+  const now = Date.now();
+  if (Number(session.repairUntil || 0) > now) {
+    const left = Math.max(1, Math.ceil((session.repairUntil - now) / 1000));
+    throw new Error(`line repair in progress (${left}s)`);
+  }
+  if (session.repairUntil && session.repairUntil <= now) {
+    session.repairUntil = 0;
+    session.repairLabel = null;
+  }
+}
+
+function fisherBuildSpotOption(level, tierKey = null) {
+  const available = fisherAvailableSpotTiers(level);
+  const chosenTier = tierKey || available[randomInt(0, available.length - 1)];
+  const spot = FISHER_CONFIG.spots[chosenTier];
+  const travelSec = randomInt(spot.travelSecRange[0], spot.travelSecRange[1]);
+  const waitBiteSec = randomInt(spot.waitBiteSecRange[0], spot.waitBiteSecRange[1]);
+  const rarity = fisherPickRarity(spot.rarityWeights);
+  const rarityReward = Number(FISHER_CONFIG.fishRarityRewardBase[rarity] || 220);
+  const rarityXp = Number(FISHER_CONFIG.fishRarityXpBase[rarity] || 22);
+  const estimatedReward = Math.floor(rarityReward * spot.spotMultiplier * levelPayoutMultiplier(level));
+  const estimatedXp = Math.floor(rarityXp + Math.max(0, level - 1) * 0.3);
+
+  return {
+    spotId: crypto.randomBytes(6).toString('hex'),
+    tier: chosenTier,
+    name: spot.label,
+    difficulty: spot.difficulty,
+    fishPool: [...spot.fishPool],
+    estimatedReward,
+    estimatedXp,
+    castDifficulty: spot.castDifficulty,
+    reelDifficulty: spot.reelDifficulty,
+    waitBiteEstimateSec: waitBiteSec,
+    failRisk: spot.risk,
+    travelSec,
+    rarityHint: rarity,
+  };
+}
+
+function fisherChooseFishName(rarity, tier) {
+  const common = ['caras', 'biban', 'macrou'];
+  const uncommon = ['stiuca', 'pastrav', 'avat'];
+  const rare = ['somn mare', 'ton', 'sturion'];
+  const legendary = ['golden fish', 'old relic catch', 'trophy monster'];
+  const pool = rarity === 'LEGENDARY' ? legendary : rarity === 'RARE' ? rare : rarity === 'UNCOMMON' ? uncommon : common;
+  const prefix = tier === 'PREMIUM' ? 'Deep' : tier === 'BETTER' ? 'River' : 'Shore';
+  return `${prefix} ${pool[randomInt(0, pool.length - 1)]}`;
+}
+
+async function ensureFisherProgress(db, playerId) {
+  await db.query(
+    `INSERT INTO player_fisher_progress (player_id)
+     VALUES ($1)
+     ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM player_fisher_progress WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+function toFisherProgressView(row) {
+  const xp = Number(row?.fisher_xp || 0);
+  const level = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(row?.fisher_level || computeFisherLevel(xp))));
+  const currentStart = fisherLevelStartXp(level);
+  const next = fisherNextLevelXp(level);
+  return {
+    level,
+    xp,
+    currentLevelXp: xp - currentStart,
+    nextLevelXp: next,
+    totalCatches: Number(row?.fisher_total_catches || 0),
+    perfectCatches: Number(row?.fisher_perfect_catches || 0),
+    bestStreak: Number(row?.fisher_best_streak || 0),
+    totalEarnings: Number(row?.fisher_total_earnings || 0),
+    rareCatches: Number(row?.fisher_rare_catches || 0),
+    legendaryCatches: Number(row?.fisher_legendary_catches || 0),
+  };
+}
+
+function syncFisherSessionTime(session) {
+  const now = Date.now();
+  if (session.shiftState === 'TRAVEL_TO_SPOT' && session.activeCatch && now >= Number(session.activeCatch.travelEndsAt || 0)) {
+    session.shiftState = 'BAIT_STEP';
+    session.activeCatch.stepsDone = [];
+  }
+
+  if (session.shiftState === 'WAITING_BITE' && session.activeCatch && now >= Number(session.activeCatch.biteAt || 0)) {
+    session.shiftState = 'HOOK_WINDOW';
+    session.activeCatch.hookWindowEndsAt = now + FISHER_CONFIG.hookWindowMs;
+  }
+}
+
+function fisherStateView(session, progressView) {
+  syncFisherSessionTime(session);
+  const now = Date.now();
+  const repairSecondsLeft = Math.max(0, Math.ceil((Number(session.repairUntil || 0) - now) / 1000));
+  const activeCatch = session.activeCatch
+    ? {
+        spotId: session.activeCatch.spotId,
+        spotTier: session.activeCatch.spotTier,
+        spotName: session.activeCatch.spotName,
+        travelLeftSec: Math.max(0, Math.ceil((Number(session.activeCatch.travelEndsAt || 0) - now) / 1000)),
+        waitBiteLeftSec: Math.max(0, Math.ceil((Number(session.activeCatch.biteAt || 0) - now) / 1000)),
+        hookWindowLeftMs: Math.max(0, Number(session.activeCatch.hookWindowEndsAt || 0) - now),
+        castQuality: session.activeCatch.castQuality || null,
+        castMeter: Number(session.activeCatch.castMeter || 0),
+        hookQuality: session.activeCatch.hookQuality || null,
+        tension: Math.max(0, Math.min(100, Number(session.activeCatch.tension || 0))),
+        catchProgress: Math.max(0, Math.min(100, Number(session.activeCatch.catchProgress || 0))),
+        lineIntegrity: Math.max(0, Math.min(100, Number(session.activeCatch.lineIntegrity || 0))),
+        stepsRequired: [...(session.activeCatch.stepsRequired || [])],
+        stepsDone: [...(session.activeCatch.stepsDone || [])],
+        nextStep: (session.activeCatch.stepsRequired || []).find((step) => !(session.activeCatch.stepsDone || []).includes(step)) || null,
+        pullPrompt: session.activeCatch.pullPrompt
+          ? {
+              direction: session.activeCatch.pullPrompt.direction,
+              expiresInMs: Math.max(0, Number(session.activeCatch.pullPrompt.expiresAt || 0) - now),
+            }
+          : null,
+      }
+    : null;
+
+  return {
+    progress: {
+      ...progressView,
+      rodTierLabel: fisherRodLabelForLevel(progressView.level),
+      unlockedSpotTier: fisherTierForLevel(progressView.level),
+    },
+    shiftState: session.shiftState,
+    streak: Number(session.streak || 0),
+    repairSecondsLeft,
+    repairLabel: session.repairLabel || null,
+    activeCatch,
+    lastResult: session.lastResult || null,
+  };
+}
+
+function fisherSetRepair(session, label) {
+  session.repairUntil = Date.now() + FISHER_CONFIG.repairCooldownMs;
+  session.repairLabel = label;
 }
 
 const NPC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
@@ -2540,6 +2878,660 @@ app.post('/api/pizzer/admin/reset', requireDb, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(400).json({ error: 'reset failed' });
+  }
+});
+
+app.get('/api/fisher/state', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    await ensurePlayer(pool, playerId);
+    const progress = await ensureFisherProgress(pool, playerId);
+    const session = getFisherSession(playerId);
+    if (session.repairUntil && session.repairUntil <= Date.now()) {
+      session.repairUntil = 0;
+      session.repairLabel = null;
+    }
+    syncFisherSessionTime(session);
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, toFisherProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'fisher state failed' });
+  }
+});
+
+app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const progressView = toFisherProgressView(progress);
+    const now = Date.now();
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+
+    if (session.shiftState !== 'IDLE') {
+      return res.status(400).json({ error: 'shift already active' });
+    }
+    if (session.cooldownUntil && session.cooldownUntil > now) {
+      return res.status(400).json({ error: 'shift cooldown active' });
+    }
+
+    const nextSession = {
+      ...session,
+      shiftState: 'SELECTING_SPOT',
+      spotOptions: [],
+      optionsGeneratedAt: 0,
+      activeSpot: null,
+      activeCatch: null,
+      lastResult: null,
+      lastActionAt: 0,
+      lastReelTickAt: 0,
+    };
+    setFisherSession(playerId, nextSession);
+    res.json(fisherStateView(nextSession, progressView));
+  } catch (error) {
+    res.status(500).json({ error: 'start fisher shift failed' });
+  }
+});
+
+app.post('/api/fisher/shift/end', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const progress = await ensureFisherProgress(pool, playerId);
+    const session = getFisherSession(playerId);
+    const next = {
+      ...session,
+      shiftState: 'IDLE',
+      spotOptions: [],
+      activeSpot: null,
+      activeCatch: null,
+      cooldownUntil: Date.now() + FISHER_CONFIG.shiftStartCooldownMs,
+    };
+    setFisherSession(playerId, next);
+    res.json(fisherStateView(next, toFisherProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'end fisher shift failed' });
+  }
+});
+
+app.post('/api/fisher/spots/options', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_SPOT') {
+      return res.status(400).json({ error: 'not ready to pick spot' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const now = Date.now();
+    if (!session.spotOptions.length || now - Number(session.optionsGeneratedAt || 0) > FISHER_CONFIG.optionsCooldownMs) {
+      const availableTiers = fisherAvailableSpotTiers(view.level);
+      const options = [fisherBuildSpotOption(view.level, 'COMMON')];
+      if (availableTiers.includes('BETTER')) {
+        options.push(fisherBuildSpotOption(view.level, 'BETTER'));
+      } else {
+        options.push({
+          spotId: `locked-${crypto.randomBytes(4).toString('hex')}`,
+          tier: 'BETTER',
+          name: FISHER_CONFIG.spots.BETTER.label,
+          difficulty: FISHER_CONFIG.spots.BETTER.difficulty,
+          fishPool: [...FISHER_CONFIG.spots.BETTER.fishPool],
+          estimatedReward: 0,
+          estimatedXp: 0,
+          castDifficulty: FISHER_CONFIG.spots.BETTER.castDifficulty,
+          reelDifficulty: FISHER_CONFIG.spots.BETTER.reelDifficulty,
+          waitBiteEstimateSec: FISHER_CONFIG.spots.BETTER.waitBiteSecRange[0],
+          failRisk: FISHER_CONFIG.spots.BETTER.risk,
+          travelSec: FISHER_CONFIG.spots.BETTER.travelSecRange[0],
+          rarityHint: 'LOCKED',
+          locked: true,
+          unlockLevel: FISHER_CONFIG.spots.BETTER.levelMin,
+        });
+      }
+      if (availableTiers.includes('PREMIUM')) {
+        options.push(fisherBuildSpotOption(view.level, 'PREMIUM'));
+      } else {
+        options.push({
+          spotId: `locked-${crypto.randomBytes(4).toString('hex')}`,
+          tier: 'PREMIUM',
+          name: FISHER_CONFIG.spots.PREMIUM.label,
+          difficulty: FISHER_CONFIG.spots.PREMIUM.difficulty,
+          fishPool: [...FISHER_CONFIG.spots.PREMIUM.fishPool],
+          estimatedReward: 0,
+          estimatedXp: 0,
+          castDifficulty: FISHER_CONFIG.spots.PREMIUM.castDifficulty,
+          reelDifficulty: FISHER_CONFIG.spots.PREMIUM.reelDifficulty,
+          waitBiteEstimateSec: FISHER_CONFIG.spots.PREMIUM.waitBiteSecRange[0],
+          failRisk: FISHER_CONFIG.spots.PREMIUM.risk,
+          travelSec: FISHER_CONFIG.spots.PREMIUM.travelSecRange[0],
+          rarityHint: 'LOCKED',
+          locked: true,
+          unlockLevel: FISHER_CONFIG.spots.PREMIUM.levelMin,
+        });
+      }
+      session.spotOptions = options;
+      session.optionsGeneratedAt = now;
+      setFisherSession(playerId, session);
+    }
+
+    res.json({ options: session.spotOptions });
+  } catch (error) {
+    res.status(500).json({ error: 'fisher spot options failed' });
+  }
+});
+
+app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, spotId } = req.body || {};
+    if (!playerId || !spotId) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_SPOT') return res.status(400).json({ error: 'not selecting spot' });
+    enforceFisherActionCooldown(session);
+
+    const selected = (session.spotOptions || []).find((entry) => entry.spotId === spotId);
+    if (!selected) return res.status(404).json({ error: 'spot option not found' });
+    if (selected.locked) return res.status(400).json({ error: 'spot locked for your level' });
+
+    const now = Date.now();
+    session.shiftState = 'TRAVEL_TO_SPOT';
+    session.activeSpot = {
+      spotId: selected.spotId,
+      tier: selected.tier,
+      name: selected.name,
+      difficulty: selected.difficulty,
+      fishPool: selected.fishPool,
+      castDifficulty: selected.castDifficulty,
+      reelDifficulty: selected.reelDifficulty,
+      failRisk: selected.failRisk,
+      estimatedReward: selected.estimatedReward,
+      estimatedXp: selected.estimatedXp,
+      waitBiteEstimateSec: selected.waitBiteEstimateSec,
+      travelSec: selected.travelSec,
+    };
+    session.activeCatch = {
+      spotId: selected.spotId,
+      spotTier: selected.tier,
+      spotName: selected.name,
+      travelEndsAt: now + Number(selected.travelSec || 0) * 1000,
+      biteAt: 0,
+      hookWindowEndsAt: 0,
+      castQuality: null,
+      castScore: 0.5,
+      castMeter: 0,
+      hookQuality: null,
+      hookScore: 0,
+      catchProgress: 0,
+      tension: 22,
+      lineIntegrity: 100,
+      pullPrompt: null,
+      pullHits: 0,
+      pullMisses: 0,
+      reelTicks: 0,
+      safeTicks: 0,
+      redTicks: 0,
+      qualityPenalty: 0,
+      stepsRequired: ['BAIT', 'CAST', 'WAIT_BITE', 'HOOK', 'REEL', 'LAND'],
+      stepsDone: [],
+    };
+    session.spotOptions = [];
+    session.lastResult = null;
+    syncFisherSessionTime(session);
+    setFisherSession(playerId, session);
+
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'select fisher spot failed' });
+  }
+});
+
+app.post('/api/fisher/step', requireDb, async (req, res) => {
+  try {
+    const { playerId, stepKey } = req.body || {};
+    if (!playerId || !stepKey) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch) {
+      return res.status(400).json({ error: 'no active fishing session' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    const nextStep = (active.stepsRequired || []).find((step) => !(active.stepsDone || []).includes(step));
+    const normalized = String(stepKey || '').toUpperCase();
+    if (!nextStep || nextStep !== normalized) {
+      return res.status(400).json({ error: `next step is ${nextStep || 'none'}` });
+    }
+
+    if (normalized !== 'BAIT') {
+      return res.status(400).json({ error: 'this step requires dedicated action endpoint' });
+    }
+
+    active.stepsDone.push('BAIT');
+    session.shiftState = 'CAST_STEP';
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'fisher step failed' });
+  }
+});
+
+app.post('/api/fisher/cast/commit', requireDb, async (req, res) => {
+  try {
+    const { playerId, meterValue } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (session.shiftState !== 'CAST_STEP' || !session.activeCatch) {
+      return res.status(400).json({ error: 'not in cast step' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    const nextStep = (active.stepsRequired || []).find((step) => !(active.stepsDone || []).includes(step));
+    if (nextStep !== 'CAST') return res.status(400).json({ error: `next step is ${nextStep}` });
+
+    const cast = fisherCastScoreFromMeter(meterValue);
+    active.castQuality = cast.quality;
+    active.castScore = cast.score;
+    active.castMeter = cast.meter;
+    active.stepsDone.push('CAST');
+    active.stepsDone.push('WAIT_BITE');
+
+    const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
+    const baseWait = randomInt(spot.waitBiteSecRange[0], spot.waitBiteSecRange[1]);
+    const castAdjust = cast.quality === 'PERFECT' ? -1.2 : cast.quality === 'GOOD' ? -0.5 : 1.1;
+    const waitSec = Math.max(2.5, baseWait + castAdjust);
+    active.biteAt = Date.now() + Math.floor(waitSec * 1000);
+    session.shiftState = 'WAITING_BITE';
+    setFisherSession(playerId, session);
+
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'cast commit failed' });
+  }
+});
+
+app.post('/api/fisher/hook/attempt', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch || session.shiftState !== 'HOOK_WINDOW') {
+      return res.status(400).json({ error: 'hook window not active' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    const now = Date.now();
+    if (now > Number(active.hookWindowEndsAt || 0)) {
+      session.streak = 0;
+      fisherSetRepair(session, 'Untangling hook');
+      session.shiftState = 'SELECTING_SPOT';
+      session.lastResult = {
+        caught: false,
+        failReason: 'Fish escaped (missed hook window)',
+        fishName: null,
+        fishRarity: null,
+        breakdown: {
+          baseReward: 0,
+          spotMultiplier: 1,
+          levelMultiplier: 1,
+          qualityMultiplier: 0,
+          streakMultiplier: 1,
+          integrityMultiplier: 0,
+          bonusLootValue: 0,
+          totalReward: 0,
+          xpGained: 0,
+          qualityScore: 0,
+        },
+        progression: {
+          levelBefore: view.level,
+          levelAfter: view.level,
+          xpBefore: view.xp,
+          xpAfter: view.xp,
+          unlockedTier: null,
+        },
+      };
+      session.activeCatch = null;
+      setFisherSession(playerId, session);
+      return res.json(fisherStateView(session, view));
+    }
+
+    const remainingMs = Math.max(0, Number(active.hookWindowEndsAt || 0) - now);
+    const ratio = remainingMs / FISHER_CONFIG.hookWindowMs;
+    active.hookScore = Math.max(0.35, Math.min(1, ratio + 0.22));
+    active.hookQuality = active.hookScore >= 0.88 ? 'PERFECT' : active.hookScore >= 0.66 ? 'GOOD' : 'OK';
+    active.stepsDone.push('HOOK');
+    session.shiftState = 'REELING';
+    active.pullPrompt = null;
+    active.reelTicks = 0;
+    active.safeTicks = 0;
+    active.redTicks = 0;
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'hook attempt failed' });
+  }
+});
+
+app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
+  try {
+    const { playerId, isReeling } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch || session.shiftState !== 'REELING') {
+      return res.status(400).json({ error: 'not reeling' });
+    }
+    enforceFisherReelTickCooldown(session);
+
+    const active = session.activeCatch;
+    active.reelTicks = Number(active.reelTicks || 0) + 1;
+
+    const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
+    const reelDifficultyPenalty = spot.reelDifficulty === 'HIGH' ? 1.18 : spot.reelDifficulty === 'MEDIUM' ? 1.08 : 1;
+    const castBoost = Number(active.castScore || 0.5);
+    const hookBoost = Number(active.hookScore || 0.45);
+
+    if (isReeling) {
+      const progressGain = (2.8 + castBoost * 2.1 + hookBoost * 1.4) / reelDifficultyPenalty;
+      active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + progressGain);
+      active.tension = Math.min(100, Number(active.tension || 0) + (8.5 * reelDifficultyPenalty - castBoost * 2.1));
+    } else {
+      const driftGain = 0.25 + castBoost * 0.25;
+      active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + driftGain);
+      active.tension = Math.max(0, Number(active.tension || 0) - (7 + hookBoost * 1.6));
+    }
+
+    if (Number(active.tension || 0) <= 76) {
+      active.safeTicks = Number(active.safeTicks || 0) + 1;
+    }
+
+    if (Number(active.tension || 0) >= FISHER_CONFIG.tensionRedThreshold) {
+      active.redTicks = Number(active.redTicks || 0) + 1;
+      active.lineIntegrity = Math.max(0, Number(active.lineIntegrity || 0) - 8);
+    }
+
+    if (active.pullPrompt && Date.now() > Number(active.pullPrompt.expiresAt || 0)) {
+      active.pullMisses = Number(active.pullMisses || 0) + 1;
+      active.tension = Math.min(100, Number(active.tension || 0) + FISHER_CONFIG.randomPullTensionPenalty);
+      active.lineIntegrity = Math.max(0, Number(active.lineIntegrity || 0) - FISHER_CONFIG.lineIntegrityPenaltyPerMiss);
+      active.qualityPenalty = Number(active.qualityPenalty || 0) + FISHER_CONFIG.randomPullQualityPenalty;
+      active.pullPrompt = null;
+    }
+
+    if (!active.pullPrompt) {
+      const everyMin = FISHER_CONFIG.randomPullEveryTicks[0];
+      const everyMax = FISHER_CONFIG.randomPullEveryTicks[1];
+      const nextEvery = randomInt(everyMin, everyMax);
+      if (Number(active.reelTicks || 0) % nextEvery === 0) {
+        active.pullPrompt = {
+          direction: Math.random() < 0.5 ? 'LEFT' : 'RIGHT',
+          expiresAt: Date.now() + FISHER_CONFIG.randomPullWindowMs,
+        };
+      }
+    }
+
+    const snapped = Number(active.tension || 0) >= FISHER_CONFIG.tensionFailThreshold || Number(active.redTicks || 0) >= FISHER_CONFIG.maxRedTicksBeforeSnap || Number(active.lineIntegrity || 0) <= 0;
+    if (snapped) {
+      session.streak = 0;
+      fisherSetRepair(session, 'Repairing snapped line');
+      session.shiftState = 'SELECTING_SPOT';
+      session.lastResult = {
+        caught: false,
+        failReason: 'Line snapped while reeling',
+        fishName: null,
+        fishRarity: null,
+        breakdown: {
+          baseReward: 0,
+          spotMultiplier: 1,
+          levelMultiplier: 1,
+          qualityMultiplier: 0,
+          streakMultiplier: 1,
+          integrityMultiplier: 0,
+          bonusLootValue: 0,
+          totalReward: 0,
+          xpGained: 0,
+          qualityScore: 0,
+        },
+        progression: {
+          levelBefore: view.level,
+          levelAfter: view.level,
+          xpBefore: view.xp,
+          xpAfter: view.xp,
+          unlockedTier: null,
+        },
+      };
+      session.activeCatch = null;
+      setFisherSession(playerId, session);
+      return res.json(fisherStateView(session, view));
+    }
+
+    if (Number(active.catchProgress || 0) >= 100) {
+      active.stepsDone.push('REEL');
+      session.shiftState = 'LANDING';
+    }
+
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'reel tick failed' });
+  }
+});
+
+app.post('/api/fisher/pull/respond', requireDb, async (req, res) => {
+  try {
+    const { playerId, direction } = req.body || {};
+    if (!playerId || !direction) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch || session.shiftState !== 'REELING') {
+      return res.status(400).json({ error: 'not reeling' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    if (!active.pullPrompt) {
+      return res.status(400).json({ error: 'no pull prompt active' });
+    }
+    if (Date.now() > Number(active.pullPrompt.expiresAt || 0)) {
+      return res.status(400).json({ error: 'pull prompt expired' });
+    }
+
+    const normalized = String(direction || '').toUpperCase();
+    if (normalized === String(active.pullPrompt.direction || '').toUpperCase()) {
+      active.pullHits = Number(active.pullHits || 0) + 1;
+      active.tension = Math.max(0, Number(active.tension || 0) - 16);
+      active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + 1.2);
+    } else {
+      active.pullMisses = Number(active.pullMisses || 0) + 1;
+      active.tension = Math.min(100, Number(active.tension || 0) + FISHER_CONFIG.randomPullTensionPenalty);
+      active.lineIntegrity = Math.max(0, Number(active.lineIntegrity || 0) - 10);
+      active.qualityPenalty = Number(active.qualityPenalty || 0) + FISHER_CONFIG.randomPullQualityPenalty;
+    }
+    active.pullPrompt = null;
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'pull respond failed' });
+  }
+});
+
+app.post('/api/fisher/land', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensureFisherProgress(db, playerId);
+      const progressBefore = toFisherProgressView(progressRow);
+      const session = getFisherSession(playerId);
+      enforceFisherRepairCooldown(session);
+      syncFisherSessionTime(session);
+      if (!session.activeCatch || session.shiftState !== 'LANDING') {
+        throw new Error('not ready to land catch');
+      }
+      enforceFisherActionCooldown(session);
+
+      const active = session.activeCatch;
+      const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
+
+      active.stepsDone.push('LAND');
+
+      const pullTotal = Number(active.pullHits || 0) + Number(active.pullMisses || 0);
+      const pullRatio = pullTotal > 0 ? Number(active.pullHits || 0) / pullTotal : 1;
+      const safeRatio = Number(active.reelTicks || 0) > 0 ? Number(active.safeTicks || 0) / Number(active.reelTicks || 1) : 0.5;
+
+      const qualityScoreRaw =
+        Number(active.castScore || 0.5) * 0.28 +
+        Number(active.hookScore || 0.5) * 0.24 +
+        Math.max(0, Math.min(1, safeRatio)) * 0.33 +
+        Math.max(0, Math.min(1, pullRatio)) * 0.15 -
+        Number(active.qualityPenalty || 0);
+      const qualityScore = Math.max(0.05, Math.min(1, qualityScoreRaw));
+
+      const rarityWeights = { ...spot.rarityWeights };
+      rarityWeights.RARE += qualityScore >= 0.82 ? 0.08 : 0;
+      rarityWeights.LEGENDARY += qualityScore >= 0.92 ? 0.05 : 0;
+      const fishRarity = fisherPickRarity(rarityWeights);
+      const fishName = fisherChooseFishName(fishRarity, active.spotTier);
+
+      const baseReward = Number(FISHER_CONFIG.fishRarityRewardBase[fishRarity] || 220);
+      const baseXp = Number(FISHER_CONFIG.fishRarityXpBase[fishRarity] || 20);
+      const spotMultiplier = Number(spot.spotMultiplier || 1);
+      const levelMultiplier = levelPayoutMultiplier(progressBefore.level);
+      const qualityMultiplier = 0.7 + qualityScore * 0.65;
+      const streakMultiplier = 1 + Math.min(4, Number(session.streak || 0)) * FISHER_CONFIG.streakBonusPerStep;
+      const integrityMultiplier = Math.max(0.35, Number(active.lineIntegrity || 100) / 100);
+      const bonusLootValue = fishRarity === 'LEGENDARY' ? randomInt(120, 300) : fishRarity === 'RARE' ? randomInt(45, 120) : 0;
+
+      const totalReward = Math.max(
+        0,
+        Math.floor(baseReward * spotMultiplier * levelMultiplier * qualityMultiplier * streakMultiplier * integrityMultiplier) + bonusLootValue,
+      );
+
+      const qualityXpBonus = qualityScore >= 0.9 ? 12 : qualityScore >= 0.75 ? 7 : qualityScore >= 0.6 ? 3 : 0;
+      const streakXpBonus = Math.min(10, Number(session.streak || 0) * 2);
+      const xpGained = Math.max(0, Math.floor(baseXp + qualityXpBonus + streakXpBonus));
+
+      const nextXp = Number(progressBefore.xp) + xpGained;
+      const nextLevel = computeFisherLevel(nextXp);
+      const unlockedTier = nextLevel > progressBefore.level ? fisherTierForLevel(nextLevel) : null;
+
+      const isPerfect = qualityScore >= 0.92 && Number(active.lineIntegrity || 0) >= 85;
+      const nextStreak = Number(session.streak || 0) + 1;
+      const bestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+
+      await db.query(
+        `UPDATE player_fisher_progress
+         SET fisher_level = $2,
+             fisher_xp = $3,
+             fisher_total_catches = fisher_total_catches + 1,
+             fisher_perfect_catches = fisher_perfect_catches + $4,
+             fisher_best_streak = GREATEST(fisher_best_streak, $5),
+             fisher_total_earnings = fisher_total_earnings + $6,
+             fisher_rare_catches = fisher_rare_catches + $7,
+             fisher_legendary_catches = fisher_legendary_catches + $8,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          isPerfect ? 1 : 0,
+          bestStreak,
+          totalReward,
+          fishRarity === 'RARE' ? 1 : 0,
+          fishRarity === 'LEGENDARY' ? 1 : 0,
+        ],
+      );
+
+      if (totalReward > 0) {
+        await db.query(
+          `UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`,
+          [playerId, totalReward],
+        );
+      }
+
+      const updatedProgress = await ensureFisherProgress(db, playerId);
+      const progressAfter = toFisherProgressView(updatedProgress);
+
+      session.streak = nextStreak;
+      session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
+      session.activeCatch = null;
+      session.activeSpot = null;
+      session.shiftState = 'SELECTING_SPOT';
+      session.spotOptions = [];
+      session.optionsGeneratedAt = 0;
+      session.lastResult = {
+        caught: true,
+        failReason: null,
+        fishName,
+        fishRarity,
+        breakdown: {
+          baseReward,
+          spotMultiplier,
+          levelMultiplier,
+          qualityMultiplier,
+          streakMultiplier,
+          integrityMultiplier,
+          bonusLootValue,
+          totalReward,
+          xpGained,
+          qualityScore,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          unlockedTier,
+        },
+      };
+      setFisherSession(playerId, session);
+
+      return {
+        state: fisherStateView(session, progressAfter),
+        result: session.lastResult,
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'land catch failed' });
   }
 });
 

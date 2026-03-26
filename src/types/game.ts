@@ -290,3 +290,107 @@ export interface PizzerDeliveryResult {
     unlockedVehicle?: string | null;
   };
 }
+
+export type FisherShiftState =
+  | 'IDLE'
+  | 'STARTING_SHIFT'
+  | 'SELECTING_SPOT'
+  | 'TRAVEL_TO_SPOT'
+  | 'PREPARING_GEAR'
+  | 'BAIT_STEP'
+  | 'CAST_STEP'
+  | 'WAITING_BITE'
+  | 'HOOK_WINDOW'
+  | 'REELING'
+  | 'LANDING'
+  | 'CATCH_RESULT'
+  | 'END_SHIFT';
+
+export interface FisherProgress {
+  level: number;
+  xp: number;
+  currentLevelXp: number;
+  nextLevelXp: number | null;
+  totalCatches: number;
+  perfectCatches: number;
+  bestStreak: number;
+  totalEarnings: number;
+  rareCatches: number;
+  legendaryCatches: number;
+  rodTierLabel: string;
+  unlockedSpotTier: 'COMMON' | 'BETTER' | 'PREMIUM';
+}
+
+export interface FisherSpotOption {
+  spotId: string;
+  tier: 'COMMON' | 'BETTER' | 'PREMIUM';
+  name: string;
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  fishPool: string[];
+  estimatedReward: number;
+  estimatedXp: number;
+  castDifficulty: 'LOW' | 'MEDIUM' | 'HIGH';
+  reelDifficulty: 'LOW' | 'MEDIUM' | 'HIGH';
+  waitBiteEstimateSec: number;
+  failRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+  travelSec: number;
+  rarityHint?: string;
+  locked?: boolean;
+  unlockLevel?: number;
+}
+
+export interface FisherStateResponse {
+  progress: FisherProgress;
+  shiftState: FisherShiftState;
+  streak: number;
+  repairSecondsLeft?: number;
+  repairLabel?: string | null;
+  activeCatch: {
+    spotId: string;
+    spotTier: 'COMMON' | 'BETTER' | 'PREMIUM';
+    spotName: string;
+    travelLeftSec: number;
+    waitBiteLeftSec: number;
+    hookWindowLeftMs: number;
+    castQuality: 'PERFECT' | 'GOOD' | 'BAD' | null;
+    castMeter: number;
+    hookQuality: 'PERFECT' | 'GOOD' | 'OK' | null;
+    tension: number;
+    catchProgress: number;
+    lineIntegrity: number;
+    stepsRequired: string[];
+    stepsDone: string[];
+    nextStep: string | null;
+    pullPrompt: {
+      direction: 'LEFT' | 'RIGHT';
+      expiresInMs: number;
+    } | null;
+  } | null;
+  lastResult?: FisherCatchResult | null;
+}
+
+export interface FisherCatchResult {
+  caught: boolean;
+  failReason: string | null;
+  fishName: string | null;
+  fishRarity: 'COMMON' | 'UNCOMMON' | 'RARE' | 'LEGENDARY' | null;
+  breakdown: {
+    baseReward: number;
+    spotMultiplier: number;
+    levelMultiplier: number;
+    qualityMultiplier: number;
+    streakMultiplier: number;
+    integrityMultiplier: number;
+    bonusLootValue: number;
+    totalReward: number;
+    xpGained: number;
+    qualityScore: number;
+  };
+  progression: {
+    levelBefore: number;
+    levelAfter: number;
+    xpBefore: number;
+    xpAfter: number;
+    unlockedTier: 'COMMON' | 'BETTER' | 'PREMIUM' | null;
+  };
+}

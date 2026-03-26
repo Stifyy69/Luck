@@ -18,6 +18,9 @@ import type {
   PizzerOrderOption,
   PizzerStateResponse,
   PizzerDeliveryResult,
+  FisherSpotOption,
+  FisherStateResponse,
+  FisherCatchResult,
 } from '../types/game';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -180,4 +183,37 @@ export const api = {
 
   pizzerAdminReset: (playerId: string) =>
     post<{ ok: boolean }>('/api/pizzer/admin/reset', { playerId }),
+
+  fisherState: (playerId: string) =>
+    get<FisherStateResponse>('/api/fisher/state', { playerId }),
+
+  fisherShiftStart: (playerId: string) =>
+    post<FisherStateResponse>('/api/fisher/shift/start', { playerId }),
+
+  fisherShiftEnd: (playerId: string) =>
+    post<FisherStateResponse>('/api/fisher/shift/end', { playerId }),
+
+  fisherSpotOptions: (playerId: string) =>
+    post<{ options: FisherSpotOption[] }>('/api/fisher/spots/options', { playerId }),
+
+  fisherSpotSelect: (playerId: string, spotId: string) =>
+    post<FisherStateResponse>('/api/fisher/spot/select', { playerId, spotId }),
+
+  fisherStep: (playerId: string, stepKey: string) =>
+    post<FisherStateResponse>('/api/fisher/step', { playerId, stepKey }),
+
+  fisherCastCommit: (playerId: string, meterValue: number) =>
+    post<FisherStateResponse>('/api/fisher/cast/commit', { playerId, meterValue }),
+
+  fisherHookAttempt: (playerId: string) =>
+    post<FisherStateResponse>('/api/fisher/hook/attempt', { playerId }),
+
+  fisherReelTick: (playerId: string, isReeling: boolean) =>
+    post<FisherStateResponse>('/api/fisher/reel/tick', { playerId, isReeling }),
+
+  fisherPullRespond: (playerId: string, direction: 'LEFT' | 'RIGHT') =>
+    post<FisherStateResponse>('/api/fisher/pull/respond', { playerId, direction }),
+
+  fisherLand: (playerId: string) =>
+    post<{ state: FisherStateResponse; result: FisherCatchResult }>('/api/fisher/land', { playerId }),
 };
