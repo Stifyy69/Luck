@@ -15,6 +15,9 @@ import type {
   MarketAssetType,
   PlayerProfileResponse,
   MarketListing,
+  PizzerOrderOption,
+  PizzerStateResponse,
+  PizzerDeliveryResult,
 } from '../types/game';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -144,4 +147,37 @@ export const api = {
 
   playerCashAdjust: (playerId: string, delta: number) =>
     post<{ ok: boolean; cleanMoney: number }>('/api/player/cash/adjust', { playerId, delta }),
+
+  pizzerState: (playerId: string) =>
+    get<PizzerStateResponse>('/api/pizzer/state', { playerId }),
+
+  pizzerShiftStart: (playerId: string) =>
+    post<PizzerStateResponse>('/api/pizzer/shift/start', { playerId }),
+
+  pizzerShiftEnd: (playerId: string) =>
+    post<PizzerStateResponse>('/api/pizzer/shift/end', { playerId }),
+
+  pizzerOrderOptions: (playerId: string) =>
+    post<{ options: PizzerOrderOption[] }>('/api/pizzer/orders/options', { playerId }),
+
+  pizzerOrderSelect: (playerId: string, orderId: string) =>
+    post<PizzerStateResponse>('/api/pizzer/order/select', { playerId, orderId }),
+
+  pizzerPackingStep: (playerId: string, stepKey: string) =>
+    post<PizzerStateResponse>('/api/pizzer/packing/step', { playerId, stepKey }),
+
+  pizzerDamageReport: (playerId: string, damageDelta: number) =>
+    post<PizzerStateResponse>('/api/pizzer/delivery/report-damage', { playerId, damageDelta }),
+
+  pizzerHandover: (playerId: string, handoverVariant: string) =>
+    post<{ state: PizzerStateResponse; result: PizzerDeliveryResult }>('/api/pizzer/delivery/handover', { playerId, handoverVariant }),
+
+  pizzerAdminSetLevel: (playerId: string, level: number) =>
+    post<{ ok: boolean }>('/api/pizzer/admin/set-level', { playerId, level }),
+
+  pizzerAdminAddXp: (playerId: string, xp: number) =>
+    post<{ ok: boolean }>('/api/pizzer/admin/add-xp', { playerId, xp }),
+
+  pizzerAdminReset: (playerId: string) =>
+    post<{ ok: boolean }>('/api/pizzer/admin/reset', { playerId }),
 };

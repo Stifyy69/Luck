@@ -8,6 +8,7 @@ type DashboardResponse = {
   };
   players: Array<{
     player_id: string;
+    nickname: string;
     cash_available: number;
     roulette_spent: number;
     roulette_won: number;
@@ -135,7 +136,7 @@ export default function AdminPanelV2() {
           <table className="min-w-full text-sm">
             <thead className="bg-white/5">
               <tr>
-                {['Player', 'Cash', 'Cheltuit', 'Câștigat', 'Net', 'Timp', 'Farm $', 'Pilot h', 'Frunze', 'Alb', 'Albastru', 'Sleep #', 'Sleep $', 'Last seen', 'Locație', 'Path'].map((h) => (
+                {['Player', 'Nickname', 'Cash', 'Cheltuit', 'Câștigat', 'Net', 'Timp', 'Farm $', 'Pilot h', 'Frunze', 'Alb', 'Albastru', 'Sleep #', 'Sleep $', 'Last seen', 'Locație', 'Path'].map((h) => (
                   <th key={h} className="px-3 py-2 text-left font-semibold text-white/70">{h}</th>
                 ))}
               </tr>
@@ -144,6 +145,7 @@ export default function AdminPanelV2() {
               {(data?.players ?? []).map((p) => (
                 <tr key={p.player_id} className="border-t border-white/10">
                   <td className="px-3 py-2">{p.player_id}</td>
+                  <td className="px-3 py-2">{p.nickname || p.player_id}</td>
                   <td className="px-3 py-2">{p.cash_available.toLocaleString('ro-RO')}</td>
                   <td className="px-3 py-2">{p.roulette_spent.toLocaleString('ro-RO')}</td>
                   <td className="px-3 py-2">{p.roulette_won.toLocaleString('ro-RO')}</td>

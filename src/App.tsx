@@ -4,6 +4,7 @@ import FarmatPage from './components/FarmatPage';
 import SleepPage from './components/SleepPage';
 import AdminPanelV2 from './components/AdminPanelV2';
 import PilotPage from './components/PilotPage';
+import PizzerPage from './components/PizzerPage';
 import GangsPage from './components/GangsPage';
 import CNNMarketplace from './components/CNNMarketplace';
 import ShowroomPage from './components/ShowroomPage';
@@ -17,6 +18,7 @@ type RoutePath =
   | '/farmat'
   | '/sleep'
   | '/pilot'
+  | '/pizzer'
   | '/showroom'
   | '/inventory'
   | '/owned'
@@ -30,6 +32,7 @@ const VALID_ROUTES: RoutePath[] = [
   '/farmat',
   '/sleep',
   '/pilot',
+  '/pizzer',
   '/showroom',
   '/inventory',
   '/owned',
@@ -129,6 +132,13 @@ export default function App() {
         >
           Pilot
         </button>
+        <button
+          type="button"
+          onClick={() => goTo('/pizzer')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/pizzer' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Pizzer
+        </button>
         <div className="mt-4 border-t border-white/10 pt-4">
           <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Fun</p>
         </div>
@@ -185,6 +195,8 @@ export default function App() {
             ? <SleepPage />
             : path === '/pilot'
               ? <PilotPage />
+              : path === '/pizzer'
+                ? <PizzerPage />
               : path === '/showroom'
                 ? <ShowroomPage />
                 : path === '/inventory'

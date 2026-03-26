@@ -572,7 +572,7 @@ export default function CNNMarketplace() {
                         <p className="text-xs text-white/50">
                           From:{' '}
                           <span className="font-bold text-white/70">
-                            {offer.buyerPlayerId}
+                            {offer.buyerDisplayName || offer.buyerPlayerId}
                           </span>
                         </p>
                       </div>

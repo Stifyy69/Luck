@@ -140,6 +140,7 @@ export interface MarketOffer {
   id: number;
   listingId: number;
   buyerPlayerId?: string;
+  buyerDisplayName?: string;
   offeredPrice: number;
   status: MarketOfferStatus;
   createdAt: string;
@@ -204,4 +205,75 @@ export interface MarketActionResult {
 export interface PlayerProfileResponse {
   playerId: string;
   displayName: string;
+}
+
+export type PizzerOrderType = 'STANDARD' | 'URGENTA' | 'VIP';
+export type PizzerShiftState = 'IDLE' | 'SELECTING_ORDER' | 'PACKING_ORDER' | 'DELIVERY_ACTIVE' | 'DELIVERY_RESULT';
+
+export interface PizzerProgress {
+  level: number;
+  xp: number;
+  currentLevelXp: number;
+  nextLevelXp: number | null;
+  totalDeliveries: number;
+  perfectDeliveries: number;
+  bestStreak: number;
+  totalEarnings: number;
+}
+
+export interface PizzerOrderOption {
+  orderId: string;
+  orderType: PizzerOrderType;
+  distanceMeters: number;
+  estimatedReward: number;
+  estimatedXp: number;
+  estimatedTimeSec: number;
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+}
+
+export interface PizzerStateResponse {
+  progress: PizzerProgress;
+  shiftState: PizzerShiftState;
+  vehicleLabel: string;
+  streak: number;
+  activeOrder: {
+    orderId: string;
+    orderType: PizzerOrderType;
+    distanceMeters: number;
+    targetLabel: string;
+    etaSec: number;
+    timeLeftSec: number;
+    freshness: number;
+    damagePercent: number;
+    packingStepsDone: string[];
+    packingStepsRequired: string[];
+  } | null;
+  lastResult?: PizzerDeliveryResult | null;
+}
+
+export interface PizzerDeliveryResult {
+  delivered: boolean;
+  orderType: PizzerOrderType;
+  breakdown: {
+    baseReward: number;
+    orderTypeMultiplier: number;
+    levelMultiplier: number;
+    freshnessMultiplier: number;
+    streakMultiplier: number;
+    damageMultiplier: number;
+    tip: number;
+    totalReward: number;
+    xpGained: number;
+    freshness: number;
+    damagePercent: number;
+    timeLeftSec: number;
+    rating: 'PERFECT' | 'GOOD' | 'OK' | 'FAILED';
+  };
+  progression: {
+    levelBefore: number;
+    levelAfter: number;
+    xpBefore: number;
+    xpAfter: number;
+    unlockedVehicle?: string | null;
+  };
 }

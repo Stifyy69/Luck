@@ -235,6 +235,19 @@ async function initDb() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_pizzer_progress (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      pizzer_level INT NOT NULL DEFAULT 1,
+      pizzer_xp INT NOT NULL DEFAULT 0,
+      pizzer_total_deliveries INT NOT NULL DEFAULT 0,
+      pizzer_perfect_deliveries INT NOT NULL DEFAULT 0,
+      pizzer_best_streak INT NOT NULL DEFAULT 0,
+      pizzer_total_earnings BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
   const requiredColumns = [
     ['farm_earned', "BIGINT NOT NULL DEFAULT 0"],
     ['time_pilot', "DOUBLE PRECISION NOT NULL DEFAULT 0"],
@@ -366,6 +379,221 @@ function getClothingImagePath(name, category) {
 
 function randomInt(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+const PIZZER_LEVEL_THRESHOLDS = [0, 100, 250, 450, 700, 1000, 1350, 1750, 2200, 2700];
+
+const PIZZER_CONFIG = {
+  startCooldownMs: 15000,
+  optionsCooldownMs: 10000,
+  hardLateGraceSec: 120,
+  freshDecayPerSecond: 0.18,
+  freshDecayLevel8Factor: 0.86,
+  damagePenaltyMax: 0.25,
+  streakBonusPerStep: 0.05,
+  streakBonusMax: 0.15,
+  baseRewardDistanceFactor: 0.08,
+  orderTypeMultipliers: {
+    STANDARD: 1.0,
+    URGENTA: 1.25,
+    VIP: 1.45,
+  },
+  baseXp: {
+    STANDARD: 18,
+    URGENTA: 25,
+    VIP: 35,
+  },
+  tipRange: {
+    STANDARD: [20, 60],
+    URGENTA: [40, 100],
+    VIP: [80, 180],
+  },
+  vehicles: {
+    BICICLETA: { levelMin: 1, levelMax: 3, label: 'Bicycle Courier', distanceMin: 500, distanceMax: 1500 },
+    SCUTER: { levelMin: 4, levelMax: 6, label: 'Scooter Courier', distanceMin: 1200, distanceMax: 2600 },
+    MASINA: { levelMin: 7, levelMax: 10, label: 'Delivery Car', distanceMin: 2200, distanceMax: 4200 },
+  },
+  orderTypeLevelMin: {
+    STANDARD: 1,
+    URGENTA: 3,
+    VIP: 6,
+  },
+  deliveryLocations: [
+    { label: 'Pillbox Apartments', handovers: ['gate', 'entry', 'door'] },
+    { label: 'Morningwood Residence', handovers: ['gate', 'entry', 'door'] },
+    { label: 'Mirror Park Home', handovers: ['street', 'entry', 'door'] },
+    { label: 'Del Perro Flat', handovers: ['street', 'entry', 'door'] },
+    { label: 'Vespucci Court', handovers: ['gate', 'street', 'door'] },
+    { label: 'Rockford Hills Villa', handovers: ['gate', 'street', 'door'] },
+  ],
+};
+
+const pizzerSessions = new Map();
+
+function computePizzerLevel(xp) {
+  let level = 1;
+  for (let i = 0; i < PIZZER_LEVEL_THRESHOLDS.length; i += 1) {
+    if (xp >= PIZZER_LEVEL_THRESHOLDS[i]) level = i + 1;
+  }
+  return Math.min(10, level);
+}
+
+function levelStartXp(level) {
+  return PIZZER_LEVEL_THRESHOLDS[Math.max(0, Math.min(9, level - 1))] || 0;
+}
+
+function nextLevelXp(level) {
+  if (level >= 10) return null;
+  return PIZZER_LEVEL_THRESHOLDS[level] || null;
+}
+
+function pizzerVehicleKeyForLevel(level) {
+  if (level >= 7) return 'MASINA';
+  if (level >= 4) return 'SCUTER';
+  return 'BICICLETA';
+}
+
+function pizzerVehicleForLevel(level) {
+  const key = pizzerVehicleKeyForLevel(level);
+  return { key, ...PIZZER_CONFIG.vehicles[key] };
+}
+
+function pizzerOrderTypesForLevel(level) {
+  const result = ['STANDARD'];
+  if (level >= PIZZER_CONFIG.orderTypeLevelMin.URGENTA) result.push('URGENTA');
+  if (level >= PIZZER_CONFIG.orderTypeLevelMin.VIP) result.push('VIP');
+  return result;
+}
+
+function levelPayoutMultiplier(level) {
+  return Math.min(1.27, 1 + (Math.max(1, level) - 1) * 0.03);
+}
+
+function buildOrderOption(level) {
+  const vehicle = pizzerVehicleForLevel(level);
+  const availableTypes = pizzerOrderTypesForLevel(level);
+
+  const weights = availableTypes.map((type) => {
+    if (type === 'VIP') return 0.2 + Math.max(0, level - 6) * 0.08;
+    if (type === 'URGENTA') return 0.9;
+    return 1.4;
+  });
+
+  const total = weights.reduce((acc, value) => acc + value, 0);
+  let roll = Math.random() * total;
+  let orderType = availableTypes[0];
+  for (let i = 0; i < availableTypes.length; i += 1) {
+    roll -= weights[i];
+    if (roll <= 0) {
+      orderType = availableTypes[i];
+      break;
+    }
+  }
+
+  const baseDistance = randomInt(vehicle.distanceMin, vehicle.distanceMax);
+  const difficulty = orderType === 'VIP' ? 'HARD' : orderType === 'URGENTA' ? 'MEDIUM' : 'EASY';
+  const timePenalty = orderType === 'VIP' ? 0.85 : orderType === 'URGENTA' ? 0.92 : 1;
+  const estimatedTimeSec = Math.max(120, Math.floor((baseDistance / 11) * timePenalty));
+  const baseReward = 120 + Math.floor(baseDistance * PIZZER_CONFIG.baseRewardDistanceFactor);
+  const estimatedReward = Math.floor(
+    baseReward *
+      PIZZER_CONFIG.orderTypeMultipliers[orderType] *
+      levelPayoutMultiplier(level),
+  );
+  const estimatedXp = PIZZER_CONFIG.baseXp[orderType] + (orderType === 'VIP' ? 4 : orderType === 'URGENTA' ? 2 : 0);
+  const location = PIZZER_CONFIG.deliveryLocations[randomInt(0, PIZZER_CONFIG.deliveryLocations.length - 1)];
+
+  return {
+    orderId: crypto.randomBytes(6).toString('hex'),
+    orderType,
+    distanceMeters: baseDistance,
+    estimatedReward,
+    estimatedXp,
+    estimatedTimeSec,
+    difficulty,
+    targetLabel: location.label,
+    handovers: location.handovers,
+  };
+}
+
+async function ensurePizzerProgress(db, playerId) {
+  await db.query(
+    `INSERT INTO player_pizzer_progress (player_id)
+     VALUES ($1)
+     ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM player_pizzer_progress WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+function toPizzerProgressView(row) {
+  const xp = Number(row?.pizzer_xp || 0);
+  const level = Math.max(1, Math.min(10, Number(row?.pizzer_level || computePizzerLevel(xp))));
+  const currentStart = levelStartXp(level);
+  const next = nextLevelXp(level);
+  return {
+    level,
+    xp,
+    currentLevelXp: xp - currentStart,
+    nextLevelXp: next,
+    totalDeliveries: Number(row?.pizzer_total_deliveries || 0),
+    perfectDeliveries: Number(row?.pizzer_perfect_deliveries || 0),
+    bestStreak: Number(row?.pizzer_best_streak || 0),
+    totalEarnings: Number(row?.pizzer_total_earnings || 0),
+  };
+}
+
+function getPizzerSession(playerId) {
+  return pizzerSessions.get(playerId) || {
+    shiftState: 'IDLE',
+    streak: 0,
+    bestStreakShift: 0,
+    orderOptions: [],
+    optionsGeneratedAt: 0,
+    activeOrder: null,
+    lastResult: null,
+    cooldownUntil: 0,
+  };
+}
+
+function setPizzerSession(playerId, session) {
+  pizzerSessions.set(playerId, session);
+}
+
+function freshnessForOrder(order, level) {
+  if (!order) return 100;
+  const now = Date.now();
+  const elapsedSec = Math.max(0, (now - order.deliveryStartedAt) / 1000);
+  const decay = PIZZER_CONFIG.freshDecayPerSecond * (level >= 8 ? PIZZER_CONFIG.freshDecayLevel8Factor : 1);
+  return Math.max(0, Math.floor(100 - elapsedSec * decay));
+}
+
+function pizzerStateView(session, progressView) {
+  const vehicle = pizzerVehicleForLevel(progressView.level);
+  const activeOrder = session.activeOrder
+    ? {
+        orderId: session.activeOrder.orderId,
+        orderType: session.activeOrder.orderType,
+        distanceMeters: session.activeOrder.distanceMeters,
+        targetLabel: session.activeOrder.targetLabel,
+        etaSec: session.activeOrder.etaSec,
+        timeLeftSec: Math.max(0, session.activeOrder.etaSec - Math.floor((Date.now() - session.activeOrder.deliveryStartedAt) / 1000)),
+        freshness: freshnessForOrder(session.activeOrder, progressView.level),
+        damagePercent: session.activeOrder.damagePercent,
+        packingStepsDone: [...session.activeOrder.packingStepsDone],
+        packingStepsRequired: [...session.activeOrder.packingStepsRequired],
+      }
+    : null;
+
+  return {
+    progress: progressView,
+    shiftState: session.shiftState,
+    vehicleLabel: vehicle.label,
+    streak: session.streak,
+    activeOrder,
+    lastResult: session.lastResult || null,
+  };
 }
 
 const NPC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
@@ -662,6 +890,13 @@ async function buildMarketListingView(db, listing, viewerPlayerId) {
     sellerName = npc?.name || 'NPC Seller';
     sellerEmoji = npc?.emoji || '🕵️';
     sellerType = 'NPC';
+  } else if (listing.seller_player_id) {
+    const sellerResult = await db.query(
+      `SELECT display_name FROM players WHERE player_id = $1`,
+      [listing.seller_player_id],
+    );
+    const displayName = String(sellerResult.rows[0]?.display_name || '').trim();
+    sellerName = displayName || listing.seller_player_id;
   }
 
   return {
@@ -1441,6 +1676,7 @@ app.get('/api/market/seller', async (req, res) => {
           id: offer.id,
           listingId: offer.listing_id,
           buyerPlayerId: offer.buyer_player_id,
+          buyerDisplayName: String((await pool.query(`SELECT display_name FROM players WHERE player_id = $1`, [offer.buyer_player_id])).rows[0]?.display_name || '').trim() || offer.buyer_player_id,
           offeredPrice: Number(offer.offered_price),
           status: offer.status,
           createdAt: asIso(offer.created_at),
@@ -1479,9 +1715,13 @@ app.get('/api/market/buyer', async (req, res) => {
         const asset = listing ? await resolveListingAsset(pool, listing) : null;
         if (!asset) return null;
         const sellerType = listing?.seller_npc_id ? 'NPC' : 'PLAYER';
-        const sellerName = listing?.seller_npc_id
-          ? (NPC_SELLERS.find((entry) => normalizeNpcId(entry.id) === normalizeNpcId(listing.seller_npc_id))?.name || 'NPC Seller')
-          : listing?.seller_player_id;
+        let sellerName = listing?.seller_player_id;
+        if (listing?.seller_npc_id) {
+          sellerName = NPC_SELLERS.find((entry) => normalizeNpcId(entry.id) === normalizeNpcId(listing.seller_npc_id))?.name || 'NPC Seller';
+        } else if (listing?.seller_player_id) {
+          const seller = await pool.query(`SELECT display_name FROM players WHERE player_id = $1`, [listing.seller_player_id]);
+          sellerName = String(seller.rows[0]?.display_name || '').trim() || listing.seller_player_id;
+        }
         return {
           id: offer.id,
           listingId: offer.listing_id,
@@ -1747,6 +1987,392 @@ app.post('/api/player/cash/adjust', requireDb, async (req, res) => {
     res.json({ ok: true, cleanMoney: result });
   } catch (error) {
     res.status(400).json({ error: error.message || 'cash adjust failed' });
+  }
+});
+
+app.get('/api/pizzer/state', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    await ensurePlayer(pool, playerId);
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const session = getPizzerSession(playerId);
+    setPizzerSession(playerId, session);
+    res.json(pizzerStateView(session, toPizzerProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'pizzer state failed' });
+  }
+});
+
+app.post('/api/pizzer/shift/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const progressView = toPizzerProgressView(progress);
+    const now = Date.now();
+    const session = getPizzerSession(playerId);
+
+    if (session.shiftState !== 'IDLE') {
+      return res.status(400).json({ error: 'shift already active' });
+    }
+    if (session.cooldownUntil && session.cooldownUntil > now) {
+      return res.status(400).json({ error: 'shift cooldown active' });
+    }
+
+    const nextSession = {
+      ...session,
+      shiftState: 'SELECTING_ORDER',
+      orderOptions: [],
+      optionsGeneratedAt: 0,
+      activeOrder: null,
+      lastResult: null,
+    };
+    setPizzerSession(playerId, nextSession);
+    res.json(pizzerStateView(nextSession, progressView));
+  } catch (error) {
+    res.status(500).json({ error: 'start shift failed' });
+  }
+});
+
+app.post('/api/pizzer/shift/end', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const session = getPizzerSession(playerId);
+    const next = {
+      ...session,
+      shiftState: 'IDLE',
+      orderOptions: [],
+      activeOrder: null,
+      cooldownUntil: Date.now() + PIZZER_CONFIG.startCooldownMs,
+    };
+    setPizzerSession(playerId, next);
+    res.json(pizzerStateView(next, toPizzerProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'end shift failed' });
+  }
+});
+
+app.post('/api/pizzer/orders/options', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    if (session.shiftState !== 'SELECTING_ORDER') {
+      return res.status(400).json({ error: 'not ready to pick order' });
+    }
+
+    const now = Date.now();
+    if (!session.orderOptions.length || now - Number(session.optionsGeneratedAt || 0) > PIZZER_CONFIG.optionsCooldownMs) {
+      session.orderOptions = [buildOrderOption(view.level), buildOrderOption(view.level), buildOrderOption(view.level)];
+      session.optionsGeneratedAt = now;
+      setPizzerSession(playerId, session);
+    }
+
+    res.json({
+      options: session.orderOptions.map((order) => ({
+        orderId: order.orderId,
+        orderType: order.orderType,
+        distanceMeters: order.distanceMeters,
+        estimatedReward: order.estimatedReward,
+        estimatedXp: order.estimatedXp,
+        estimatedTimeSec: order.estimatedTimeSec,
+        difficulty: order.difficulty,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'order options failed' });
+  }
+});
+
+app.post('/api/pizzer/order/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, orderId } = req.body || {};
+    if (!playerId || !orderId) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    if (session.shiftState !== 'SELECTING_ORDER') return res.status(400).json({ error: 'not selecting order' });
+
+    const selected = (session.orderOptions || []).find((entry) => entry.orderId === orderId);
+    if (!selected) return res.status(404).json({ error: 'order option not found' });
+
+    session.shiftState = 'PACKING_ORDER';
+    session.activeOrder = {
+      ...selected,
+      etaSec: selected.estimatedTimeSec,
+      deliveryStartedAt: Date.now(),
+      damagePercent: 0,
+      packingStepsRequired: ['PICK_BOXES', 'ADD_DRINKS', 'CONFIRM_ORDER'],
+      packingStepsDone: [],
+      handovers: selected.handovers,
+    };
+    session.orderOptions = [];
+    session.lastResult = null;
+    setPizzerSession(playerId, session);
+
+    res.json(pizzerStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'select order failed' });
+  }
+});
+
+app.post('/api/pizzer/packing/step', requireDb, async (req, res) => {
+  try {
+    const { playerId, stepKey } = req.body || {};
+    if (!playerId || !stepKey) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    if (session.shiftState !== 'PACKING_ORDER' || !session.activeOrder) {
+      return res.status(400).json({ error: 'no order in packing' });
+    }
+
+    const order = session.activeOrder;
+    if (!order.packingStepsRequired.includes(stepKey)) {
+      return res.status(400).json({ error: 'invalid packing step' });
+    }
+    if (!order.packingStepsDone.includes(stepKey)) {
+      order.packingStepsDone.push(stepKey);
+    }
+
+    if (order.packingStepsRequired.every((step) => order.packingStepsDone.includes(step))) {
+      session.shiftState = 'DELIVERY_ACTIVE';
+      order.deliveryStartedAt = Date.now();
+    }
+
+    setPizzerSession(playerId, session);
+    res.json(pizzerStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'packing step failed' });
+  }
+});
+
+app.post('/api/pizzer/delivery/report-damage', requireDb, async (req, res) => {
+  try {
+    const { playerId, damageDelta } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const delta = Math.max(0, Math.floor(Number(damageDelta || 0)));
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    if (session.shiftState !== 'DELIVERY_ACTIVE' || !session.activeOrder) {
+      return res.status(400).json({ error: 'no active delivery' });
+    }
+
+    session.activeOrder.damagePercent = Math.max(0, Math.min(100, Number(session.activeOrder.damagePercent || 0) + delta));
+    setPizzerSession(playerId, session);
+    res.json(pizzerStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'damage report failed' });
+  }
+});
+
+app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
+  try {
+    const { playerId, handoverVariant } = req.body || {};
+    if (!playerId || !handoverVariant) return res.status(400).json({ error: 'missing fields' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePizzerProgress(db, playerId);
+      const progressBefore = toPizzerProgressView(progressRow);
+      const session = getPizzerSession(playerId);
+
+      if (session.shiftState !== 'DELIVERY_ACTIVE' || !session.activeOrder) {
+        throw new Error('no active delivery');
+      }
+
+      const order = session.activeOrder;
+      if (!order.handovers.includes(String(handoverVariant).toLowerCase())) {
+        throw new Error('invalid handover variant');
+      }
+
+      const now = Date.now();
+      const elapsedSec = Math.max(0, Math.floor((now - Number(order.deliveryStartedAt)) / 1000));
+      const lateSec = Math.max(0, elapsedSec - Number(order.etaSec));
+      const hardFail = lateSec > PIZZER_CONFIG.hardLateGraceSec;
+
+      const freshness = freshnessForOrder(order, progressBefore.level);
+      const freshnessMultiplier = freshness >= 76 ? 1.15 : freshness >= 41 ? 1.0 : 0.85;
+      const orderTypeMultiplier = PIZZER_CONFIG.orderTypeMultipliers[order.orderType] || 1;
+      const levelMultiplier = levelPayoutMultiplier(progressBefore.level);
+      const streakMultiplier = 1 + Math.min(3, Number(session.streak || 0)) * PIZZER_CONFIG.streakBonusPerStep;
+      const damagePercent = Math.max(0, Math.min(100, Number(order.damagePercent || 0)));
+      const damageMultiplier = Math.max(1 - PIZZER_CONFIG.damagePenaltyMax, 1 - (damagePercent / 100) * PIZZER_CONFIG.damagePenaltyMax);
+
+      const speedPenaltyMultiplier = lateSec <= 0 ? 1.05 : lateSec <= 45 ? 0.9 : lateSec <= 90 ? 0.75 : 0.6;
+      const baseReward = 120 + Math.floor(Number(order.distanceMeters) * PIZZER_CONFIG.baseRewardDistanceFactor);
+      const preTip = hardFail
+        ? 0
+        : Math.floor(baseReward * orderTypeMultiplier * levelMultiplier * freshnessMultiplier * streakMultiplier * damageMultiplier * speedPenaltyMultiplier);
+
+      const tipRange = PIZZER_CONFIG.tipRange[order.orderType] || [20, 60];
+      const tipPerf = freshness >= 76 && lateSec <= 0 ? 1 : freshness >= 41 ? 0.7 : 0.35;
+      const tip = hardFail ? 0 : Math.floor(randomInt(tipRange[0], tipRange[1]) * tipPerf);
+      const totalReward = Math.max(0, preTip + tip);
+
+      const baseXp = PIZZER_CONFIG.baseXp[order.orderType] || 18;
+      const perfectBonusXp = freshness >= 88 && lateSec <= 0 && damagePercent <= 10 ? 6 : 0;
+      const streakXpBonus = Math.min(6, Number(session.streak || 0));
+      const xpGained = hardFail ? 0 : baseXp + perfectBonusXp + streakXpBonus;
+
+      const rating = hardFail
+        ? 'FAILED'
+        : freshness >= 88 && lateSec <= 0 && damagePercent <= 12
+          ? 'PERFECT'
+          : freshness >= 70 && lateSec <= 25
+            ? 'GOOD'
+            : 'OK';
+
+      const nextXp = Number(progressBefore.xp) + xpGained;
+      const nextLevel = computePizzerLevel(nextXp);
+      const unlockedVehicle = nextLevel > progressBefore.level ? pizzerVehicleForLevel(nextLevel).label : null;
+
+      const nextStreak = rating === 'PERFECT' || rating === 'GOOD' ? Number(session.streak || 0) + 1 : rating === 'FAILED' ? 0 : Number(session.streak || 0);
+      const bestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+
+      await db.query(
+        `UPDATE player_pizzer_progress
+         SET pizzer_level = $2,
+             pizzer_xp = $3,
+             pizzer_total_deliveries = pizzer_total_deliveries + 1,
+             pizzer_perfect_deliveries = pizzer_perfect_deliveries + $4,
+             pizzer_best_streak = GREATEST(pizzer_best_streak, $5),
+             pizzer_total_earnings = pizzer_total_earnings + $6,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          rating === 'PERFECT' ? 1 : 0,
+          bestStreak,
+          totalReward,
+        ],
+      );
+
+      if (totalReward > 0) {
+        await db.query(
+          `UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`,
+          [playerId, totalReward],
+        );
+      }
+
+      const updatedProgress = await ensurePizzerProgress(db, playerId);
+      const progressAfter = toPizzerProgressView(updatedProgress);
+
+      session.streak = nextStreak;
+      session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
+      session.activeOrder = null;
+      session.shiftState = 'DELIVERY_RESULT';
+      session.lastResult = {
+        delivered: !hardFail,
+        orderType: order.orderType,
+        breakdown: {
+          baseReward,
+          orderTypeMultiplier,
+          levelMultiplier,
+          freshnessMultiplier,
+          streakMultiplier,
+          damageMultiplier,
+          tip,
+          totalReward,
+          xpGained,
+          freshness,
+          damagePercent,
+          timeLeftSec: Math.max(0, Number(order.etaSec) - elapsedSec),
+          rating,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          unlockedVehicle,
+        },
+      };
+      session.shiftState = 'SELECTING_ORDER';
+      session.orderOptions = [];
+      session.optionsGeneratedAt = 0;
+      setPizzerSession(playerId, session);
+
+      return {
+        state: pizzerStateView(session, progressAfter),
+        result: session.lastResult,
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'handover failed' });
+  }
+});
+
+app.post('/api/pizzer/admin/set-level', requireDb, async (req, res) => {
+  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { playerId, level } = req.body || {};
+    const safeLevel = Math.max(1, Math.min(10, Number(level || 1)));
+    const xp = levelStartXp(safeLevel);
+    await ensurePlayer(pool, playerId);
+    await ensurePizzerProgress(pool, playerId);
+    await pool.query(
+      `UPDATE player_pizzer_progress SET pizzer_level = $2, pizzer_xp = $3, updated_at = NOW() WHERE player_id = $1`,
+      [playerId, safeLevel, xp],
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: 'set-level failed' });
+  }
+});
+
+app.post('/api/pizzer/admin/add-xp', requireDb, async (req, res) => {
+  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { playerId, xp } = req.body || {};
+    const add = Math.max(0, Math.floor(Number(xp || 0)));
+    await ensurePlayer(pool, playerId);
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const nextXp = Number(progress.pizzer_xp || 0) + add;
+    const nextLevel = computePizzerLevel(nextXp);
+    await pool.query(
+      `UPDATE player_pizzer_progress SET pizzer_level = $2, pizzer_xp = $3, updated_at = NOW() WHERE player_id = $1`,
+      [playerId, nextLevel, nextXp],
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: 'add-xp failed' });
+  }
+});
+
+app.post('/api/pizzer/admin/reset', requireDb, async (req, res) => {
+  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { playerId } = req.body || {};
+    await ensurePlayer(pool, playerId);
+    await pool.query(
+      `DELETE FROM player_pizzer_progress WHERE player_id = $1`,
+      [playerId],
+    );
+    pizzerSessions.delete(playerId);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: 'reset failed' });
   }
 });
 
@@ -2096,7 +2722,8 @@ app.get('/api/adminpanelv2/dashboard', requireDb, async (req, res) => {
       pool.query(
         `
         SELECT
-          player_id,
+          ps.player_id,
+          COALESCE(NULLIF(TRIM(p.display_name), ''), ps.player_id) AS nickname,
           cash_available,
           roulette_spent,
           roulette_won,
@@ -2113,8 +2740,9 @@ app.get('/api/adminpanelv2/dashboard', requireDb, async (req, res) => {
           city,
           country,
           path
-        FROM player_stats
-        ORDER BY updated_at DESC
+        FROM player_stats ps
+        LEFT JOIN players p ON p.player_id = ps.player_id
+        ORDER BY ps.updated_at DESC
         LIMIT 300;
         `,
       ),
