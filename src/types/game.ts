@@ -243,6 +243,8 @@ export interface PizzerStateResponse {
   shiftState: PizzerShiftState;
   vehicleLabel: string;
   streak: number;
+  repairSecondsLeft?: number;
+  repairLabel?: string | null;
   activeOrder: {
     orderId: string;
     orderType: PizzerOrderType;
@@ -263,6 +265,7 @@ export interface PizzerStateResponse {
 
 export interface PizzerDeliveryResult {
   delivered: boolean;
+  accident?: boolean;
   orderType: PizzerOrderType;
   breakdown: {
     baseReward: number;

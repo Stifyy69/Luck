@@ -381,12 +381,13 @@ function randomInt(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
 }
 
-const PIZZER_LEVEL_THRESHOLDS = [0, 100, 250, 450, 700, 1000, 1350, 1750, 2200, 2700];
+const PIZZER_MAX_LEVEL = 50;
 
 const PIZZER_CONFIG = {
   startCooldownMs: 15000,
   optionsCooldownMs: 10000,
   actionCooldownMs: 500,
+  repairCooldownMs: 10000,
   hardLateGraceSec: 120,
   freshDecayPerSecond: 0.18,
   freshDecayLevel8Factor: 0.86,
@@ -410,14 +411,19 @@ const PIZZER_CONFIG = {
     VIP: [80, 180],
   },
   vehicles: {
-    BICICLETA: { levelMin: 1, levelMax: 3, label: 'Bicycle Courier', distanceMin: 500, distanceMax: 1500 },
-    SCUTER: { levelMin: 4, levelMax: 6, label: 'Scooter Courier', distanceMin: 1200, distanceMax: 2600 },
-    MASINA: { levelMin: 7, levelMax: 10, label: 'Delivery Car', distanceMin: 2200, distanceMax: 4200 },
+    BICICLETA: { levelMin: 1, levelMax: 16, label: 'Bicycle Courier', distanceMin: 450, distanceMax: 1700 },
+    SCUTER: { levelMin: 17, levelMax: 33, label: 'Scooter Courier', distanceMin: 1200, distanceMax: 3000 },
+    MASINA: { levelMin: 34, levelMax: 50, label: 'Delivery Car', distanceMin: 2200, distanceMax: 5000 },
   },
   orderTypeLevelMin: {
     STANDARD: 1,
-    URGENTA: 3,
-    VIP: 6,
+    URGENTA: 8,
+    VIP: 20,
+  },
+  accidentChanceByVehicle: {
+    BICICLETA: 0.05,
+    SCUTER: 0.045,
+    MASINA: 0.04,
   },
   deliveryLocations: [
     { label: 'Pillbox Apartments', handovers: ['gate', 'entry', 'door'] },
@@ -434,26 +440,34 @@ const PIZZER_DRINK_TYPES = ['LedBul', 'Black Soda', 'Yellow Soda', 'Green Soda']
 
 const pizzerSessions = new Map();
 
+function pizzerXpForLevel(level) {
+  const safeLevel = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(level) || 1));
+  if (safeLevel <= 1) return 0;
+  const x = safeLevel - 1;
+  return Math.floor(120 * Math.pow(x, 1.32) + x * 40);
+}
+
 function computePizzerLevel(xp) {
+  const safeXp = Math.max(0, Math.floor(Number(xp) || 0));
   let level = 1;
-  for (let i = 0; i < PIZZER_LEVEL_THRESHOLDS.length; i += 1) {
-    if (xp >= PIZZER_LEVEL_THRESHOLDS[i]) level = i + 1;
+  for (let i = 2; i <= PIZZER_MAX_LEVEL; i += 1) {
+    if (safeXp >= pizzerXpForLevel(i)) level = i;
   }
-  return Math.min(10, level);
+  return Math.min(PIZZER_MAX_LEVEL, level);
 }
 
 function levelStartXp(level) {
-  return PIZZER_LEVEL_THRESHOLDS[Math.max(0, Math.min(9, level - 1))] || 0;
+  return pizzerXpForLevel(level);
 }
 
 function nextLevelXp(level) {
-  if (level >= 10) return null;
-  return PIZZER_LEVEL_THRESHOLDS[level] || null;
+  if (level >= PIZZER_MAX_LEVEL) return null;
+  return pizzerXpForLevel(level + 1);
 }
 
 function pizzerVehicleKeyForLevel(level) {
-  if (level >= 7) return 'MASINA';
-  if (level >= 4) return 'SCUTER';
+  if (level >= PIZZER_CONFIG.vehicles.MASINA.levelMin) return 'MASINA';
+  if (level >= PIZZER_CONFIG.vehicles.SCUTER.levelMin) return 'SCUTER';
   return 'BICICLETA';
 }
 
@@ -470,7 +484,7 @@ function pizzerOrderTypesForLevel(level) {
 }
 
 function levelPayoutMultiplier(level) {
-  return Math.min(1.27, 1 + (Math.max(1, level) - 1) * 0.03);
+  return Math.min(2.2, 1 + (Math.max(1, level) - 1) * 0.025);
 }
 
 function pickUniqueRandom(list, count) {
@@ -569,7 +583,7 @@ async function ensurePizzerProgress(db, playerId) {
 
 function toPizzerProgressView(row) {
   const xp = Number(row?.pizzer_xp || 0);
-  const level = Math.max(1, Math.min(10, Number(row?.pizzer_level || computePizzerLevel(xp))));
+  const level = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(row?.pizzer_level || computePizzerLevel(xp))));
   const currentStart = levelStartXp(level);
   const next = nextLevelXp(level);
   return {
@@ -595,6 +609,8 @@ function getPizzerSession(playerId) {
     lastResult: null,
     cooldownUntil: 0,
     lastActionAt: 0,
+    repairUntil: 0,
+    repairLabel: null,
   };
 }
 
@@ -612,6 +628,8 @@ function freshnessForOrder(order, level) {
 
 function pizzerStateView(session, progressView) {
   const vehicle = pizzerVehicleForLevel(progressView.level);
+  const now = Date.now();
+  const repairSecondsLeft = Math.max(0, Math.ceil((Number(session.repairUntil || 0) - now) / 1000));
   const activeOrder = session.activeOrder
     ? {
         orderId: session.activeOrder.orderId,
@@ -636,9 +654,23 @@ function pizzerStateView(session, progressView) {
     shiftState: session.shiftState,
     vehicleLabel: vehicle.label,
     streak: session.streak,
+    repairSecondsLeft,
+    repairLabel: session.repairLabel || null,
     activeOrder,
     lastResult: session.lastResult || null,
   };
+}
+
+function enforcePizzerRepairCooldown(session) {
+  const now = Date.now();
+  if (Number(session.repairUntil || 0) > now) {
+    const left = Math.max(1, Math.ceil((session.repairUntil - now) / 1000));
+    throw new Error(`vehicle repair in progress (${left}s)`);
+  }
+  if (session.repairUntil && session.repairUntil <= now) {
+    session.repairUntil = 0;
+    session.repairLabel = null;
+  }
 }
 
 function enforcePizzerActionCooldown(session) {
@@ -2050,6 +2082,10 @@ app.get('/api/pizzer/state', requireDb, async (req, res) => {
     await ensurePlayer(pool, playerId);
     const progress = await ensurePizzerProgress(pool, playerId);
     const session = getPizzerSession(playerId);
+    if (session.repairUntil && session.repairUntil <= Date.now()) {
+      session.repairUntil = 0;
+      session.repairLabel = null;
+    }
     setPizzerSession(playerId, session);
     res.json(pizzerStateView(session, toPizzerProgressView(progress)));
   } catch (error) {
@@ -2066,6 +2102,7 @@ app.post('/api/pizzer/shift/start', requireDb, async (req, res) => {
     const progressView = toPizzerProgressView(progress);
     const now = Date.now();
     const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
 
     if (session.shiftState !== 'IDLE') {
       return res.status(400).json({ error: 'shift already active' });
@@ -2118,6 +2155,7 @@ app.post('/api/pizzer/orders/options', requireDb, async (req, res) => {
     const progress = await ensurePizzerProgress(pool, playerId);
     const view = toPizzerProgressView(progress);
     const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_ORDER') {
       return res.status(400).json({ error: 'not ready to pick order' });
     }
@@ -2156,6 +2194,7 @@ app.post('/api/pizzer/order/select', requireDb, async (req, res) => {
     const progress = await ensurePizzerProgress(pool, playerId);
     const view = toPizzerProgressView(progress);
     const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_ORDER') return res.status(400).json({ error: 'not selecting order' });
     enforcePizzerActionCooldown(session);
 
@@ -2192,6 +2231,7 @@ app.post('/api/pizzer/packing/step', requireDb, async (req, res) => {
     const progress = await ensurePizzerProgress(pool, playerId);
     const view = toPizzerProgressView(progress);
     const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
     if (session.shiftState !== 'PACKING_ORDER' || !session.activeOrder) {
       return res.status(400).json({ error: 'no order in packing' });
     }
@@ -2251,6 +2291,7 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
       const progressRow = await ensurePizzerProgress(db, playerId);
       const progressBefore = toPizzerProgressView(progressRow);
       const session = getPizzerSession(playerId);
+      enforcePizzerRepairCooldown(session);
       enforcePizzerActionCooldown(session);
 
       if (session.shiftState !== 'DELIVERY_ACTIVE' || !session.activeOrder) {
@@ -2260,6 +2301,55 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
       const order = session.activeOrder;
       if (!order.handovers.includes(String(handoverVariant).toLowerCase())) {
         throw new Error('invalid handover variant');
+      }
+
+      const vehicleKey = pizzerVehicleKeyForLevel(progressBefore.level);
+      const accidentChance = Number(PIZZER_CONFIG.accidentChanceByVehicle?.[vehicleKey] || 0.05);
+      const accidentTriggered = Math.random() < accidentChance;
+
+      if (accidentTriggered) {
+        const now = Date.now();
+        const repairLabel = vehicleKey === 'BICICLETA' ? 'Repairing bicycle' : vehicleKey === 'SCUTER' ? 'Repairing scooter' : 'Repairing car';
+        const repairUntil = now + PIZZER_CONFIG.repairCooldownMs;
+        session.streak = 0;
+        session.activeOrder = null;
+        session.shiftState = 'SELECTING_ORDER';
+        session.orderOptions = [];
+        session.optionsGeneratedAt = 0;
+        session.repairUntil = repairUntil;
+        session.repairLabel = repairLabel;
+        session.lastResult = {
+          delivered: false,
+          accident: true,
+          orderType: order.orderType,
+          breakdown: {
+            baseReward: 0,
+            orderTypeMultiplier: 1,
+            levelMultiplier: 1,
+            freshnessMultiplier: 1,
+            streakMultiplier: 1,
+            damageMultiplier: 1,
+            tip: 0,
+            totalReward: 0,
+            xpGained: 0,
+            freshness: freshnessForOrder(order, progressBefore.level),
+            damagePercent: 100,
+            timeLeftSec: 0,
+            rating: 'FAILED',
+          },
+          progression: {
+            levelBefore: progressBefore.level,
+            levelAfter: progressBefore.level,
+            xpBefore: progressBefore.xp,
+            xpAfter: progressBefore.xp,
+            unlockedVehicle: null,
+          },
+        };
+        setPizzerSession(playerId, session);
+        return {
+          state: pizzerStateView(session, progressBefore),
+          result: session.lastResult,
+        };
       }
 
       const now = Date.now();
@@ -2389,7 +2479,7 @@ app.post('/api/pizzer/admin/set-level', requireDb, async (req, res) => {
   }
   try {
     const { playerId, level } = req.body || {};
-    const safeLevel = Math.max(1, Math.min(10, Number(level || 1)));
+    const safeLevel = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(level || 1)));
     const xp = levelStartXp(safeLevel);
     await ensurePlayer(pool, playerId);
     await ensurePizzerProgress(pool, playerId);

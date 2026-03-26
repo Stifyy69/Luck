@@ -56,12 +56,11 @@ export default function PilotPage() {
       if ((state.pilotEndsAt ?? 0) > 0 && (state.pilotEndsAt ?? 0) <= now && !state.pilotRewardClaimed) {
         const multiplier = Number(state.pilotRewardMultiplier ?? 1);
         const reward = 100_000 * multiplier;
-        const nextCash = Number(state.cashBalance ?? 1_000_000) + reward;
         const nextPilot = Number(state.timePilot ?? 0) + 0.5;
         saveGameState({
           ...state,
-          cashBalance: nextCash,
-          baniCurati: nextCash,
+          cashBalance: Number(player?.cleanMoney ?? state.cashBalance ?? 0),
+          baniCurati: Number(player?.cleanMoney ?? state.cashBalance ?? 0),
           timePilot: nextPilot,
           pilotCount: Number(state.pilotCount ?? 0) + 1,
           pilotMoney: Number(state.pilotMoney ?? 0) + reward,
@@ -69,6 +68,22 @@ export default function PilotPage() {
           pilotRewardMultiplier: 1,
           pilotCooldownUntil: now + 30_000,
         });
+
+        (async () => {
+          try {
+            const adjusted = await api.playerCashAdjust(playerId, reward);
+            const newest = loadGameState() || {};
+            saveGameState({
+              ...newest,
+              cashBalance: Number(adjusted.cleanMoney),
+              baniCurati: Number(adjusted.cleanMoney),
+            });
+            refresh();
+          } catch {
+            setPopup('Pilot finished, but cash sync failed. Retry page refresh.');
+          }
+        })();
+
         setPopup(`Pilot completed. +${reward.toLocaleString('en-US')} clean money. 30s cooldown.`);
         window.setTimeout(() => setPopup(null), 2200);
       }
@@ -77,7 +92,7 @@ export default function PilotPage() {
     tick();
     const timerId = window.setInterval(tick, 250);
     return () => window.clearInterval(timerId);
-  }, []);
+  }, [player?.cleanMoney, playerId, refresh]);
 
   const startPilot = async () => {
     const state = loadGameState() || {};

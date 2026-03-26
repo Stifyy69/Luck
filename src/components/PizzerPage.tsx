@@ -15,6 +15,12 @@ function fmt(n: number) {
   return n.toLocaleString('en-US');
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function orderTypeBadge(orderType: string) {
   if (orderType === 'VIP') return 'border-yellow-400/40 bg-yellow-500/15 text-yellow-200';
   if (orderType === 'URGENTA') return 'border-red-400/40 bg-red-500/15 text-red-200';
@@ -37,7 +43,7 @@ export default function PizzerPage() {
     try {
       const next = await api.pizzerState(playerId);
       setState(next);
-      if (next.shiftState === 'SELECTING_ORDER' && options.length === 0) {
+      if (next.shiftState === 'SELECTING_ORDER' && options.length === 0 && Number(next.repairSecondsLeft || 0) <= 0) {
         const data = await api.pizzerOrderOptions(playerId);
         setOptions(data.options || []);
       }
@@ -123,6 +129,9 @@ export default function PizzerPage() {
     if (busy) return;
     setBusy(true);
     try {
+      const stepPopup = stepKey === 'PICK_BOXES' ? 'Putting pizza in backpack...' : stepKey === 'ADD_DRINKS' ? 'Putting drinks in backpack...' : 'Confirming order...';
+      pushPopup(stepPopup);
+      await wait(1000);
       const next = await api.pizzerPackingStep(playerId, stepKey);
       setState(next);
     } catch (e) {
@@ -136,10 +145,25 @@ export default function PizzerPage() {
     if (busy) return;
     setBusy(true);
     try {
+      pushPopup('Delivering order...');
+      await wait(1000);
       const payload = await api.pizzerHandover(playerId, 'DOOR');
       setState(payload.state);
       refresh();
-      pushPopup(`Delivery finished: +${fmt(payload.result.breakdown.totalReward)} $ / +${payload.result.breakdown.xpGained} XP`);
+      if (payload.result.accident) {
+        const repairLabel = payload.state.repairLabel || 'Repairing vehicle';
+        const repairSec = payload.state.repairSecondsLeft || 10;
+        pushPopup(`Accident! Course failed. ${repairLabel} (${repairSec}s)`, true);
+      } else {
+        const messages = [`Delivery finished: +${fmt(payload.result.breakdown.totalReward)} $ / +${payload.result.breakdown.xpGained} XP`];
+        if (payload.result.progression.levelAfter > payload.result.progression.levelBefore) {
+          messages.push(`Congrats! You reached level ${payload.result.progression.levelAfter}.`);
+        }
+        if (payload.result.progression.unlockedVehicle) {
+          messages.push(`Congrats! You now deliver with ${payload.result.progression.unlockedVehicle}.`);
+        }
+        pushPopup(messages.join(' '));
+      }
       window.setTimeout(() => {
         api
           .pizzerOrderOptions(playerId)
@@ -159,6 +183,7 @@ export default function PizzerPage() {
   const canShowOptions = state?.shiftState === 'SELECTING_ORDER';
   const canPack = state?.shiftState === 'PACKING_ORDER';
   const canDeliver = state?.shiftState === 'DELIVERY_ACTIVE';
+  const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
 
   const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
 
@@ -176,6 +201,12 @@ export default function PizzerPage() {
           <h1 className="text-3xl font-black text-white">Pizzer / Pizza Courier</h1>
           <p className="mt-1 text-sm text-white/60">{displayName} · Pizzer Lv. {progress?.level ?? 1}</p>
 
+          {underRepair && (
+            <p className="mt-2 rounded-lg border border-orange-400/50 bg-orange-900/25 px-3 py-2 text-xs font-black uppercase tracking-wide text-orange-200">
+              {state?.repairLabel || 'Repairing vehicle'} · {state?.repairSecondsLeft}s
+            </p>
+          )}
+
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
             <Stat label="Level" value={String(progress?.level ?? 1)} />
             <Stat label="XP" value={progress ? `${fmt(progress.xp)} / ${progress.nextLevelXp ? fmt(progress.nextLevelXp) : 'MAX'}` : '0'} />
@@ -188,7 +219,7 @@ export default function PizzerPage() {
             <button
               type="button"
               onClick={startShift}
-              disabled={!canStart || busy}
+              disabled={!canStart || busy || underRepair}
               className="btn-primary rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-50"
             >
               Start Shift
@@ -205,7 +236,7 @@ export default function PizzerPage() {
               <button
                 type="button"
                 onClick={() => refreshOptions().catch(() => {})}
-                disabled={busy}
+                disabled={busy || underRepair}
                 className="rounded-xl border border-white/20 px-4 py-2 text-sm font-bold text-white/75 disabled:opacity-50"
               >
                 Refresh Orders
@@ -297,7 +328,7 @@ export default function PizzerPage() {
                       key={step.key}
                       type="button"
                       onClick={() => doPackingStep(step.key)}
-                      disabled={busy || done}
+                      disabled={busy || done || underRepair}
                       className={`rounded-xl border px-4 py-3 text-sm font-bold transition ${done ? 'border-green-500/45 bg-green-900/30 text-green-200' : isNext ? 'border-yellow-400/60 bg-yellow-500/20 text-yellow-100 hover:bg-yellow-500/30' : 'border-white/20 bg-white/5 text-white/80 hover:bg-white/10'} disabled:opacity-60`}
                     >
                       {done ? `Done: ${step.label}` : isNext ? `Next: ${step.label}` : step.label}
@@ -312,7 +343,7 @@ export default function PizzerPage() {
                 <button
                   type="button"
                   onClick={() => handover().catch(() => {})}
-                  disabled={busy}
+                  disabled={busy || underRepair}
                   className="rounded-xl border border-[#ffd95a]/35 bg-[#ffd95a]/10 px-4 py-3 text-sm font-bold text-[#ffe7a4] hover:bg-[#ffd95a]/20 disabled:opacity-60"
                 >
                   Deliver Order
