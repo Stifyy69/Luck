@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
-import type { InventoryItem, OwnedClothingMetadata } from '../types/game';
+import { getClothingImagePath, getVehicleImagePath } from '../lib/assets';
+import type { InventoryItem, OwnedClothingMetadata, OwnedVehicle } from '../types/game';
 
 const ITEM_EMOJI: Record<string, string> = {
   MYSTERY_BOX: '📦',
@@ -36,7 +37,7 @@ const ITEM_DESC: Record<string, string> = {
   ROULETTE_FRAGMENTS: '4 fragments = 1 bonus roulette spin',
   SLOT_VEHICLE: 'Adds +1 permanent vehicle slot',
   VOUCHER_SHOWROOM: 'Discount on showroom purchases',
-  JOB_BOOST_PILOT: 'x2 Pilot reward (single-use)',
+  JOB_BOOST_PILOT: 'x2 Pilot reward (single-use, consumed on Pilot page)',
   JOB_BOOST_SLEEP: 'x2 Sleep reward (single-use, consumed on Sleep page)',
   TAX_EXEMPTION: 'Skips the next tax collection',
   XENON_VEHICLE: 'Vehicle xenon package',
@@ -48,7 +49,6 @@ const ITEM_DESC: Record<string, string> = {
 const USABLE_ITEMS = new Set([
   'SLOT_VEHICLE',
   'TAX_EXEMPTION',
-  'JOB_BOOST_PILOT',
   'VIP_GOLD',
   'VIP_SILVER',
 ]);
@@ -73,6 +73,14 @@ const RARITY_LABEL: Record<string, string> = {
 
 function fmt(n: number) {
   return n.toLocaleString('en-US') + ' $';
+}
+
+function sourceLabel(value: unknown): string {
+  const source = String(value || '').toUpperCase();
+  if (source === 'SHOWROOM') return 'Purchased: Showroom';
+  if (source === 'CNN') return 'Purchased: CNN';
+  if (source === 'ROULETTE') return 'Purchased: Roulette';
+  return 'Purchased: Unknown';
 }
 
 export default function InventoryPage() {
@@ -121,6 +129,7 @@ export default function InventoryPage() {
   }
 
   const inventory = player?.inventory ?? [];
+  const vehicles = player?.ownedVehicles ?? [];
   const isEmpty = inventory.length === 0;
   const clothingItems = inventory.filter((i) => i.itemType === 'CLOTHING');
   const otherItems = inventory.filter((i) => i.itemType !== 'CLOTHING');
@@ -151,7 +160,7 @@ export default function InventoryPage() {
           </div>
         )}
 
-        {player && isEmpty && (
+        {player && isEmpty && vehicles.length === 0 && (
           <div className="hud-panel px-6 py-12 text-center">
             <p className="text-4xl">📭</p>
             <p className="mt-3 text-lg font-black text-white/70">Inventory is empty</p>
@@ -159,8 +168,19 @@ export default function InventoryPage() {
           </div>
         )}
 
-        {player && !isEmpty && (
+        {player && (vehicles.length > 0 || !isEmpty) && (
           <div className="space-y-8">
+            {vehicles.length > 0 && (
+              <section>
+                <h2 className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-white/60">Owned Vehicles</h2>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {vehicles.map((vehicle) => (
+                    <VehicleCard key={vehicle.id} vehicle={vehicle} />
+                  ))}
+                </div>
+              </section>
+            )}
+
             {otherItems.length > 0 && (
               <section>
                 <h2 className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-white/60">Items</h2>
@@ -216,6 +236,7 @@ function ItemCard({
   onUse,
   busy,
 }: {
+  key?: string | number;
   item: InventoryItem;
   onUse: (item: InventoryItem) => void | Promise<void>;
   busy: boolean;
@@ -264,18 +285,26 @@ function ItemCard({
   );
 }
 
-function ClothingCard({ item }: { item: InventoryItem }) {
+function ClothingCard({ item }: { key?: string | number; item: InventoryItem }) {
   const meta = item.metadata as Partial<OwnedClothingMetadata>;
   const rarity = meta.rarity ?? 'BLUE';
   const colorCls = RARITY_COLORS[rarity] ?? '';
+  const source = (item.metadata as Record<string, unknown>)?.source;
 
   return (
     <div className={`hud-card flex flex-col gap-2 border p-4 ${colorCls}`}>
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img
+          src={getClothingImagePath(meta.name ?? '')}
+          alt={meta.name ?? 'Clothing'}
+          className="h-28 w-full object-contain"
+        />
+      </div>
       <div className="flex items-start gap-3">
-        <span className="text-3xl leading-none">👕</span>
         <div className="min-w-0 flex-1">
           <p className="truncate font-black text-white">{meta.name ?? 'Clothing'}</p>
           <p className="mt-0.5 text-[11px] text-white/50">{meta.category ?? ''}</p>
+          <p className="mt-1 text-[11px] font-bold text-white/60">{sourceLabel(source)}</p>
         </div>
         <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${colorCls}`}>
           {RARITY_LABEL[rarity] ?? rarity}
@@ -284,6 +313,28 @@ function ClothingCard({ item }: { item: InventoryItem }) {
       {meta.marketValue != null && (
         <p className="text-xs font-bold text-[#ffd95a]">Value: {meta.marketValue.toLocaleString('en-US')} $</p>
       )}
+    </div>
+  );
+}
+
+function VehicleCard({ vehicle }: { key?: string | number; vehicle: OwnedVehicle }) {
+  return (
+    <div className="hud-card flex flex-col gap-2 border p-4">
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img
+          src={getVehicleImagePath(vehicle.modelName)}
+          alt={vehicle.modelName}
+          className="h-28 w-full object-contain"
+        />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-black uppercase tracking-wide text-white/55">{vehicle.brand}</p>
+        <p className="truncate text-lg font-black text-white">{vehicle.modelName}</p>
+        <p className="mt-1 text-[11px] font-bold text-white/60">{sourceLabel(vehicle.acquisitionSource)}</p>
+      </div>
+      <div className="border-t border-white/10 pt-2 text-sm">
+        <p className="text-white/55">Paid: <span className="font-black text-white">{fmt(vehicle.purchasePrice)}</span></p>
+      </div>
     </div>
   );
 }

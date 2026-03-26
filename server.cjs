@@ -94,8 +94,14 @@ async function initDb() {
       player_id TEXT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
       model_id INT NOT NULL REFERENCES vehicle_models(id),
       purchase_price BIGINT NOT NULL,
-      purchased_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      purchased_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      purchase_source TEXT NOT NULL DEFAULT 'SHOWROOM'
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE owned_vehicles
+    ADD COLUMN IF NOT EXISTS purchase_source TEXT NOT NULL DEFAULT 'SHOWROOM';
   `);
 
   await pool.query(`
@@ -424,6 +430,7 @@ async function resolveListingAsset(db, listing) {
           id: row.id,
           brand: row.brand,
           basePrice: Number(row.base_price),
+          marketPrice: Number(row.base_price),
           isJackpot: row.is_jackpot,
           imagePath: getVehicleImagePath(row.name),
         },
@@ -445,6 +452,7 @@ async function resolveListingAsset(db, listing) {
         id: row.id,
         brand: row.brand,
         purchasePrice: Number(row.purchase_price),
+        marketPrice: Number(row.purchase_price),
         imagePath: getVehicleImagePath(row.name),
       },
     };
@@ -466,6 +474,7 @@ async function resolveListingAsset(db, listing) {
           category: row.category,
           rarity: row.rarity,
           marketValue: Math.round((Number(row.min_value) + Number(row.max_value)) / 2),
+          marketPrice: Math.round((Number(row.min_value) + Number(row.max_value)) / 2),
           imagePath: getClothingImagePath(row.name, row.category),
         },
       };
@@ -479,7 +488,7 @@ async function resolveListingAsset(db, listing) {
     if (!row) return null;
     const metadata = row.metadata || {};
     return {
-      assetName: metadata.name || 'Haină',
+      assetName: metadata.name || 'Clothing',
       assetMetadata: {
         ...metadata,
         id: row.id,
@@ -495,7 +504,7 @@ async function resolveListingAsset(db, listing) {
   const row = result.rows[0];
   if (!row) return null;
   return {
-    assetName: 'Xenon Vehicul',
+    assetName: 'Xenon Vehicle',
     assetMetadata: {
       id: row.id,
       ...row.metadata,
@@ -517,12 +526,13 @@ async function transferListingAsset(db, listing, buyerPlayerId) {
          RETURNING id`,
         [buyerPlayerId, model.id, Number(model.base_price)],
       );
+      await db.query(`UPDATE owned_vehicles SET purchase_source = 'CNN' WHERE id = $1`, [inserted.rows[0].id]);
       return inserted.rows[0].id;
     }
 
     const updated = await db.query(
       `UPDATE owned_vehicles
-       SET player_id = $1
+       SET player_id = $1, purchase_source = 'CNN'
        WHERE id = $2 AND player_id = $3
        RETURNING id`,
       [buyerPlayerId, listing.asset_ref_id, listing.seller_player_id],
@@ -545,6 +555,7 @@ async function transferListingAsset(db, listing, buyerPlayerId) {
         category: item.category,
         rarity: item.rarity,
         marketValue,
+        source: 'CNN',
         imagePath: getClothingImagePath(item.name, item.category),
       });
       return inserted.id;
@@ -558,7 +569,10 @@ async function transferListingAsset(db, listing, buyerPlayerId) {
     const item = result.rows[0];
     if (!item) throw new Error('clothing transfer failed');
     await consumeInventoryItem(db, item.id, 1);
-    const inserted = await addInventoryItem(db, buyerPlayerId, 'CLOTHING', 1, item.metadata || {});
+    const inserted = await addInventoryItem(db, buyerPlayerId, 'CLOTHING', 1, {
+      ...(item.metadata || {}),
+      source: 'CNN',
+    });
     return inserted.id;
   }
 
@@ -908,6 +922,20 @@ app.post('/api/market/offer', requireDb, async (req, res) => {
         throw new Error('insufficient funds');
       }
 
+      let existingNpcAttempts = 0;
+      if (listing.seller_npc_id) {
+        const existingAttemptsResult = await db.query(
+          `SELECT COUNT(*)::INT AS count
+           FROM market_offers
+           WHERE listing_id = $1 AND buyer_player_id = $2`,
+          [listingId, playerId],
+        );
+        existingNpcAttempts = existingAttemptsResult.rows[0]?.count ?? 0;
+        if (existingNpcAttempts >= 3) {
+          throw new Error('npc negotiation attempts exhausted');
+        }
+      }
+
       const inserted = await db.query(
         `INSERT INTO market_offers (listing_id, buyer_player_id, offered_price, status)
          VALUES ($1, $2, $3, $4)
@@ -916,20 +944,76 @@ app.post('/api/market/offer', requireDb, async (req, res) => {
       );
 
       if (listing.seller_npc_id) {
+        const attemptNo = existingNpcAttempts + 1;
+        const attemptsLeft = Math.max(0, 3 - attemptNo);
+
         const accepted = Number(offeredPrice) >= Math.floor(Number(listing.ask_price) * 0.9);
-        await db.query(
-          `UPDATE market_offers SET status = $2, updated_at = NOW() WHERE id = $1`,
-          [inserted.rows[0].id, accepted ? 'ACCEPTED' : 'REJECTED'],
-        );
         if (accepted) {
+          await db.query(
+            `UPDATE market_offers SET status = 'ACCEPTED', updated_at = NOW() WHERE id = $1`,
+            [inserted.rows[0].id],
+          );
           await settleListingSale(db, listing, playerId, Number(offeredPrice), inserted.rows[0].id);
+          return {
+            ...inserted.rows[0],
+            negotiation: {
+              isNpc: true,
+              signal: 'ACCEPT',
+              attemptNo,
+              attemptsLeft,
+              askPrice: Number(listing.ask_price),
+            },
+          };
         }
+
+        const canCounter = attemptNo < 3 && Number(offeredPrice) >= Math.floor(Number(listing.ask_price) * 0.45);
+        const willCounter = canCounter && Math.random() < 0.7;
+        if (willCounter) {
+          const ask = Number(listing.ask_price);
+          const floorPrice = Math.floor(ask * 0.82);
+          const midpoint = Math.floor((ask + Number(offeredPrice)) / 2);
+          const counterAsk = Math.max(floorPrice, midpoint);
+          await db.query(
+            `UPDATE market_listings SET ask_price = $2, updated_at = NOW() WHERE id = $1`,
+            [listingId, counterAsk],
+          );
+          return {
+            ...inserted.rows[0],
+            negotiation: {
+              isNpc: true,
+              signal: 'COUNTER',
+              attemptNo,
+              attemptsLeft,
+              askPrice: ask,
+              counterAskPrice: counterAsk,
+            },
+          };
+        }
+
+        return {
+          ...inserted.rows[0],
+          negotiation: {
+            isNpc: true,
+            signal: 'REJECT',
+            attemptNo,
+            attemptsLeft,
+            askPrice: Number(listing.ask_price),
+          },
+        };
       }
 
-      return inserted.rows[0];
+      return {
+        ...inserted.rows[0],
+        negotiation: null,
+      };
     });
 
-    res.json({ ok: true, offerId: result.id, createdAt: asIso(result.created_at) });
+    res.json({
+      ok: true,
+      offerId: result.id,
+      createdAt: asIso(result.created_at),
+      negotiation: result.negotiation ?? null,
+    });
   } catch (error) {
     res.status(400).json({ error: error.message || 'market offer failed' });
   }
@@ -942,7 +1026,8 @@ app.get('/api/market/listings', async (req, res) => {
     const npcCount = await pool.query(
       `SELECT COUNT(*)::INT AS count FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`,
     );
-    if ((npcCount.rows[0]?.count ?? 0) === 0) {
+    const activeNpcCount = npcCount.rows[0]?.count ?? 0;
+    if (activeNpcCount === 0 || activeNpcCount > 10) {
       await refreshNpcListings();
     }
 
@@ -1089,6 +1174,10 @@ app.get('/api/market/buyer', async (req, res) => {
         const listing = listingResult.rows[0];
         const asset = listing ? await resolveListingAsset(pool, listing) : null;
         if (!asset) return null;
+        const sellerType = listing?.seller_npc_id ? 'NPC' : 'PLAYER';
+        const sellerName = listing?.seller_npc_id
+          ? (NPC_SELLERS.find((entry) => entry.id === listing.seller_npc_id)?.name || 'NPC Seller')
+          : listing?.seller_player_id;
         return {
           id: offer.id,
           listingId: offer.listing_id,
@@ -1096,9 +1185,12 @@ app.get('/api/market/buyer', async (req, res) => {
           status: offer.status,
           createdAt: asIso(offer.created_at),
           assetName: asset.assetName,
+          assetMetadata: asset.assetMetadata,
           assetType: offer.asset_type,
           askPrice: Number(offer.ask_price),
           listingStatus: offer.listing_status,
+          sellerType,
+          sellerName,
         };
       }))
     ).filter(Boolean);
@@ -1151,6 +1243,26 @@ app.post('/api/market/offer/reject', requireDb, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(400).json({ error: error.message || 'offer reject failed' });
+  }
+});
+
+app.post('/api/market/offer/cancel', requireDb, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'missing fields' });
+
+    const updated = await pool.query(
+      `UPDATE market_offers
+       SET status = 'REJECTED', updated_at = NOW()
+       WHERE id = $1 AND buyer_player_id = $2 AND status = 'PENDING'
+       RETURNING id`,
+      [offerId, playerId],
+    );
+
+    if (!updated.rows[0]) return res.status(404).json({ error: 'offer not found' });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'offer cancel failed' });
   }
 });
 
@@ -1212,7 +1324,7 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
 
     // Get owned vehicles
     const vehiclesRes = await pool.query(
-      `SELECT ov.id, ov.model_id, vm.name, vm.brand, ov.purchase_price, ov.purchased_at
+      `SELECT ov.id, ov.model_id, vm.name, vm.brand, ov.purchase_price, ov.purchased_at, ov.purchase_source
        FROM owned_vehicles ov
        JOIN vehicle_models vm ON ov.model_id = vm.id
        WHERE ov.player_id = $1`,
@@ -1250,6 +1362,7 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
         brand: v.brand,
         purchasePrice: Number(v.purchase_price),
         purchasedAt: v.purchased_at.toISOString(),
+        acquisitionSource: v.purchase_source || 'SHOWROOM',
       })),
       inventory: inventoryRes.rows.map(i => ({
         id: i.id,
@@ -1340,8 +1453,8 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
         [modelId],
       );
       const inserted = await db.query(
-        `INSERT INTO owned_vehicles (player_id, model_id, purchase_price)
-         VALUES ($1, $2, $3)
+        `INSERT INTO owned_vehicles (player_id, model_id, purchase_price, purchase_source)
+         VALUES ($1, $2, $3, 'SHOWROOM')
          RETURNING id, model_id, purchase_price, purchased_at`,
         [playerId, modelId, finalPrice],
       );
@@ -1357,6 +1470,7 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
           brand: model.brand,
           purchasePrice: Number(inserted.rows[0].purchase_price),
           purchasedAt: asIso(inserted.rows[0].purchased_at),
+          acquisitionSource: 'SHOWROOM',
         },
         newBalance: Number(updatedPlayer.rows[0].clean_money),
         stockRemaining: updatedModel.rows[0].stock,
@@ -1511,6 +1625,7 @@ app.post('/api/mystery/open', requireDb, async (req, res) => {
         category: cloth.category,
         rarity: cloth.rarity,
         marketValue,
+        source: 'ROULETTE',
         imagePath: getClothingImagePath(cloth.name, cloth.category),
       });
 
@@ -1554,11 +1669,7 @@ app.post('/api/inventory/use', requireDb, async (req, res) => {
         await db.query(`UPDATE players SET skip_next_tax = TRUE WHERE player_id = $1`, [playerId]);
         effect = 'tax_exemption_activated';
       } else if (item.item_type === 'JOB_BOOST_PILOT') {
-        await db.query(
-          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'JOB_PILOT', NOW() + INTERVAL '12 hours')`,
-          [playerId],
-        );
-        effect = 'pilot_boost_activated';
+        effect = 'pilot_boost_reserved';
       } else if (item.item_type === 'JOB_BOOST_SLEEP') {
         effect = 'sleep_boost_reserved';
       } else if (item.item_type === 'VIP_GOLD') {
@@ -1737,29 +1848,35 @@ async function refreshNpcListings() {
   const vehicleRows = await pool.query(`SELECT id, brand, name, base_price FROM vehicle_models`);
   const clothingRows = await pool.query(`SELECT id, name, category, rarity, min_value, max_value FROM clothing_items`);
 
-  const sellers = [...NPC_SELLERS].sort(() => Math.random() - 0.5).slice(0, randomInt(3, 5));
-  for (const seller of sellers) {
-    const listingCount = randomInt(1, 3);
-    for (let index = 0; index < listingCount; index += 1) {
-      const useVehicle = Math.random() < 0.6;
-      if (useVehicle && vehicleRows.rows.length > 0) {
-        const vehicle = vehicleRows.rows[randomInt(0, vehicleRows.rows.length - 1)];
-        const askPrice = Math.floor(Number(vehicle.base_price) * (0.9 + Math.random() * 0.6));
-        await pool.query(
-          `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
-           VALUES ($1, 'VEHICLE', $2, $3, 'ACTIVE')`,
-          [seller.id, vehicle.id, askPrice],
-        );
-      } else if (clothingRows.rows.length > 0) {
-        const clothing = clothingRows.rows[randomInt(0, clothingRows.rows.length - 1)];
-        const midValue = Math.round((Number(clothing.min_value) + Number(clothing.max_value)) / 2);
-        const askPrice = Math.floor(midValue * (0.7 + Math.random() * 1.15));
-        await pool.query(
-          `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
-           VALUES ($1, 'CLOTHING', $2, $3, 'ACTIVE')`,
-          [seller.id, clothing.id, askPrice],
-        );
-      }
+  const npcCap = 10;
+  const sellers = [...NPC_SELLERS].sort(() => Math.random() - 0.5);
+  let created = 0;
+
+  while (created < npcCap) {
+    const seller = sellers[created % sellers.length];
+    const useVehicle = Math.random() < 0.6;
+    if (useVehicle && vehicleRows.rows.length > 0) {
+      const vehicle = vehicleRows.rows[randomInt(0, vehicleRows.rows.length - 1)];
+      const askPrice = Math.floor(Number(vehicle.base_price) * (0.9 + Math.random() * 0.55));
+      await pool.query(
+        `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
+         VALUES ($1, 'VEHICLE', $2, $3, 'ACTIVE')`,
+        [seller.id, vehicle.id, askPrice],
+      );
+      created += 1;
+      continue;
+    }
+
+    if (clothingRows.rows.length > 0) {
+      const clothing = clothingRows.rows[randomInt(0, clothingRows.rows.length - 1)];
+      const midValue = Math.round((Number(clothing.min_value) + Number(clothing.max_value)) / 2);
+      const askPrice = Math.floor(midValue * (0.75 + Math.random() * 1.05));
+      await pool.query(
+        `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
+         VALUES ($1, 'CLOTHING', $2, $3, 'ACTIVE')`,
+        [seller.id, clothing.id, askPrice],
+      );
+      created += 1;
     }
   }
 }

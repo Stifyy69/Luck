@@ -8,7 +8,6 @@ import GangsPage from './components/GangsPage';
 import CNNMarketplace from './components/CNNMarketplace';
 import ShowroomPage from './components/ShowroomPage';
 import InventoryPage from './components/InventoryPage';
-import OwnedAssetsPage from './components/OwnedAssetsPage';
 import PlayerStatusPage from './components/PlayerStatusPage';
 import MyProfilePage from './components/MyProfilePage';
 import AccountHud from './components/AccountHud';
@@ -46,6 +45,7 @@ const VALID_ROUTES: RoutePath[] = [
 function normalizePath(pathname: string): RoutePath {
   if (pathname === '/cars') return '/showroom';
   if (pathname === '/marketplace') return '/cnn';
+  if (pathname === '/owned') return '/inventory';
   if (VALID_ROUTES.includes(pathname as RoutePath)) return pathname as RoutePath;
   return '/ruleta';
 }
@@ -102,8 +102,15 @@ export default function App() {
         </div>
         <button
           type="button"
+          onClick={() => goTo('/profile')}
+          className={`block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/profile' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          My Profile
+        </button>
+        <button
+          type="button"
           onClick={() => goTo('/farmat')}
-          className={`block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/farmat' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/farmat' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
           Farm
         </button>
@@ -147,24 +154,10 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => goTo('/owned')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/owned' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
-        >
-          Owned
-        </button>
-        <button
-          type="button"
           onClick={() => goTo('/status')}
           className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/status' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
           Status
-        </button>
-        <button
-          type="button"
-          onClick={() => goTo('/profile')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/profile' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
-        >
-          My Profile
         </button>
         <button
           type="button"
@@ -197,7 +190,7 @@ export default function App() {
                 : path === '/inventory'
                   ? <InventoryPage />
                   : path === '/owned'
-                    ? <OwnedAssetsPage />
+                    ? <InventoryPage />
                     : path === '/status'
                       ? <PlayerStatusPage />
                       : path === '/profile'

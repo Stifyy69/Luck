@@ -5,6 +5,7 @@ import type {
   MarketListing,
   MarketOffer,
   MarketAssetType,
+  NpcNegotiationResult,
   PlayerState,
   OwnedVehicle,
   InventoryItem,
@@ -24,6 +25,20 @@ function getPlayerId() {
 
 function fmt(n: number) {
   return n.toLocaleString('en-US') + '$';
+}
+
+function getMarketPrice(meta: Record<string, unknown>, askPrice: number): number {
+  const value = Number(meta.marketPrice ?? meta.marketValue ?? meta.basePrice ?? meta.purchasePrice ?? askPrice);
+  return Number.isFinite(value) && value > 0 ? value : askPrice;
+}
+
+function getAssetImage(listing: { assetType: MarketAssetType; assetName: string; assetMetadata: Record<string, unknown> }) {
+  const meta = listing.assetMetadata;
+  return typeof meta.imagePath === 'string'
+    ? meta.imagePath
+    : listing.assetType === 'VEHICLE'
+      ? getVehicleImagePath(listing.assetName)
+      : getClothingImagePath(listing.assetName);
 }
 
 const RARITY_COLOR: Record<string, string> = {
@@ -49,6 +64,8 @@ const ASSET_EMOJI: Record<string, string> = {
 };
 
 type Tab = 'listings' | 'myListings' | 'myOffers' | 'createListing';
+
+type NegotiationSignal = 'ACCEPT' | 'COUNTER' | 'REJECT';
 
 interface SellerListing {
   id: number;
@@ -84,6 +101,7 @@ export default function CNNMarketplace() {
   const [createType, setCreateType] = useState<MarketAssetType>('VEHICLE');
   const [createAssetId, setCreateAssetId] = useState<number | null>(null);
   const [createAskPrice, setCreateAskPrice] = useState('');
+  const [npcSignals, setNpcSignals] = useState<Record<number, NegotiationSignal[]>>({});
 
   const showPopup = (message: string, isError = false) => {
     setPopup({ message, isError });
@@ -154,13 +172,59 @@ export default function CNNMarketplace() {
     if (!price || price <= 0) { showPopup('Enter a valid price.', true); return; }
     setBusy(true);
     try {
-      await api.marketOffer(playerId, offerModal.listing.id, price);
-      showPopup(`Offer sent: ${fmt(price)}.`);
-      setOfferModal(null);
-      setOfferPrice('');
+      const result = await api.marketOffer(playerId, offerModal.listing.id, price);
+      const negotiation = result.negotiation as NpcNegotiationResult | null | undefined;
+
+      if (negotiation?.isNpc) {
+        setNpcSignals((current) => {
+          const next = [...(current[offerModal.listing.id] ?? [])];
+          next.push(negotiation.signal);
+          return { ...current, [offerModal.listing.id]: next.slice(0, 3) };
+        });
+
+        if (negotiation.signal === 'ACCEPT') {
+          showPopup(`NPC accepted. Purchased for ${fmt(price)}.`);
+          setOfferModal(null);
+          setOfferPrice('');
+        } else if (negotiation.signal === 'COUNTER') {
+          showPopup(
+            `NPC countered: ${fmt(negotiation.counterAskPrice ?? negotiation.askPrice)} (${negotiation.attemptsLeft} attempt(s) left).`,
+          );
+        } else {
+          showPopup(
+            negotiation.attemptsLeft > 0
+              ? `NPC rejected this offer. ${negotiation.attemptsLeft} attempt(s) left.`
+              : 'NPC negotiation closed. No attempts left.',
+            true,
+          );
+          if (negotiation.attemptsLeft <= 0) {
+            setOfferModal(null);
+            setOfferPrice('');
+          }
+        }
+      } else {
+        showPopup(`Offer sent: ${fmt(price)}.`);
+        setOfferModal(null);
+        setOfferPrice('');
+      }
+
       await loadAll();
     } catch (e) {
       showPopup(String(e instanceof Error ? e.message : 'Offer failed'), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelMyOffer = async (offerId: number) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.marketOfferCancel(playerId, offerId);
+      showPopup('Offer cancelled.');
+      await loadAll();
+    } catch (e) {
+      showPopup(String(e instanceof Error ? e.message : 'Cancel failed'), true);
     } finally {
       setBusy(false);
     }
@@ -267,8 +331,29 @@ export default function CNNMarketplace() {
   );
 
   const activeListings = listings.filter((l) => !l.isOwn);
+  const npcListings = activeListings.filter((listing) => listing.sellerType === 'NPC').slice(0, 10);
+  const playerListings = activeListings.filter((listing) => listing.sellerType !== 'NPC');
+  const visibleActiveListings = [...npcListings, ...playerListings];
   const ownListings = sellerListings.filter((l) => l.status === 'ACTIVE');
   const pendingIncoming = incomingOffers.filter((o) => o.status === 'PENDING');
+
+  const selectedVehicle = createType === 'VEHICLE'
+    ? listableVehicles.find((vehicle) => vehicle.id === createAssetId) ?? null
+    : null;
+  const selectedClothing = createType === 'CLOTHING'
+    ? listableClothing.find((item) => item.id === createAssetId) ?? null
+    : null;
+  const selectedXenon = createType === 'XENON_VEHICLE'
+    ? listableXenon.find((item) => item.id === createAssetId) ?? null
+    : null;
+
+  const selectedMarketPrice = selectedVehicle
+    ? Number(selectedVehicle.purchasePrice)
+    : selectedClothing
+      ? Number((selectedClothing.metadata as Record<string, unknown>)?.marketValue ?? 0)
+      : selectedXenon
+        ? Number((selectedXenon.metadata as Record<string, unknown>)?.marketValue ?? 0)
+        : 0;
 
   if (loading) {
     return (
@@ -300,11 +385,45 @@ export default function CNNMarketplace() {
       {offerModal && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="hud-panel w-full max-w-sm rounded-2xl p-6">
-            <h3 className="mb-1 text-lg font-black text-white">Send Offer</h3>
-            <p className="mb-4 text-sm text-white/60">
-              {offerModal.listing.assetName} — asking price{' '}
-              <span className="font-bold text-[#ffd95a]">{fmt(offerModal.listing.askPrice)}</span>
-            </p>
+            {(() => {
+              const meta = offerModal.listing.assetMetadata as Record<string, unknown>;
+              const marketPrice = getMarketPrice(meta, offerModal.listing.askPrice);
+              const signals = npcSignals[offerModal.listing.id] ?? [];
+              return (
+                <>
+                  <h3 className="mb-1 text-lg font-black text-white">Send Offer</h3>
+                  <p className="mb-4 text-sm text-white/60">{offerModal.listing.assetName}</p>
+                  <div className="mb-4 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-xl border border-white/10 bg-white/5 p-2">
+                      <p className="text-white/45">Market Price</p>
+                      <p className="text-sm font-black text-white">{fmt(marketPrice)}</p>
+                    </div>
+                    <div className="rounded-xl border border-[#ffd95a]/30 bg-[#ffd95a]/10 p-2">
+                      <p className="text-white/45">Ask Price</p>
+                      <p className="text-sm font-black text-[#ffd95a]">{fmt(offerModal.listing.askPrice)}</p>
+                    </div>
+                  </div>
+                  {offerModal.listing.sellerType === 'NPC' && (
+                    <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3">
+                      <p className="text-xs font-bold uppercase tracking-wider text-white/55">NPC negotiation (max 3)</p>
+                      <div className="mt-2 flex items-center gap-2">
+                        {[0, 1, 2].map((index) => {
+                          const signal = signals[index];
+                          const cls = signal === 'ACCEPT'
+                            ? 'bg-green-500'
+                            : signal === 'COUNTER'
+                              ? 'bg-yellow-400'
+                              : signal === 'REJECT'
+                                ? 'bg-red-500'
+                                : 'bg-white/20';
+                          return <span key={String(index)} className={`h-3.5 w-3.5 rounded-full ${cls}`} />;
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
             <input
               type="number"
               className="mb-4 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-[#ffd95a]/50"
@@ -356,7 +475,7 @@ export default function CNNMarketplace() {
         <div className="mb-5 flex flex-wrap gap-2">
           {(
             [
-              { key: 'listings', label: '🏪 Active Listings', count: activeListings.length },
+              { key: 'listings', label: '🏪 Active Listings', count: visibleActiveListings.length },
               { key: 'myListings', label: '📋 My Listings', count: ownListings.length, badge: pendingIncoming.length },
               { key: 'myOffers', label: '💬 My Offers', count: myOffers.length },
               { key: 'createListing', label: '➕ Create Listing' },
@@ -397,7 +516,7 @@ export default function CNNMarketplace() {
         {/* ── TAB: Active Listings ── */}
         {tab === 'listings' && (
           <div>
-            {activeListings.length === 0 ? (
+            {visibleActiveListings.length === 0 ? (
               <div className="rounded-2xl border border-white/10 bg-white/5 py-16 text-center text-white/40">
                 <p className="mb-2 text-4xl">📭</p>
                 <p className="font-bold">No active listings right now.</p>
@@ -405,7 +524,7 @@ export default function CNNMarketplace() {
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {activeListings.map((listing) => (
+                {visibleActiveListings.map((listing) => (
                   <ListingCard
                     key={listing.id}
                     listing={listing}
@@ -482,36 +601,19 @@ export default function CNNMarketplace() {
                   <p className="font-bold text-sm">You have no active listings.</p>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {ownListings.map((listing) => {
                     const pendingCount = incomingOffers.filter(
                       (o) => o.listingId === listing.id && o.status === 'PENDING',
                     ).length;
                     return (
-                      <div
+                      <OwnedListingCard
                         key={listing.id}
-                        className="flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3"
-                      >
-                        <span className="text-2xl">{ASSET_EMOJI[listing.assetType]}</span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate font-bold text-white">{listing.assetName}</p>
-                          <p className="text-xs text-white/40">{listing.assetType}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-black text-[#ffd95a]">{fmt(listing.askPrice)}</p>
-                          {pendingCount > 0 && (
-                            <p className="text-xs text-orange-400 font-bold">{pendingCount} offer(s)</p>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleCancelListing(listing.id)}
-                          disabled={busy}
-                          className="rounded-lg border border-red-700/40 px-3 py-1.5 text-xs font-bold text-red-400 hover:bg-red-900/30 disabled:opacity-50"
-                        >
-                          ✗ Retrage
-                        </button>
-                      </div>
+                        listing={listing}
+                        pendingOffers={pendingCount}
+                        busy={busy}
+                        onCancel={() => handleCancelListing(listing.id)}
+                      />
                     );
                   })}
                 </div>
@@ -565,22 +667,14 @@ export default function CNNMarketplace() {
                 <p className="font-bold text-sm">You have not sent any offers.</p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {myOffers.map((offer) => (
-                  <div
+                  <MyOfferCard
                     key={offer.id}
-                    className="flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3"
-                  >
-                    <span className="text-2xl">{ASSET_EMOJI[offer.assetType]}</span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-bold text-white">{offer.assetName}</p>
-                      <p className="text-xs text-white/40">Ask: {fmt(offer.askPrice)}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-black text-white">{fmt(offer.offeredPrice)}</p>
-                      <OfferStatusBadge status={offer.status} />
-                    </div>
-                  </div>
+                    offer={offer}
+                    busy={busy}
+                    onCancel={() => handleCancelMyOffer(offer.id)}
+                  />
                 ))}
               </div>
             )}
@@ -662,7 +756,7 @@ export default function CNNMarketplace() {
                         const rarity = RARITY_LABEL[meta.rarity] || meta.rarity;
                         return (
                           <option key={item.id} value={item.id}>
-                            {meta.name || 'Clothing'} [{rarity}] — val. {fmt(Number(meta.marketValue || 0))}
+                            {meta.name || 'Clothing'} [{rarity}] — market {fmt(Number(meta.marketValue || 0))}
                           </option>
                         );
                       })}
@@ -695,6 +789,24 @@ export default function CNNMarketplace() {
                     </select>
                   )}
                 </>
+              )}
+
+              {createAssetId !== null && (
+                <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-white/50">Selected Asset Pricing</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                      <p className="text-white/45">Market Price</p>
+                      <p className="text-sm font-black text-white">{fmt(selectedMarketPrice)}</p>
+                    </div>
+                    <div className="rounded-lg border border-[#ffd95a]/30 bg-[#ffd95a]/10 p-2">
+                      <p className="text-white/45">Ask Price</p>
+                      <p className="text-sm font-black text-[#ffd95a]">
+                        {createAskPrice ? fmt(Number(createAskPrice || 0)) : 'Set below'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {/* Ask price */}
@@ -746,18 +858,15 @@ function ListingCard({
   const meta = listing.assetMetadata as Record<string, unknown>;
   const rarity = meta.rarity as string | undefined;
   const rarityClass = rarity ? RARITY_COLOR[rarity] || 'text-white/70 border-white/20' : 'text-white/70 border-white/20';
+  const marketPrice = getMarketPrice(meta, listing.askPrice);
 
   return (
-    <div className="hud-panel flex flex-col rounded-2xl p-4">
+    <div className="hud-panel flex flex-col rounded-2xl p-3">
       <div className="mb-3 overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
         <img
-          src={typeof meta.imagePath === 'string'
-            ? meta.imagePath
-            : listing.assetType === 'VEHICLE'
-              ? getVehicleImagePath(listing.assetName)
-              : getClothingImagePath(listing.assetName)}
+          src={getAssetImage(listing)}
           alt={listing.assetName}
-          className="h-28 w-full object-contain"
+          className="h-40 w-full object-cover"
         />
       </div>
       {/* Seller info */}
@@ -780,21 +889,25 @@ function ListingCard({
 
       {/* Asset info */}
       <div className="mb-3 flex-1">
-        <p className="font-black text-white">{listing.assetName}</p>
+        <p className="text-xs font-black uppercase tracking-wide text-white/55">{String(meta.brand || listing.assetType)}</p>
+        <p className="line-clamp-2 text-lg font-black text-white">{listing.assetName}</p>
         {rarity && (
           <span className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-bold ${rarityClass}`}>
             {RARITY_LABEL[rarity] || rarity}
           </span>
         )}
-        {meta.brand && (
-          <p className="mt-0.5 text-xs text-white/40">{String(meta.brand)}</p>
-        )}
       </div>
 
       {/* Price */}
-      <div className="mb-3 rounded-xl border border-[#ffd95a]/20 bg-[#ffd95a]/5 p-2 text-center">
-        <p className="text-xs text-white/40">Ask Price</p>
-        <p className="text-xl font-black text-[#ffd95a]">{fmt(listing.askPrice)}</p>
+      <div className="mb-3 grid grid-cols-2 gap-2 text-center text-xs">
+        <div className="rounded-xl border border-white/10 bg-white/5 p-2">
+          <p className="text-white/45">Market Price</p>
+          <p className="text-sm font-black text-white">{fmt(marketPrice)}</p>
+        </div>
+        <div className="rounded-xl border border-[#ffd95a]/20 bg-[#ffd95a]/5 p-2">
+          <p className="text-white/45">Ask Price</p>
+          <p className="text-sm font-black text-[#ffd95a]">{fmt(listing.askPrice)}</p>
+        </div>
       </div>
 
       {/* Actions */}
@@ -816,6 +929,109 @@ function ListingCard({
           💬 Offer
         </button>
       </div>
+    </div>
+  );
+}
+
+function OwnedListingCard({
+  listing,
+  pendingOffers,
+  busy,
+  onCancel,
+}: {
+  listing: SellerListing;
+  pendingOffers: number;
+  busy: boolean;
+  onCancel: () => void;
+}) {
+  const meta = listing.assetMetadata as Record<string, unknown>;
+  const marketPrice = getMarketPrice(meta, listing.askPrice);
+  const view = {
+    assetType: listing.assetType,
+    assetName: listing.assetName,
+    assetMetadata: listing.assetMetadata,
+  };
+
+  return (
+    <div className="hud-panel flex flex-col rounded-2xl p-3">
+      <div className="mb-3 overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img src={getAssetImage(view)} alt={listing.assetName} className="h-40 w-full object-cover" />
+      </div>
+      <p className="text-xs font-black uppercase tracking-wide text-white/55">{String(meta.brand || listing.assetType)}</p>
+      <p className="line-clamp-2 text-lg font-black text-white">{listing.assetName}</p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-xl border border-white/10 bg-white/5 p-2 text-center">
+          <p className="text-white/45">Market Price</p>
+          <p className="text-sm font-black text-white">{fmt(marketPrice)}</p>
+        </div>
+        <div className="rounded-xl border border-[#ffd95a]/20 bg-[#ffd95a]/5 p-2 text-center">
+          <p className="text-white/45">Ask Price</p>
+          <p className="text-sm font-black text-[#ffd95a]">{fmt(listing.askPrice)}</p>
+        </div>
+      </div>
+      {pendingOffers > 0 && (
+        <p className="mt-2 text-xs font-black text-orange-400">{pendingOffers} pending offer(s)</p>
+      )}
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={busy}
+        className="mt-3 rounded-xl border border-red-700/40 py-2 text-sm font-bold text-red-300 hover:bg-red-900/30 disabled:opacity-50"
+      >
+        Cancel Listing
+      </button>
+    </div>
+  );
+}
+
+function MyOfferCard({
+  offer,
+  busy,
+  onCancel,
+}: {
+  offer: MarketOffer;
+  busy: boolean;
+  onCancel: () => void;
+}) {
+  const meta = (offer.assetMetadata ?? {}) as Record<string, unknown>;
+  const marketPrice = getMarketPrice(meta, offer.askPrice);
+  const view = {
+    assetType: offer.assetType,
+    assetName: offer.assetName,
+    assetMetadata: meta,
+  };
+
+  return (
+    <div className="hud-panel flex flex-col rounded-2xl p-3">
+      <div className="mb-3 overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img src={getAssetImage(view)} alt={offer.assetName} className="h-40 w-full object-cover" />
+      </div>
+      <p className="text-xs font-black uppercase tracking-wide text-white/55">{String(meta.brand || offer.assetType)}</p>
+      <p className="line-clamp-2 text-lg font-black text-white">{offer.assetName}</p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-xl border border-white/10 bg-white/5 p-2 text-center">
+          <p className="text-white/45">Market Price</p>
+          <p className="text-sm font-black text-white">{fmt(marketPrice)}</p>
+        </div>
+        <div className="rounded-xl border border-[#ffd95a]/20 bg-[#ffd95a]/5 p-2 text-center">
+          <p className="text-white/45">Ask Price</p>
+          <p className="text-sm font-black text-[#ffd95a]">{fmt(offer.askPrice)}</p>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between">
+        <p className="text-sm font-black text-white">Your Offer: {fmt(offer.offeredPrice)}</p>
+        <OfferStatusBadge status={offer.status} />
+      </div>
+      {offer.status === 'PENDING' && (
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="mt-3 rounded-xl border border-red-700/40 py-2 text-sm font-bold text-red-300 hover:bg-red-900/30 disabled:opacity-50"
+        >
+          Cancel Offer
+        </button>
+      )}
     </div>
   );
 }

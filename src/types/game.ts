@@ -35,6 +35,7 @@ export interface OwnedVehicle {
   brand: Brand;
   purchasePrice: number;
   purchasedAt: string;
+  acquisitionSource?: 'SHOWROOM' | 'CNN' | 'ROULETTE' | 'UNKNOWN' | string;
 }
 
 export interface OwnedClothingMetadata {
@@ -42,6 +43,7 @@ export interface OwnedClothingMetadata {
   category: ClothingCategory;
   rarity: ClothingRarity;
   marketValue: number;
+  source?: 'SHOWROOM' | 'CNN' | 'ROULETTE' | 'UNKNOWN' | string;
 }
 
 export interface ActiveBoost {
@@ -141,9 +143,21 @@ export interface MarketOffer {
   status: MarketOfferStatus;
   createdAt: string;
   assetName: string;
+  assetMetadata?: Record<string, unknown>;
   assetType: MarketAssetType;
   askPrice: number;
+  sellerType?: 'PLAYER' | 'NPC';
+  sellerName?: string;
   listingStatus?: MarketListingStatus;
+}
+
+export interface NpcNegotiationResult {
+  isNpc: boolean;
+  signal: 'ACCEPT' | 'COUNTER' | 'REJECT';
+  attemptNo: number;
+  attemptsLeft: number;
+  askPrice: number;
+  counterAskPrice?: number;
 }
 
 export interface MarketListingsResponse {
@@ -177,6 +191,7 @@ export interface MarketOfferResult {
   ok: boolean;
   offerId: number;
   createdAt: string;
+  negotiation?: NpcNegotiationResult | null;
 }
 
 export interface MarketActionResult {

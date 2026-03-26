@@ -93,6 +93,9 @@ export const api = {
   marketOfferReject: (playerId: string, offerId: number) =>
     post<MarketActionResult>('/api/market/offer/reject', { playerId, offerId }),
 
+  marketOfferCancel: (playerId: string, offerId: number) =>
+    post<{ ok: boolean }>('/api/market/offer/cancel', { playerId, offerId }),
+
   marketBuy: (playerId: string, listingId: number) =>
     post<MarketActionResult>('/api/market/buy', { playerId, listingId }),
 
