@@ -54,6 +54,7 @@ export interface ActiveBoost {
 
 export interface PlayerState {
   playerId: string;
+  displayName?: string;
   cleanMoney: number;
   flowCoins: number;
   rouletteFragments: number;
@@ -198,4 +199,9 @@ export interface MarketActionResult {
   ok: boolean;
   soldFor?: number;
   boughtFor?: number;
+}
+
+export interface PlayerProfileResponse {
+  playerId: string;
+  displayName: string;
 }

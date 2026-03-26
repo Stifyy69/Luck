@@ -4,14 +4,6 @@ import { useShowroom } from '../hooks/useShowroom';
 import { getVehicleImagePath } from '../lib/assets';
 import type { VehicleModelData } from '../types/game';
 
-const BRAND_EMOJI: Record<string, string> = {
-  DRAVIA: '🚙',
-  BERVIK: '🚗',
-  AURON: '🏎️',
-  FERANO: '🚕',
-  VORTEK: '🏁',
-};
-
 const BRAND_LABEL: Record<string, string> = {
   DRAVIA: 'Dravia',
   BERVIK: 'Bervik',
@@ -92,7 +84,7 @@ export default function ShowroomPage() {
         <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-white/45">CityFlow No-RP</p>
-            <h1 className="text-3xl font-black uppercase tracking-tight text-white">🚗 Showroom</h1>
+            <h1 className="text-3xl font-black uppercase tracking-tight text-white">Showroom</h1>
           </div>
           <div className="flex flex-wrap gap-2">
             {player && (
@@ -110,7 +102,7 @@ export default function ShowroomPage() {
                 <div className="hud-card px-3 py-2 text-center">
                   <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Vouchers</p>
                   <p className={`text-sm font-black ${voucherCount > 0 ? 'text-amber-300' : 'text-white/40'}`}>
-                    🎟️ {voucherCount}
+                    {voucherCount}
                   </p>
                 </div>
               </>
@@ -120,7 +112,7 @@ export default function ShowroomPage() {
 
         {slotsFull && (
           <div className="mb-4 rounded-xl border border-red-400/40 bg-red-900/30 px-4 py-3 text-sm font-bold text-red-300">
-            ⚠️ All vehicle slots are full. Use a <strong>Slot Vehicle</strong> item from inventory to add more space.
+            All vehicle slots are full. Use a <strong>Slot Vehicle</strong> item from inventory to add more space.
           </div>
         )}
 
@@ -132,7 +124,7 @@ export default function ShowroomPage() {
 
         {showroomError && (
           <div className="rounded-xl border border-red-400/40 bg-red-900/30 px-4 py-3 text-sm text-red-300">
-            ❌ {showroomError}
+            {showroomError}
           </div>
         )}
 
@@ -140,11 +132,10 @@ export default function ShowroomPage() {
           <div className="space-y-8">
             {Object.entries(showroom.brands).map(([brand, models]) => (
               <section key={brand}>
-                <h2 className="mb-3 flex items-center gap-2 text-lg font-black uppercase tracking-wide text-white/80">
-                  <span>{BRAND_EMOJI[brand] ?? '🚗'}</span>
-                  <span>{BRAND_LABEL[brand] ?? brand}</span>
+                <h2 className="mb-3 text-lg font-black uppercase tracking-wide text-white/80">
+                  {BRAND_LABEL[brand] ?? brand}
                 </h2>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {models.map((model) => (
                     <VehicleCard
                       key={model.id}
@@ -237,15 +228,14 @@ function VehicleCard({
         <img
           src={getVehicleImagePath(model.name)}
           alt={model.name}
-          className="h-28 w-full object-contain"
+          className="h-44 w-full object-contain"
         />
       </div>
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-[11px] uppercase tracking-wide text-white/45">{BRAND_LABEL[model.brand] ?? model.brand}</p>
-          <p className="text-base font-black leading-tight text-white">{model.name}</p>
+          <p className="text-lg font-black leading-tight text-white">{model.name}</p>
         </div>
-        <span className="text-2xl">{BRAND_EMOJI[model.brand] ?? '🚗'}</span>
       </div>
 
       <div className="flex items-center justify-between gap-2 text-sm">
@@ -256,7 +246,7 @@ function VehicleCard({
       </div>
 
       {slotsFull && !outOfStock && (
-        <p className="text-[11px] text-red-400">⚠️ Slots full ({slotsAvailable} free)</p>
+        <p className="text-[11px] text-red-400">Slots full ({slotsAvailable} free)</p>
       )}
 
       <div className="mt-auto flex gap-2">
@@ -276,7 +266,7 @@ function VehicleCard({
             title="Buy with voucher"
             className="rounded-xl border border-amber-400/45 bg-amber-900/20 px-3 py-2 text-xs font-bold text-amber-300 transition hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            🎟️
+            Voucher
           </button>
         )}
       </div>

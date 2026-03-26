@@ -66,6 +66,7 @@ async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS players (
       player_id TEXT PRIMARY KEY,
+      display_name TEXT,
       clean_money BIGINT NOT NULL DEFAULT 1000000,
       flow_coins INT NOT NULL DEFAULT 0,
       roulette_fragments INT NOT NULL DEFAULT 0,
@@ -75,6 +76,11 @@ async function initDb() {
       skip_next_tax BOOLEAN NOT NULL DEFAULT FALSE,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE players
+    ADD COLUMN IF NOT EXISTS display_name TEXT;
   `);
 
   await pool.query(`
@@ -140,6 +146,7 @@ async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS market_listings (
       id SERIAL PRIMARY KEY,
+      seller_type TEXT NOT NULL DEFAULT 'PLAYER',
       seller_player_id TEXT,
       seller_npc_id TEXT,
       asset_type TEXT NOT NULL,
@@ -149,6 +156,14 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await pool.query(`ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS seller_type TEXT;`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN seller_type SET DEFAULT 'PLAYER';`);
+  await pool.query(`
+    UPDATE market_listings
+    SET seller_type = CASE WHEN seller_npc_id IS NOT NULL THEN 'NPC' ELSE 'PLAYER' END
+    WHERE seller_type IS NULL OR seller_type = '';
   `);
 
   await pool.query(`
@@ -312,6 +327,10 @@ function getVehicleImagePath(name) {
   return `/cars/${name}.png`;
 }
 
+function normalizeNpcId(value) {
+  return String(value ?? '');
+}
+
 function getClothingFolder(category) {
   if (category === 'PANTS') return 'pants';
   if (category === 'SHOES') return 'shoes';
@@ -324,6 +343,20 @@ function getClothingImagePath(name, category) {
 
 function randomInt(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+const NPC_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
+
+function getNpcDynamicMultiplier() {
+  // Common pricing swings: -20% to +40%, with rare hype spikes up to +200%.
+  if (Math.random() < 0.04) {
+    return 1 + Math.random() * 2;
+  }
+  return 0.8 + Math.random() * 0.6;
+}
+
+function toDynamicNpcPrice(basePrice) {
+  return Math.max(1, Math.floor(Number(basePrice) * getNpcDynamicMultiplier()));
 }
 
 async function ensurePlayer(db, playerId) {
@@ -602,7 +635,7 @@ async function buildMarketListingView(db, listing, viewerPlayerId) {
   let sellerType = 'PLAYER';
 
   if (listing.seller_npc_id) {
-    const npc = NPC_SELLERS.find((entry) => entry.id === listing.seller_npc_id);
+    const npc = NPC_SELLERS.find((entry) => normalizeNpcId(entry.id) === normalizeNpcId(listing.seller_npc_id));
     sellerName = npc?.name || 'NPC Seller';
     sellerEmoji = npc?.emoji || '🕵️';
     sellerType = 'NPC';
@@ -666,6 +699,166 @@ async function settleListingSale(db, listing, buyerPlayerId, salePrice, accepted
      WHERE listing_id = $1 AND status = 'PENDING'`,
     [listing.id, acceptedOfferId],
   );
+}
+
+async function estimatePlayerListingMarketPrice(db, listing) {
+  if (listing.asset_type === 'VEHICLE') {
+    const vehicle = await db.query(
+      `SELECT vm.base_price
+       FROM owned_vehicles ov
+       JOIN vehicle_models vm ON vm.id = ov.model_id
+       WHERE ov.id = $1 AND ov.player_id = $2`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!vehicle.rows[0]) return null;
+    return Number(vehicle.rows[0].base_price);
+  }
+
+  if (listing.asset_type === 'CLOTHING') {
+    const item = await db.query(
+      `SELECT metadata
+       FROM inventory_items
+       WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    const row = item.rows[0];
+    if (!row) return null;
+    const meta = row.metadata || {};
+    const marketValue = Number(meta.marketValue || 0);
+    if (marketValue > 0) return marketValue;
+
+    const byCatalog = await db.query(
+      `SELECT min_value, max_value
+       FROM clothing_items
+       WHERE name = $1
+       LIMIT 1`,
+      [meta.name || ''],
+    );
+    if (byCatalog.rows[0]) {
+      return Math.round((Number(byCatalog.rows[0].min_value) + Number(byCatalog.rows[0].max_value)) / 2);
+    }
+    return null;
+  }
+
+  if (listing.asset_type === 'XENON_VEHICLE') {
+    const item = await db.query(
+      `SELECT metadata
+       FROM inventory_items
+       WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    const row = item.rows[0];
+    if (!row) return null;
+    const meta = row.metadata || {};
+    const inferred = Number(meta.marketPrice || meta.marketValue || 0);
+    return inferred > 0 ? inferred : 250000;
+  }
+
+  return null;
+}
+
+async function settleNpcPurchaseOfPlayerListing(db, listing, salePrice) {
+  if (!listing.seller_player_id) {
+    throw new Error('player listing required');
+  }
+
+  await db.query(
+    `UPDATE players SET clean_money = clean_money + $1, updated_at = NOW() WHERE player_id = $2`,
+    [salePrice, listing.seller_player_id],
+  );
+
+  if (listing.asset_type === 'VEHICLE') {
+    const removed = await db.query(
+      `DELETE FROM owned_vehicles
+       WHERE id = $1 AND player_id = $2
+       RETURNING id`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!removed.rows[0]) throw new Error('vehicle asset unavailable');
+  } else {
+    const removed = await db.query(
+      `UPDATE inventory_items
+       SET quantity = quantity - 1
+       WHERE id = $1 AND player_id = $2 AND quantity > 0
+       RETURNING id, quantity`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!removed.rows[0]) throw new Error('inventory asset unavailable');
+    if (removed.rows[0].quantity <= 0) {
+      await db.query(`DELETE FROM inventory_items WHERE id = $1`, [listing.asset_ref_id]);
+    }
+  }
+
+  await db.query(
+    `UPDATE market_listings
+     SET status = 'SOLD', updated_at = NOW()
+     WHERE id = $1`,
+    [listing.id],
+  );
+
+  await db.query(
+    `UPDATE market_offers
+     SET status = 'REJECTED', updated_at = NOW()
+     WHERE listing_id = $1 AND status = 'PENDING'`,
+    [listing.id],
+  );
+}
+
+async function runNpcAutoBuyerSweep() {
+  const soldCount = await withTransaction(async (db) => {
+    const listings = await db.query(
+      `SELECT ml.*
+       FROM market_listings ml
+       WHERE ml.status = 'ACTIVE' AND ml.seller_player_id IS NOT NULL
+       ORDER BY ml.created_at ASC
+       LIMIT 30
+       FOR UPDATE SKIP LOCKED`,
+    );
+
+    const candidates = [];
+    for (const listing of listings.rows) {
+      const marketPrice = await estimatePlayerListingMarketPrice(db, listing);
+      if (!marketPrice || marketPrice <= 0) continue;
+
+      const askPrice = Number(listing.ask_price);
+      if (askPrice <= 0) continue;
+
+      const ratio = askPrice / marketPrice;
+      let chance = 0;
+      if (ratio <= 0.75) chance = 0.58;
+      else if (ratio <= 0.9) chance = 0.4;
+      else if (ratio <= 1.0) chance = 0.26;
+      else if (ratio <= 1.1) chance = 0.12;
+
+      if (chance > 0 && Math.random() < chance) {
+        candidates.push({ listing, ratio });
+      }
+    }
+
+    if (candidates.length === 0) return 0;
+
+    candidates.sort((a, b) => a.ratio - b.ratio);
+    const maxBuys = Math.min(2, candidates.length);
+    const buysThisCycle = Math.max(1, randomInt(1, maxBuys));
+    let sold = 0;
+
+    for (let i = 0; i < buysThisCycle; i += 1) {
+      const picked = candidates[i];
+      try {
+        await settleNpcPurchaseOfPlayerListing(db, picked.listing, Number(picked.listing.ask_price));
+        sold += 1;
+      } catch {
+        await db.query(
+          `UPDATE market_listings SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+          [picked.listing.id],
+        );
+      }
+    }
+
+    return sold;
+  });
+
+  return soldCount;
 }
 
 app.post('/api/stats/sync', requireDb, async (req, res) => {
@@ -881,13 +1074,16 @@ app.get('/api/market/posts', requireDb, async (_req, res) => {
 app.post('/api/market/buy', requireDb, async (req, res) => {
   try {
     const { playerId, listingId } = req.body || {};
-    if (!playerId || !listingId) return res.status(400).json({ error: 'missing fields' });
+    const normalizedListingId = Number(listingId);
+    if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0) {
+      return res.status(400).json({ error: 'missing fields' });
+    }
 
     const soldFor = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
       const listingResult = await db.query(
         `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
-        [listingId],
+        [normalizedListingId],
       );
       const listing = listingResult.rows[0];
       if (!listing) throw new Error('listing not found');
@@ -905,20 +1101,24 @@ app.post('/api/market/buy', requireDb, async (req, res) => {
 app.post('/api/market/offer', requireDb, async (req, res) => {
   try {
     const { playerId, listingId, offeredPrice } = req.body || {};
-    if (!playerId || !listingId || !offeredPrice) return res.status(400).json({ error: 'missing fields' });
+    const normalizedListingId = Number(listingId);
+    const normalizedOfferPrice = Math.floor(Number(offeredPrice));
+    if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0 || !Number.isFinite(normalizedOfferPrice) || normalizedOfferPrice <= 0) {
+      return res.status(400).json({ error: 'missing fields' });
+    }
 
     const result = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
       const listingResult = await db.query(
         `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
-        [listingId],
+        [normalizedListingId],
       );
       const listing = listingResult.rows[0];
       if (!listing) throw new Error('listing not found');
       if (listing.seller_player_id === playerId) throw new Error('cannot offer on your own listing');
 
       const buyerResult = await db.query(`SELECT clean_money FROM players WHERE player_id = $1`, [playerId]);
-      if (Number(buyerResult.rows[0]?.clean_money ?? 0) < Number(offeredPrice)) {
+      if (Number(buyerResult.rows[0]?.clean_money ?? 0) < normalizedOfferPrice) {
         throw new Error('insufficient funds');
       }
 
@@ -928,7 +1128,7 @@ app.post('/api/market/offer', requireDb, async (req, res) => {
           `SELECT COUNT(*)::INT AS count
            FROM market_offers
            WHERE listing_id = $1 AND buyer_player_id = $2`,
-          [listingId, playerId],
+          [normalizedListingId, playerId],
         );
         existingNpcAttempts = existingAttemptsResult.rows[0]?.count ?? 0;
         if (existingNpcAttempts >= 3) {
@@ -940,20 +1140,20 @@ app.post('/api/market/offer', requireDb, async (req, res) => {
         `INSERT INTO market_offers (listing_id, buyer_player_id, offered_price, status)
          VALUES ($1, $2, $3, $4)
          RETURNING id, created_at`,
-        [listingId, playerId, offeredPrice, listing.seller_npc_id ? 'REJECTED' : 'PENDING'],
+        [normalizedListingId, playerId, normalizedOfferPrice, listing.seller_npc_id ? 'REJECTED' : 'PENDING'],
       );
 
       if (listing.seller_npc_id) {
         const attemptNo = existingNpcAttempts + 1;
         const attemptsLeft = Math.max(0, 3 - attemptNo);
 
-        const accepted = Number(offeredPrice) >= Math.floor(Number(listing.ask_price) * 0.9);
+        const accepted = normalizedOfferPrice >= Math.floor(Number(listing.ask_price) * 0.9);
         if (accepted) {
           await db.query(
             `UPDATE market_offers SET status = 'ACCEPTED', updated_at = NOW() WHERE id = $1`,
             [inserted.rows[0].id],
           );
-          await settleListingSale(db, listing, playerId, Number(offeredPrice), inserted.rows[0].id);
+          await settleListingSale(db, listing, playerId, normalizedOfferPrice, inserted.rows[0].id);
           return {
             ...inserted.rows[0],
             negotiation: {
@@ -966,16 +1166,16 @@ app.post('/api/market/offer', requireDb, async (req, res) => {
           };
         }
 
-        const canCounter = attemptNo < 3 && Number(offeredPrice) >= Math.floor(Number(listing.ask_price) * 0.45);
+        const canCounter = attemptNo < 3 && normalizedOfferPrice >= Math.floor(Number(listing.ask_price) * 0.45);
         const willCounter = canCounter && Math.random() < 0.7;
         if (willCounter) {
           const ask = Number(listing.ask_price);
           const floorPrice = Math.floor(ask * 0.82);
-          const midpoint = Math.floor((ask + Number(offeredPrice)) / 2);
+          const midpoint = Math.floor((ask + normalizedOfferPrice) / 2);
           const counterAsk = Math.max(floorPrice, midpoint);
           await db.query(
             `UPDATE market_listings SET ask_price = $2, updated_at = NOW() WHERE id = $1`,
-            [listingId, counterAsk],
+            [normalizedListingId, counterAsk],
           );
           return {
             ...inserted.rows[0],
@@ -1046,7 +1246,11 @@ app.get('/api/market/listings', async (req, res) => {
 app.post('/api/market/list', requireDb, async (req, res) => {
   try {
     const { playerId, assetType, assetRefId, askPrice } = req.body || {};
-    if (!playerId || !assetType || !assetRefId || !askPrice) return res.status(400).json({ error: 'missing fields' });
+    const normalizedAssetRefId = Number(assetRefId);
+    const normalizedAskPrice = Math.floor(Number(askPrice));
+    if (!playerId || !assetType || !Number.isInteger(normalizedAssetRefId) || normalizedAssetRefId <= 0 || !Number.isFinite(normalizedAskPrice) || normalizedAskPrice <= 0) {
+      return res.status(400).json({ error: 'missing fields' });
+    }
 
     const created = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
@@ -1054,19 +1258,19 @@ app.post('/api/market/list', requireDb, async (req, res) => {
       if (assetType === 'VEHICLE') {
         const vehicle = await db.query(
           `SELECT ov.id FROM owned_vehicles ov WHERE ov.id = $1 AND ov.player_id = $2`,
-          [assetRefId, playerId],
+          [normalizedAssetRefId, playerId],
         );
         if (!vehicle.rows[0]) throw new Error('vehicle not owned');
       } else if (assetType === 'CLOTHING') {
         const clothing = await db.query(
           `SELECT id FROM inventory_items WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
-          [assetRefId, playerId],
+          [normalizedAssetRefId, playerId],
         );
         if (!clothing.rows[0]) throw new Error('clothing not owned');
       } else if (assetType === 'XENON_VEHICLE') {
         const xenon = await db.query(
           `SELECT id FROM inventory_items WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
-          [assetRefId, playerId],
+          [normalizedAssetRefId, playerId],
         );
         if (!xenon.rows[0]) throw new Error('xenon not owned');
       }
@@ -1074,15 +1278,15 @@ app.post('/api/market/list', requireDb, async (req, res) => {
       const existing = await db.query(
         `SELECT id FROM market_listings
          WHERE seller_player_id = $1 AND asset_type = $2 AND asset_ref_id = $3 AND status = 'ACTIVE'`,
-        [playerId, assetType, assetRefId],
+        [playerId, assetType, normalizedAssetRefId],
       );
       if (existing.rows[0]) throw new Error('asset already listed');
 
       const inserted = await db.query(
-        `INSERT INTO market_listings (seller_player_id, asset_type, asset_ref_id, ask_price, status)
-         VALUES ($1, $2, $3, $4, 'ACTIVE')
+        `INSERT INTO market_listings (seller_type, seller_player_id, asset_type, asset_ref_id, ask_price, status)
+         VALUES ('PLAYER', $1, $2, $3, $4, 'ACTIVE')
          RETURNING id, created_at`,
-        [playerId, assetType, assetRefId, askPrice],
+        [playerId, assetType, normalizedAssetRefId, normalizedAskPrice],
       );
       return inserted.rows[0];
     });
@@ -1176,7 +1380,7 @@ app.get('/api/market/buyer', async (req, res) => {
         if (!asset) return null;
         const sellerType = listing?.seller_npc_id ? 'NPC' : 'PLAYER';
         const sellerName = listing?.seller_npc_id
-          ? (NPC_SELLERS.find((entry) => entry.id === listing.seller_npc_id)?.name || 'NPC Seller')
+          ? (NPC_SELLERS.find((entry) => normalizeNpcId(entry.id) === normalizeNpcId(listing.seller_npc_id))?.name || 'NPC Seller')
           : listing?.seller_player_id;
         return {
           id: offer.id,
@@ -1298,7 +1502,8 @@ app.post('/api/market/npc/refresh', async (_req, res) => {
   try {
     if (!dbReady || !pool) return res.json({ ok: true });
     await refreshNpcListings();
-    res.json({ ok: true });
+    const sold = await runNpcAutoBuyerSweep();
+    res.json({ ok: true, sold });
   } catch (error) {
     res.status(500).json({ error: 'npc refresh failed' });
   }
@@ -1346,6 +1551,7 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
     const usedSlots = vehiclesRes.rows.length;
     const playerState = {
       playerId: player.player_id,
+      displayName: player.display_name || player.player_id,
       cleanMoney: Number(player.clean_money),
       flowCoins: player.flow_coins,
       rouletteFragments: player.roulette_fragments,
@@ -1381,6 +1587,32 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
   } catch (e) {
     console.error('bootstrap error', e);
     res.status(500).json({ error: 'bootstrap failed' });
+  }
+});
+
+app.get('/api/player/profile', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const player = await ensurePlayer(pool, playerId);
+    res.json({ playerId: player.player_id, displayName: player.display_name || player.player_id });
+  } catch (error) {
+    res.status(500).json({ error: 'profile fetch failed' });
+  }
+});
+
+app.post('/api/player/profile/name', requireDb, async (req, res) => {
+  try {
+    const { playerId, displayName } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const safeName = String(displayName || '').trim().slice(0, 32);
+    if (!safeName) return res.status(400).json({ error: 'display name required' });
+
+    await ensurePlayer(pool, playerId);
+    await pool.query(`UPDATE players SET display_name = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, safeName]);
+    res.json({ ok: true, displayName: safeName });
+  } catch (error) {
+    res.status(500).json({ error: 'profile update failed' });
   }
 });
 
@@ -1554,7 +1786,8 @@ app.post('/api/roulette/spin', requireDb, async (req, res) => {
         rewardSubtitle = `+${payout} fragmente`;
         emoji = '🪙';
       } else if (reward.itemType) {
-        await addInventoryItem(db, playerId, reward.itemType, payout || 1, {});
+        metadata = reward.itemType === 'VOUCHER_SHOWROOM' ? { discount: randomInt(10, 35) } : {};
+        await addInventoryItem(db, playerId, reward.itemType, payout || 1, metadata);
         rewardSubtitle = reward.name;
         emoji = {
           VIP_GOLD: '💎',
@@ -1566,7 +1799,6 @@ app.post('/api/roulette/spin', requireDb, async (req, res) => {
           TAX_EXEMPTION: '💸',
           XENON_VEHICLE: '🔩',
         }[reward.itemType] || '🎁';
-        metadata = reward.itemType === 'VOUCHER_SHOWROOM' ? { discount: randomInt(10, 35) } : {};
       }
 
       const updatedPlayerRes = await db.query(
@@ -1821,14 +2053,14 @@ const CLOTHING_ITEMS = [
 ];
 
 const NPC_SELLERS = [
-  { id: 'shadow_dealer', name: 'Shadow Dealer', emoji: '🕵️' },
-  { id: 'gold_rush', name: 'Gold Rush', emoji: '🤑' },
-  { id: 'street_king', name: 'Street King', emoji: '👑' },
-  { id: 'midnight_shift', name: 'Midnight Shift', emoji: '🌙' },
-  { id: 'chrome_broker', name: 'Chrome Broker', emoji: '🔧' },
-  { id: 'velvet_tag', name: 'Velvet Tag', emoji: '🧥' },
-  { id: 'runway_flip', name: 'Runway Flip', emoji: '👠' },
-  { id: 'nitro_node', name: 'Nitro Node', emoji: '⚡' },
+  { id: 1, name: 'Shadow Dealer', emoji: '🕵️' },
+  { id: 2, name: 'Gold Rush', emoji: '🤑' },
+  { id: 3, name: 'Street King', emoji: '👑' },
+  { id: 4, name: 'Midnight Shift', emoji: '🌙' },
+  { id: 5, name: 'Chrome Broker', emoji: '🔧' },
+  { id: 6, name: 'Velvet Tag', emoji: '🧥' },
+  { id: 7, name: 'Runway Flip', emoji: '👠' },
+  { id: 8, name: 'Nitro Node', emoji: '⚡' },
 ];
 
 async function seedNpcSellers() {
@@ -1857,10 +2089,10 @@ async function refreshNpcListings() {
     const useVehicle = Math.random() < 0.6;
     if (useVehicle && vehicleRows.rows.length > 0) {
       const vehicle = vehicleRows.rows[randomInt(0, vehicleRows.rows.length - 1)];
-      const askPrice = Math.floor(Number(vehicle.base_price) * (0.9 + Math.random() * 0.55));
+      const askPrice = toDynamicNpcPrice(Number(vehicle.base_price));
       await pool.query(
-        `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
-         VALUES ($1, 'VEHICLE', $2, $3, 'ACTIVE')`,
+        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, ask_price, status)
+         VALUES ('NPC', $1, 'VEHICLE', $2, $3, 'ACTIVE')`,
         [seller.id, vehicle.id, askPrice],
       );
       created += 1;
@@ -1870,10 +2102,10 @@ async function refreshNpcListings() {
     if (clothingRows.rows.length > 0) {
       const clothing = clothingRows.rows[randomInt(0, clothingRows.rows.length - 1)];
       const midValue = Math.round((Number(clothing.min_value) + Number(clothing.max_value)) / 2);
-      const askPrice = Math.floor(midValue * (0.75 + Math.random() * 1.05));
+      const askPrice = toDynamicNpcPrice(midValue);
       await pool.query(
-        `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
-         VALUES ($1, 'CLOTHING', $2, $3, 'ACTIVE')`,
+        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, ask_price, status)
+         VALUES ('NPC', $1, 'CLOTHING', $2, $3, 'ACTIVE')`,
         [seller.id, clothing.id, askPrice],
       );
       created += 1;
@@ -1936,10 +2168,12 @@ if (!pool) {
       await seedNpcSellers();
       await refreshNpcListings();
       await seedBotPosts();
+      await runNpcAutoBuyerSweep();
       setInterval(() => {
         refreshNpcListings().catch(() => {});
         seedBotPosts().catch(() => {});
-      }, 5 * 60 * 1000);
+        runNpcAutoBuyerSweep().catch(() => {});
+      }, NPC_REFRESH_INTERVAL_MS);
       startServer();
     })
     .catch((err) => {

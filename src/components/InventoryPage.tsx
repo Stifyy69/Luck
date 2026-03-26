@@ -83,8 +83,11 @@ function sourceLabel(value: unknown): string {
   return 'Purchased: Unknown';
 }
 
+type InventoryTab = 'all' | 'vehicles' | 'items' | 'clothing';
+
 export default function InventoryPage() {
   const { player, playerId, refresh } = usePlayer();
+  const [tab, setTab] = useState<InventoryTab>('all');
   const [busy, setBusy] = useState<number | null>(null);
   const [popup, setPopup] = useState<{ message: string; isError: boolean } | null>(null);
   const [mysteryResult, setMysteryResult] = useState<{
@@ -130,9 +133,12 @@ export default function InventoryPage() {
 
   const inventory = player?.inventory ?? [];
   const vehicles = player?.ownedVehicles ?? [];
-  const isEmpty = inventory.length === 0;
+  const hasAny = inventory.length > 0 || vehicles.length > 0;
   const clothingItems = inventory.filter((i) => i.itemType === 'CLOTHING');
   const otherItems = inventory.filter((i) => i.itemType !== 'CLOTHING');
+  const showVehicles = tab === 'all' || tab === 'vehicles';
+  const showItems = tab === 'all' || tab === 'items';
+  const showClothing = tab === 'all' || tab === 'clothing';
 
   return (
     <div className="min-h-screen px-4 py-6 md:py-8">
@@ -154,13 +160,31 @@ export default function InventoryPage() {
           <h1 className="text-3xl font-black uppercase tracking-tight text-white">Inventory</h1>
         </div>
 
+        <div className="mb-6 flex flex-wrap gap-2">
+          {[
+            { id: 'all', label: 'All' },
+            { id: 'vehicles', label: 'Vehicles' },
+            { id: 'items', label: 'Items' },
+            { id: 'clothing', label: 'Clothing' },
+          ].map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              onClick={() => setTab(entry.id as InventoryTab)}
+              className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${tab === entry.id ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/60 hover:bg-white/5'}`}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+
         {!player && (
           <div className="flex items-center justify-center py-20">
             <p className="text-sm font-bold uppercase tracking-widest text-white/50">Loading...</p>
           </div>
         )}
 
-        {player && isEmpty && vehicles.length === 0 && (
+        {player && !hasAny && (
           <div className="hud-panel px-6 py-12 text-center">
             <p className="text-4xl">📭</p>
             <p className="mt-3 text-lg font-black text-white/70">Inventory is empty</p>
@@ -168,9 +192,9 @@ export default function InventoryPage() {
           </div>
         )}
 
-        {player && (vehicles.length > 0 || !isEmpty) && (
+        {player && hasAny && (
           <div className="space-y-8">
-            {vehicles.length > 0 && (
+            {showVehicles && vehicles.length > 0 && (
               <section>
                 <h2 className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-white/60">Owned Vehicles</h2>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -181,7 +205,7 @@ export default function InventoryPage() {
               </section>
             )}
 
-            {otherItems.length > 0 && (
+            {showItems && otherItems.length > 0 && (
               <section>
                 <h2 className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-white/60">Items</h2>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -192,7 +216,7 @@ export default function InventoryPage() {
               </section>
             )}
 
-            {clothingItems.length > 0 && (
+            {showClothing && clothingItems.length > 0 && (
               <section>
                 <h2 className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-white/60">Owned Clothing</h2>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -201,6 +225,13 @@ export default function InventoryPage() {
                   ))}
                 </div>
               </section>
+            )}
+
+            {((showVehicles && vehicles.length === 0) || (showItems && otherItems.length === 0) || (showClothing && clothingItems.length === 0)) && tab !== 'all' && (
+              <div className="hud-panel px-6 py-10 text-center">
+                <p className="text-lg font-black text-white/70">No entries in this category</p>
+                <p className="mt-1 text-sm text-white/40">Switch tabs to view other inventory types.</p>
+              </div>
             )}
           </div>
         )}

@@ -13,6 +13,7 @@ import type {
   MarketOfferResult,
   MarketActionResult,
   MarketAssetType,
+  PlayerProfileResponse,
 } from '../types/game';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -110,4 +111,10 @@ export const api = {
 
   marketListingCancel: (playerId: string, listingId: number) =>
     post<{ ok: boolean }>('/api/market/listing/cancel', { playerId, listingId }),
+
+  playerProfile: (playerId: string) =>
+    get<PlayerProfileResponse>('/api/player/profile', { playerId }),
+
+  playerRename: (playerId: string, displayName: string) =>
+    post<{ ok: boolean; displayName: string }>('/api/player/profile/name', { playerId, displayName }),
 };

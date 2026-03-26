@@ -1,20 +1,22 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { usePlayer } from '../hooks/usePlayer';
+import { api } from '../lib/api';
 import SharedStatsPanel from './SharedStatsPanel';
 
 const rewards = [
-  { name: 'Vehicle Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
+  { name: 'Vehicul Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
   { name: 'VIP Gold', subtitle: '6-12 zile', tier: 'epic', emoji: '💎' },
   { name: 'VIP Silver', subtitle: '6-12 zile', tier: 'epic', emoji: '💠' },
   { name: 'Mystery Box', subtitle: 'Obiecte unice', tier: 'epic', emoji: '📦' },
-  { name: 'Fragmente ruleta', subtitle: 'x5 fragmente', tier: 'rare', emoji: '🪙' },
-  { name: 'OGCoins', subtitle: '10 OGC', tier: 'rare', emoji: '🟠' },
+  { name: 'Fragmente Ruleta', subtitle: 'x5 fragmente', tier: 'rare', emoji: '🪙' },
+  { name: 'FlowCoins', subtitle: '10 FlowCoins', tier: 'rare', emoji: '🟠' },
   { name: 'Slot Vehicle', subtitle: '1 slot', tier: 'rare', emoji: '➕' },
   { name: 'Voucher Showroom', subtitle: '1 voucher', tier: 'rare', emoji: '🎟️' },
-  { name: 'Job Boost', subtitle: '12 de ore', tier: 'uncommon', emoji: '📈' },
-  { name: 'Exemption Taxe', subtitle: '24 de ore', tier: 'uncommon', emoji: '💸' },
-  { name: 'Xenon Vehicle', subtitle: '1 pachet xenon', tier: 'common', emoji: '🔩' },
+  { name: 'Job Boost Pilot', subtitle: 'Single run x2', tier: 'uncommon', emoji: '📈' },
+  { name: 'Scutire Taxe', subtitle: 'Skip next tax', tier: 'uncommon', emoji: '💸' },
+  { name: 'Xenon Vehicul', subtitle: '1 pachet xenon', tier: 'common', emoji: '🔩' },
   { name: 'Bani', subtitle: 'suma de bani', tier: 'common', emoji: '💵' },
 ];
 
@@ -24,14 +26,6 @@ const rarityLabel = {
   rare: 'Mov inchis',
   uncommon: 'Mov deschis',
   common: 'Albastru',
-};
-
-const tierWeight = {
-  legendary: 2,
-  epic: 8,
-  rare: 18,
-  uncommon: 30,
-  common: 42,
 };
 
 const tierStyles = {
@@ -55,83 +49,13 @@ const START_INDEX = rewards.length * 4;
 const SPIN_DURATION_MS = 4600;
 const MIN_EXTRA_LOOPS = 6;
 const MAX_EXTRA_LOOPS = 8;
-const GAME_KEY = 'luck_game_state_v1';
-const GAME_SALT = 'stifyy-ogromania-salt';
-
-function signPayload(payload) {
-  const raw = JSON.stringify(payload) + GAME_SALT;
-  let hash = 0;
-  for (let i = 0; i < raw.length; i += 1) {
-    hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
-  }
-  return String(hash);
-}
-
-function loadGameState() {
-  try {
-    const raw = localStorage.getItem(GAME_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.data || !parsed?.sig) return null;
-    return signPayload(parsed.data) === parsed.sig ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveGameState(data) {
-  try {
-    localStorage.setItem(GAME_KEY, JSON.stringify({ data, sig: signPayload(data) }));
-  } catch {}
-}
-
-function randomMultipleOfFiveThousand(min, max) {
-  const slots = Math.floor((max - min) / 5000);
-  return min + Math.floor(Math.random() * (slots + 1)) * 5000;
-}
-
-function resolveRewardOutcome(baseReward) {
-  if (baseReward.name === 'Vehicle Suvenir') {
-    const value = Math.random() < 0.5 ? 2_000_000 : 5_000_000;
-    return { ...baseReward, payout: value };
-  }
-
-  if (baseReward.name === 'Mystery Box') {
-    const isJackpot = Math.random() < 0.001;
-    const value = isJackpot ? randomMultipleOfFiveThousand(5_000_000, 10_000_000) : randomMultipleOfFiveThousand(5_000, 1_000_000);
-    return { ...baseReward, payout: value };
-  }
-
-  if (baseReward.name === 'Xenon Vehicle') {
-    const value = Math.random() < 0.8 ? 5_000 : 150_000;
-    return { ...baseReward, payout: value };
-  }
-
-  if (baseReward.name === 'Bani') {
-    const value = randomMultipleOfFiveThousand(25_000, 50_000);
-    return { ...baseReward, payout: value };
-  }
-
-  return { ...baseReward, payout: 0 };
-}
-
-function pickWeightedReward() {
-  const totalWeight = rewards.reduce((sum, reward) => sum + (tierWeight[reward.tier] ?? 1), 0);
-  let roll = Math.random() * totalWeight;
-
-  for (const reward of rewards) {
-    roll -= tierWeight[reward.tier] ?? 1;
-    if (roll <= 0) return reward;
-  }
-
-  return rewards[rewards.length - 1];
-}
 
 function getTranslateForIndex(index, viewportWidth) {
   return -(index * CARD_STEP) + viewportWidth / 2 - CARD_WIDTH / 2;
 }
 
 export default function RouletteDemo() {
+  const { player, playerId, refresh } = usePlayer();
   const viewportRef = useRef(null);
   const audioContextRef = useRef(null);
   const currentIndexRef = useRef(START_INDEX);
@@ -145,22 +69,12 @@ export default function RouletteDemo() {
   const [showWinModal, setShowWinModal] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(START_INDEX);
   const [latestWins, setLatestWins] = useState([rewards[0], rewards[1], rewards[4], rewards[11]]);
-  const saved = typeof window !== 'undefined' ? loadGameState() : null;
-  const [fragments, setFragments] = useState(saved?.fragments ?? 0);
-  const [ogCoinsBalance, setOgCoinsBalance] = useState(saved?.ogCoinsBalance ?? 0);
-  const [bonusSpins, setBonusSpins] = useState(saved?.bonusSpins ?? 0);
-  const [cashBalance, setCashBalance] = useState(saved?.cashBalance ?? 1_000_000);
-  const [rouletteSpent, setRouletteSpent] = useState(saved?.rouletteSpent ?? 0);
-  const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
-  const [timeFarm, setTimeFarm] = useState(saved?.timeFarm ?? saved?.timeLostFarm ?? 0);
-  const [timeSleep, setTimeSleep] = useState(saved?.timeSleep ?? 0);
-  const [processedFrunze, setProcessedFrunze] = useState(saved?.processedFrunze ?? 0);
-  const [processedWhite, setProcessedWhite] = useState(saved?.processedWhite ?? 0);
-  const [processedBlue, setProcessedBlue] = useState(saved?.processedBlue ?? 0);
-  const [farmEarned, setFarmEarned] = useState(saved?.farmEarned ?? 0);
-  const [timePilot, setTimePilot] = useState(saved?.timePilot ?? 0);
+  const [fragments, setFragments] = useState(0);
+  const [flowCoinsBalance, setFlowCoinsBalance] = useState(0);
+  const [cashBalance, setCashBalance] = useState(0);
   const [spinCount, setSpinCount] = useState(0);
   const [nearVehicleIndex, setNearVehicleIndex] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const trackRewards = useMemo(
     () => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(),
@@ -185,24 +99,11 @@ export default function RouletteDemo() {
   }, []);
 
   useEffect(() => {
-    const existing = loadGameState() || {};
-    saveGameState({
-      ...existing,
-      fragments,
-      ogCoinsBalance,
-      bonusSpins,
-      cashBalance,
-      rouletteSpent,
-      rouletteWon,
-      timeFarm,
-      timeSleep,
-      processedFrunze,
-      processedWhite,
-      processedBlue,
-      farmEarned,
-      timePilot,
-    });
-  }, [fragments, ogCoinsBalance, bonusSpins, cashBalance, rouletteSpent, rouletteWon, timeFarm, timeSleep, processedFrunze, processedWhite, processedBlue, farmEarned, timePilot]);
+    if (!player) return;
+    setCashBalance(Number(player.cleanMoney || 0));
+    setFlowCoinsBalance(Number(player.flowCoins || 0));
+    setFragments(Number(player.rouletteFragments || 0));
+  }, [player]);
 
   const scheduleTask = (callback, delay) => {
     const timer = window.setTimeout(callback, delay);
@@ -293,21 +194,42 @@ export default function RouletteDemo() {
   };
 
   const handleSpin = async (costType) => {
+    if (!playerId || !player) return;
     if (isSpinning || !viewportWidth) return;
     if (costType === 'cash' && cashBalance < 100_000) return;
-    if (costType === 'ogc' && ogCoinsBalance < 30 && bonusSpins < 1) return;
+    if (costType === 'ogc' && flowCoinsBalance < 30) return;
 
     clearScheduledTasks();
+    setErrorMessage(null);
 
     const context = getAudioContext();
     if (context?.state === 'suspended') {
       await context.resume();
     }
 
-    const winner = resolveRewardOutcome(pickWeightedReward());
+    let spinResult;
+    try {
+      spinResult = await api.rouletteSpin(playerId, costType === 'cash' ? 'cash' : 'flowcoins');
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : 'Spin failed');
+      return;
+    }
+
+    const winnerCard = rewards.find((reward) => reward.name === spinResult.rewardName);
+    const winner = {
+      name: spinResult.rewardName,
+      subtitle: spinResult.rewardSubtitle || winnerCard?.subtitle || 'Reward received',
+      tier: spinResult.tier,
+      emoji: spinResult.emoji || winnerCard?.emoji || '🎁',
+      payout: Number(spinResult.payout || 0),
+    };
+
     const winnerRewardIndex = rewards.findIndex((reward) => reward.name === winner.name);
+    const resolvedWinnerIndex = winnerRewardIndex >= 0
+      ? winnerRewardIndex
+      : Math.max(0, rewards.findIndex((reward) => reward.tier === winner.tier));
     const currentRewardIndex = currentIndexRef.current % rewards.length;
-    const deltaToWinner = (winnerRewardIndex - currentRewardIndex + rewards.length) % rewards.length;
+    const deltaToWinner = (resolvedWinnerIndex - currentRewardIndex + rewards.length) % rewards.length;
     const extraLoops = MIN_EXTRA_LOOPS + Math.floor(Math.random() * (MAX_EXTRA_LOOPS - MIN_EXTRA_LOOPS + 1));
     const targetIndex = currentIndexRef.current + extraLoops * rewards.length + deltaToWinner;
 
@@ -316,15 +238,6 @@ export default function RouletteDemo() {
     setShowWinModal(false);
     setHighlightIndex(null);
     setIsSpinning(true);
-
-    if (costType === 'cash') {
-      setCashBalance((current) => current - 100_000);
-      setRouletteSpent((current) => current + 100_000);
-    } else if (bonusSpins > 0) {
-      setBonusSpins((current) => current - 1);
-    } else {
-      setOgCoinsBalance((current) => current - 30);
-    }
     setSpinCount((count) => count + 1);
 
     currentIndexRef.current = targetIndex;
@@ -338,37 +251,13 @@ export default function RouletteDemo() {
       setNearVehicleIndex(null);
       setLatestWins((current) => [winner, ...current].slice(0, 5));
 
-      if (winner.name === 'Fragmente ruleta') {
-        setFragments((current) => {
-          const total = current + 5;
-          const extra = Math.floor(total / 4);
-          if (extra > 0) setBonusSpins((spins) => spins + extra);
-          return total % 4;
-        });
-      }
-
-      if (winner.name === 'OGCoins') {
-        setOgCoinsBalance((current) => {
-          const total = current + 10;
-          if (total >= 30) {
-            const extra = Math.floor(total / 30);
-            setBonusSpins((spins) => spins + extra);
-          }
-          return total;
-        });
-      }
-
-      if (winner.payout > 0) {
-        setCashBalance((current) => current + winner.payout);
-        setRouletteWon((current) => current + winner.payout);
-      }
-
-      if ((spinCount + 1) % 5 === 0 && winner.name !== 'Vehicle Suvenir') {
+      if ((spinCount + 1) % 5 === 0 && winner.name !== 'Vehicul Suvenir') {
         const neighbor = targetIndex + (Math.random() > 0.5 ? 1 : -1);
-        if ((trackRewards[neighbor] || {}).name === 'Vehicle Suvenir') setNearVehicleIndex(neighbor);
+        if ((trackRewards[neighbor] || {}).name === 'Vehicul Suvenir') setNearVehicleIndex(neighbor);
       }
 
       playWinSound();
+      refresh();
     }, SPIN_DURATION_MS + 40);
 
     scheduleTask(() => {
@@ -441,6 +330,12 @@ export default function RouletteDemo() {
             </h1>
           </header>
 
+          {errorMessage && (
+            <div className="mx-auto mb-3 w-full max-w-[1120px] rounded-xl border border-red-500/35 bg-red-900/40 px-4 py-2 text-sm font-bold text-red-200">
+              {errorMessage}
+            </div>
+          )}
+
           <div className="mx-auto w-full max-w-[1120px] rounded-[20px] border border-white/10 bg-[#17143a]/72 px-2.5 py-2.5 shadow-[0_30px_100px_rgba(0,0,0,0.44)] backdrop-blur-xl sm:px-3 sm:py-3">
           <section className="rounded-[20px] border border-white/8 bg-[#13112c]/86 p-3 sm:p-4">
             <div className="mb-3 flex justify-center">
@@ -484,7 +379,7 @@ export default function RouletteDemo() {
             <button
               type="button"
               onClick={() => handleSpin('cash')}
-              disabled={isSpinning || cashBalance < 100_000}
+              disabled={!player || isSpinning || cashBalance < 100_000}
               className="w-full rounded-[10px] border border-red-300/30 bg-gradient-to-r from-red-600 to-orange-500 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(239,68,68,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
             >
               {isSpinning && activeCost === 'cash' ? 'Se deschide...' : 'Deschide cu 100,000$'}
@@ -492,10 +387,10 @@ export default function RouletteDemo() {
             <button
               type="button"
               onClick={() => handleSpin('ogc')}
-              disabled={isSpinning || (ogCoinsBalance < 30 && bonusSpins < 1)}
+              disabled={!player || isSpinning || flowCoinsBalance < 30}
               className="w-full rounded-[10px] border border-orange-300/30 bg-gradient-to-r from-orange-500 to-amber-400 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(251,146,60,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
             >
-              {isSpinning && activeCost === 'ogc' ? 'Se deschide...' : 'Deschide cu 30 OGC'}
+              {isSpinning && activeCost === 'ogc' ? 'Se deschide...' : 'Deschide cu 30 FlowCoins'}
             </button>
           </div>
 
@@ -505,12 +400,12 @@ export default function RouletteDemo() {
               <p className="text-lg font-black text-white">{fragments}/4</p>
             </div>
             <div className="rounded-[10px] border border-white/15 bg-black/25 px-3 py-2 text-center">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">OGCoins</p>
-              <p className="text-lg font-black text-white">{ogCoinsBalance}/30</p>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">FlowCoins</p>
+              <p className="text-lg font-black text-white">{flowCoinsBalance}</p>
             </div>
             <div className="rounded-[10px] border border-white/15 bg-black/25 px-3 py-2 text-center">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Spin bonus</p>
-              <p className="text-lg font-black text-amber-300">{bonusSpins}</p>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Spins</p>
+              <p className="text-lg font-black text-amber-300">{spinCount}</p>
             </div>
           </div>
 

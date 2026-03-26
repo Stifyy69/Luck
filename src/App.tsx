@@ -8,7 +8,6 @@ import GangsPage from './components/GangsPage';
 import CNNMarketplace from './components/CNNMarketplace';
 import ShowroomPage from './components/ShowroomPage';
 import InventoryPage from './components/InventoryPage';
-import PlayerStatusPage from './components/PlayerStatusPage';
 import MyProfilePage from './components/MyProfilePage';
 import AccountHud from './components/AccountHud';
 import { startGameSync } from './lib/gameSync';
@@ -21,7 +20,6 @@ type RoutePath =
   | '/showroom'
   | '/inventory'
   | '/owned'
-  | '/status'
   | '/profile'
   | '/cnn'
   | '/gangs'
@@ -35,7 +33,6 @@ const VALID_ROUTES: RoutePath[] = [
   '/showroom',
   '/inventory',
   '/owned',
-  '/status',
   '/profile',
   '/cnn',
   '/gangs',
@@ -46,6 +43,7 @@ function normalizePath(pathname: string): RoutePath {
   if (pathname === '/cars') return '/showroom';
   if (pathname === '/marketplace') return '/cnn';
   if (pathname === '/owned') return '/inventory';
+  if (pathname === '/status') return '/profile';
   if (VALID_ROUTES.includes(pathname as RoutePath)) return pathname as RoutePath;
   return '/ruleta';
 }
@@ -107,19 +105,15 @@ export default function App() {
         >
           My Profile
         </button>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Work</p>
+        </div>
         <button
           type="button"
           onClick={() => goTo('/farmat')}
           className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/farmat' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Farm
-        </button>
-        <button
-          type="button"
-          onClick={() => goTo('/ruleta')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/ruleta' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
-        >
-          Roulette
+          Cayo
         </button>
         <button
           type="button"
@@ -136,7 +130,27 @@ export default function App() {
           Pilot
         </button>
         <div className="mt-4 border-t border-white/10 pt-4">
-          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Garage</p>
+          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Fun</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => goTo('/ruleta')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/ruleta' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Roulette
+        </button>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Inventory</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => goTo('/inventory')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/inventory' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Inventory
+        </button>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Market</p>
         </div>
         <button
           type="button"
@@ -147,34 +161,20 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => goTo('/inventory')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/inventory' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+          onClick={() => goTo('/cnn')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/cnn' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Inventory
+          CNN Market
         </button>
-        <button
-          type="button"
-          onClick={() => goTo('/status')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/status' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
-        >
-          Status
-        </button>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Gangs</p>
+        </div>
         <button
           type="button"
           onClick={() => goTo('/gangs')}
           className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/gangs' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
           Gangs
-        </button>
-        <div className="mt-4 border-t border-white/10 pt-4">
-          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Market</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => goTo('/cnn')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/cnn' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
-        >
-          CNN Market
         </button>
       </div>
 
@@ -191,9 +191,7 @@ export default function App() {
                   ? <InventoryPage />
                   : path === '/owned'
                     ? <InventoryPage />
-                    : path === '/status'
-                      ? <PlayerStatusPage />
-                      : path === '/profile'
+                    : path === '/profile'
                         ? <MyProfilePage />
                 : path === '/gangs'
                   ? <GangsPage />
