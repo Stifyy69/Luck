@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../lib/api';
+import { getClothingImagePath, getVehicleImagePath } from '../lib/assets';
 import type {
   MarketListing,
   MarketOffer,
@@ -231,19 +232,21 @@ export default function CNNMarketplace() {
   };
 
   // Assets available to list
-  const listableVehicles: OwnedVehicle[] = player?.ownedVehicles ?? [];
-  const listableClothing: InventoryItem[] = (player?.inventory ?? []).filter(
-    (i) => i.itemType === 'CLOTHING' && i.quantity > 0,
-  );
-  const listableXenon: InventoryItem[] = (player?.inventory ?? []).filter(
-    (i) => i.itemType === 'XENON_VEHICLE' && i.quantity > 0,
-  );
-
   // Check which assets are already listed
   const listedAssetRefs = new Set(
     [...sellerListings.filter((l) => l.status === 'ACTIVE')].map(
       (l) => `${l.assetType}-${(l.assetMetadata as Record<string, unknown>)?.id ?? ''}`,
     ),
+  );
+
+  const listableVehicles: OwnedVehicle[] = (player?.ownedVehicles ?? []).filter(
+    (vehicle) => !listedAssetRefs.has(`VEHICLE-${vehicle.id}`),
+  );
+  const listableClothing: InventoryItem[] = (player?.inventory ?? []).filter(
+    (i) => i.itemType === 'CLOTHING' && i.quantity > 0 && !listedAssetRefs.has(`CLOTHING-${i.id}`),
+  );
+  const listableXenon: InventoryItem[] = (player?.inventory ?? []).filter(
+    (i) => i.itemType === 'XENON_VEHICLE' && i.quantity > 0 && !listedAssetRefs.has(`XENON_VEHICLE-${i.id}`),
   );
 
   const activeListings = listings.filter((l) => !l.isOwn);
@@ -729,6 +732,17 @@ function ListingCard({
 
   return (
     <div className="hud-panel flex flex-col rounded-2xl p-4">
+      <div className="mb-3 overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img
+          src={typeof meta.imagePath === 'string'
+            ? meta.imagePath
+            : listing.assetType === 'VEHICLE'
+              ? getVehicleImagePath(listing.assetName)
+              : getClothingImagePath(listing.assetName)}
+          alt={listing.assetName}
+          className="h-28 w-full object-contain"
+        />
+      </div>
       {/* Seller info */}
       <div className="mb-3 flex items-center gap-2">
         <span className="text-2xl">{listing.sellerEmoji}</span>

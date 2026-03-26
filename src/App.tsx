@@ -4,23 +4,61 @@ import FarmatPage from './components/FarmatPage';
 import SleepPage from './components/SleepPage';
 import AdminPanelV2 from './components/AdminPanelV2';
 import PilotPage from './components/PilotPage';
-import CarsPage from './components/CarsPage';
 import GangsPage from './components/GangsPage';
-import MarketplacePage from './components/MarketplacePage';
+import CNNMarketplace from './components/CNNMarketplace';
+import ShowroomPage from './components/ShowroomPage';
+import InventoryPage from './components/InventoryPage';
+import OwnedAssetsPage from './components/OwnedAssetsPage';
+import PlayerStatusPage from './components/PlayerStatusPage';
 import AccountHud from './components/AccountHud';
 import { startGameSync } from './lib/gameSync';
 
+type RoutePath =
+  | '/ruleta'
+  | '/farmat'
+  | '/sleep'
+  | '/pilot'
+  | '/showroom'
+  | '/inventory'
+  | '/owned'
+  | '/status'
+  | '/cnn'
+  | '/gangs'
+  | '/adminpanelv2';
+
+const VALID_ROUTES: RoutePath[] = [
+  '/ruleta',
+  '/farmat',
+  '/sleep',
+  '/pilot',
+  '/showroom',
+  '/inventory',
+  '/owned',
+  '/status',
+  '/cnn',
+  '/gangs',
+  '/adminpanelv2',
+];
+
+function normalizePath(pathname: string): RoutePath {
+  if (pathname === '/cars') return '/showroom';
+  if (pathname === '/marketplace') return '/cnn';
+  if (VALID_ROUTES.includes(pathname as RoutePath)) return pathname as RoutePath;
+  return '/ruleta';
+}
+
 export default function App() {
-  const [path, setPath] = useState(window.location.pathname || '/ruleta');
+  const [path, setPath] = useState<RoutePath>(normalizePath(window.location.pathname || '/ruleta'));
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    if (path === '/' || (path !== '/ruleta' && path !== '/farmat' && path !== '/sleep' && path !== '/pilot' && path !== '/cars' && path !== '/gangs' && path !== '/marketplace' && path !== '/adminpanelv2')) {
-      window.history.replaceState({}, '', '/ruleta');
-      setPath('/ruleta');
+    const nextPath = normalizePath(window.location.pathname || path);
+    if (nextPath !== window.location.pathname) {
+      window.history.replaceState({}, '', nextPath);
     }
+    if (nextPath !== path) setPath(nextPath);
 
-    const onPopState = () => setPath(window.location.pathname || '/ruleta');
+    const onPopState = () => setPath(normalizePath(window.location.pathname || '/ruleta'));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, [path]);
@@ -30,7 +68,7 @@ export default function App() {
     return () => stop?.();
   }, []);
 
-  const goTo = (nextPath: '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/cars' | '/gangs' | '/marketplace' | '/adminpanelv2') => {
+  const goTo = (nextPath: RoutePath) => {
     if (nextPath === path) return;
     window.history.pushState({}, '', nextPath);
     setPath(nextPath);
@@ -57,7 +95,7 @@ export default function App() {
           <p className="inline-block rounded-full border border-white/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.28em] text-white/55">
             OG Stifyy
           </p>
-          <p className="mt-2 text-2xl font-black text-white/95">Farm Panel</p>
+          <p className="mt-2 text-2xl font-black text-white/95">Luck Panel</p>
         </div>
         <button
           type="button"
@@ -87,12 +125,36 @@ export default function App() {
         >
           Pilot
         </button>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Garage</p>
+        </div>
         <button
           type="button"
-          onClick={() => goTo('/cars')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/cars' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+          onClick={() => goTo('/showroom')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/showroom' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Cars
+          Showroom
+        </button>
+        <button
+          type="button"
+          onClick={() => goTo('/inventory')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/inventory' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Inventar
+        </button>
+        <button
+          type="button"
+          onClick={() => goTo('/owned')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/owned' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Active
+        </button>
+        <button
+          type="button"
+          onClick={() => goTo('/status')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/status' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+        >
+          Status
         </button>
         <button
           type="button"
@@ -101,12 +163,15 @@ export default function App() {
         >
           Gangs
         </button>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <p className="px-4 text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">Market</p>
+        </div>
         <button
           type="button"
-          onClick={() => goTo('/marketplace')}
-          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/marketplace' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
+          onClick={() => goTo('/cnn')}
+          className={`mt-2 block w-full rounded-xl px-4 py-3 text-left text-sm font-bold uppercase tracking-[0.06em] transition ${path === '/cnn' ? 'btn-secondary shadow-[inset_3px_0_0_#ffb347]' : 'text-white/70 hover:bg-white/5'}`}
         >
-          Market
+          CNN Market
         </button>
       </div>
 
@@ -117,12 +182,18 @@ export default function App() {
             ? <SleepPage />
             : path === '/pilot'
               ? <PilotPage />
-              : path === '/cars'
-                ? <CarsPage />
+              : path === '/showroom'
+                ? <ShowroomPage />
+                : path === '/inventory'
+                  ? <InventoryPage />
+                  : path === '/owned'
+                    ? <OwnedAssetsPage />
+                    : path === '/status'
+                      ? <PlayerStatusPage />
                 : path === '/gangs'
                   ? <GangsPage />
-                  : path === '/marketplace'
-                    ? <MarketplacePage />
+                  : path === '/cnn'
+                    ? <CNNMarketplace />
             : path === '/adminpanelv2'
               ? <AdminPanelV2 />
               : <RouletteDemo />}

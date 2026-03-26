@@ -283,6 +283,377 @@ const requireUser = async (req, res, next) => {
   next();
 };
 
+async function withTransaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function asIso(value) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function getVehicleImagePath(name) {
+  return `/cars/${name}.png`;
+}
+
+function getClothingFolder(category) {
+  if (category === 'PANTS') return 'pants';
+  if (category === 'SHOES') return 'shoes';
+  return 'tshirt';
+}
+
+function getClothingImagePath(name, category) {
+  return `/Clothes/${getClothingFolder(category)}/${name}.png`;
+}
+
+function randomInt(min, max) {
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+async function ensurePlayer(db, playerId) {
+  await db.query(
+    `INSERT INTO players (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM players WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+async function addInventoryItem(db, playerId, itemType, quantity = 1, metadata = {}) {
+  if (itemType === 'CLOTHING') {
+    const inserted = await db.query(
+      `INSERT INTO inventory_items (player_id, item_type, quantity, metadata)
+       VALUES ($1, $2, $3, $4::jsonb)
+       RETURNING id, item_type, quantity, metadata`,
+      [playerId, itemType, quantity, JSON.stringify(metadata)],
+    );
+    return inserted.rows[0];
+  }
+
+  const existing = await db.query(
+    `SELECT id, quantity FROM inventory_items
+     WHERE player_id = $1 AND item_type = $2 AND metadata = $3::jsonb
+     LIMIT 1`,
+    [playerId, itemType, JSON.stringify(metadata)],
+  );
+
+  if (existing.rows[0]) {
+    const updated = await db.query(
+      `UPDATE inventory_items
+       SET quantity = quantity + $2
+       WHERE id = $1
+       RETURNING id, item_type, quantity, metadata`,
+      [existing.rows[0].id, quantity],
+    );
+    return updated.rows[0];
+  }
+
+  const inserted = await db.query(
+    `INSERT INTO inventory_items (player_id, item_type, quantity, metadata)
+     VALUES ($1, $2, $3, $4::jsonb)
+     RETURNING id, item_type, quantity, metadata`,
+    [playerId, itemType, quantity, JSON.stringify(metadata)],
+  );
+  return inserted.rows[0];
+}
+
+async function consumeInventoryItem(db, itemId, amount = 1) {
+  const updated = await db.query(
+    `UPDATE inventory_items
+     SET quantity = quantity - $2
+     WHERE id = $1 AND quantity >= $2
+     RETURNING id, player_id, item_type, quantity, metadata`,
+    [itemId, amount],
+  );
+
+  if (!updated.rows[0]) {
+    throw new Error('item missing or insufficient quantity');
+  }
+
+  if (updated.rows[0].quantity <= 0) {
+    await db.query(`DELETE FROM inventory_items WHERE id = $1`, [itemId]);
+  }
+
+  return updated.rows[0];
+}
+
+async function ensureVehicleCapacity(db, playerId) {
+  const [playerResult, vehiclesResult] = await Promise.all([
+    db.query(`SELECT vehicle_slots_base, vehicle_slots_extra FROM players WHERE player_id = $1`, [playerId]),
+    db.query(`SELECT COUNT(*)::INT AS count FROM owned_vehicles WHERE player_id = $1`, [playerId]),
+  ]);
+
+  const player = playerResult.rows[0];
+  const usedSlots = vehiclesResult.rows[0]?.count ?? 0;
+  const totalSlots = (player?.vehicle_slots_base ?? 0) + (player?.vehicle_slots_extra ?? 0);
+  if (usedSlots >= totalSlots) {
+    throw new Error('no vehicle slots available');
+  }
+}
+
+function findVehicleSeedByName(name) {
+  return VEHICLE_MODELS.find((vehicle) => vehicle.name === name) ?? null;
+}
+
+function findClothingSeedByName(name) {
+  return CLOTHING_ITEMS.find((item) => item.name === name) ?? null;
+}
+
+async function resolveListingAsset(db, listing) {
+  if (listing.asset_type === 'VEHICLE') {
+    if (listing.seller_npc_id) {
+      const result = await db.query(
+        `SELECT id, brand, name, base_price, is_jackpot FROM vehicle_models WHERE id = $1`,
+        [listing.asset_ref_id],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        assetName: row.name,
+        assetMetadata: {
+          id: row.id,
+          brand: row.brand,
+          basePrice: Number(row.base_price),
+          isJackpot: row.is_jackpot,
+          imagePath: getVehicleImagePath(row.name),
+        },
+      };
+    }
+
+    const result = await db.query(
+      `SELECT ov.id, ov.purchase_price, vm.brand, vm.name
+       FROM owned_vehicles ov
+       JOIN vehicle_models vm ON vm.id = ov.model_id
+       WHERE ov.id = $1`,
+      [listing.asset_ref_id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      assetName: row.name,
+      assetMetadata: {
+        id: row.id,
+        brand: row.brand,
+        purchasePrice: Number(row.purchase_price),
+        imagePath: getVehicleImagePath(row.name),
+      },
+    };
+  }
+
+  if (listing.asset_type === 'CLOTHING') {
+    if (listing.seller_npc_id) {
+      const result = await db.query(
+        `SELECT id, name, category, rarity, min_value, max_value FROM clothing_items WHERE id = $1`,
+        [listing.asset_ref_id],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        assetName: row.name,
+        assetMetadata: {
+          id: row.id,
+          name: row.name,
+          category: row.category,
+          rarity: row.rarity,
+          marketValue: Math.round((Number(row.min_value) + Number(row.max_value)) / 2),
+          imagePath: getClothingImagePath(row.name, row.category),
+        },
+      };
+    }
+
+    const result = await db.query(
+      `SELECT id, metadata FROM inventory_items WHERE id = $1 AND item_type = 'CLOTHING'`,
+      [listing.asset_ref_id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const metadata = row.metadata || {};
+    return {
+      assetName: metadata.name || 'Haină',
+      assetMetadata: {
+        ...metadata,
+        id: row.id,
+        imagePath: getClothingImagePath(metadata.name || 'Like Basic Tee', metadata.category || 'TSHIRT'),
+      },
+    };
+  }
+
+  const result = await db.query(
+    `SELECT id, metadata FROM inventory_items WHERE id = $1 AND item_type = 'XENON_VEHICLE'`,
+    [listing.asset_ref_id],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    assetName: 'Xenon Vehicul',
+    assetMetadata: {
+      id: row.id,
+      ...row.metadata,
+    },
+  };
+}
+
+async function transferListingAsset(db, listing, buyerPlayerId) {
+  if (listing.asset_type === 'VEHICLE') {
+    await ensureVehicleCapacity(db, buyerPlayerId);
+
+    if (listing.seller_npc_id) {
+      const result = await db.query(`SELECT id, name, base_price FROM vehicle_models WHERE id = $1`, [listing.asset_ref_id]);
+      const model = result.rows[0];
+      if (!model) throw new Error('vehicle not found');
+      const inserted = await db.query(
+        `INSERT INTO owned_vehicles (player_id, model_id, purchase_price)
+         VALUES ($1, $2, $3)
+         RETURNING id`,
+        [buyerPlayerId, model.id, Number(model.base_price)],
+      );
+      return inserted.rows[0].id;
+    }
+
+    const updated = await db.query(
+      `UPDATE owned_vehicles
+       SET player_id = $1
+       WHERE id = $2 AND player_id = $3
+       RETURNING id`,
+      [buyerPlayerId, listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!updated.rows[0]) throw new Error('vehicle transfer failed');
+    return updated.rows[0].id;
+  }
+
+  if (listing.asset_type === 'CLOTHING') {
+    if (listing.seller_npc_id) {
+      const result = await db.query(
+        `SELECT name, category, rarity, min_value, max_value FROM clothing_items WHERE id = $1`,
+        [listing.asset_ref_id],
+      );
+      const item = result.rows[0];
+      if (!item) throw new Error('clothing not found');
+      const marketValue = randomInt(Number(item.min_value), Number(item.max_value));
+      const inserted = await addInventoryItem(db, buyerPlayerId, 'CLOTHING', 1, {
+        name: item.name,
+        category: item.category,
+        rarity: item.rarity,
+        marketValue,
+        imagePath: getClothingImagePath(item.name, item.category),
+      });
+      return inserted.id;
+    }
+
+    const result = await db.query(
+      `SELECT id, player_id, metadata FROM inventory_items
+       WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    const item = result.rows[0];
+    if (!item) throw new Error('clothing transfer failed');
+    await consumeInventoryItem(db, item.id, 1);
+    const inserted = await addInventoryItem(db, buyerPlayerId, 'CLOTHING', 1, item.metadata || {});
+    return inserted.id;
+  }
+
+  if (listing.seller_npc_id) {
+    const inserted = await addInventoryItem(db, buyerPlayerId, 'XENON_VEHICLE', 1, {});
+    return inserted.id;
+  }
+
+  const result = await db.query(
+    `SELECT id, player_id, metadata FROM inventory_items
+     WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+    [listing.asset_ref_id, listing.seller_player_id],
+  );
+  const item = result.rows[0];
+  if (!item) throw new Error('xenon transfer failed');
+  await consumeInventoryItem(db, item.id, 1);
+  const inserted = await addInventoryItem(db, buyerPlayerId, 'XENON_VEHICLE', 1, item.metadata || {});
+  return inserted.id;
+}
+
+async function buildMarketListingView(db, listing, viewerPlayerId) {
+  const asset = await resolveListingAsset(db, listing);
+  if (!asset) return null;
+
+  let sellerName = listing.seller_player_id;
+  let sellerEmoji = '👤';
+  let sellerType = 'PLAYER';
+
+  if (listing.seller_npc_id) {
+    const npc = NPC_SELLERS.find((entry) => entry.id === listing.seller_npc_id);
+    sellerName = npc?.name || 'NPC Seller';
+    sellerEmoji = npc?.emoji || '🕵️';
+    sellerType = 'NPC';
+  }
+
+  return {
+    id: listing.id,
+    sellerType,
+    sellerPlayerId: listing.seller_player_id,
+    sellerName,
+    sellerEmoji,
+    assetType: listing.asset_type,
+    assetRefId: listing.asset_ref_id,
+    assetName: asset.assetName,
+    assetMetadata: asset.assetMetadata,
+    askPrice: Number(listing.ask_price),
+    isOwn: listing.seller_player_id === viewerPlayerId,
+    createdAt: asIso(listing.created_at),
+  };
+}
+
+async function settleListingSale(db, listing, buyerPlayerId, salePrice, acceptedOfferId = null) {
+  if (listing.seller_player_id && listing.seller_player_id === buyerPlayerId) {
+    throw new Error('cannot buy your own listing');
+  }
+
+  const buyer = await ensurePlayer(db, buyerPlayerId);
+  if (Number(buyer.clean_money) < salePrice) {
+    throw new Error('insufficient funds');
+  }
+
+  if (listing.seller_player_id) {
+    await ensurePlayer(db, listing.seller_player_id);
+  }
+
+  await db.query(
+    `UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`,
+    [salePrice, buyerPlayerId],
+  );
+
+  if (listing.seller_player_id) {
+    await db.query(
+      `UPDATE players SET clean_money = clean_money + $1 WHERE player_id = $2`,
+      [salePrice, listing.seller_player_id],
+    );
+  }
+
+  await transferListingAsset(db, listing, buyerPlayerId);
+
+  await db.query(
+    `UPDATE market_listings
+     SET status = 'SOLD', updated_at = NOW()
+     WHERE id = $1`,
+    [listing.id],
+  );
+
+  await db.query(
+    `UPDATE market_offers
+     SET status = CASE WHEN id = $2 THEN 'ACCEPTED' ELSE 'REJECTED' END,
+         updated_at = NOW()
+     WHERE listing_id = $1 AND status = 'PENDING'`,
+    [listing.id, acceptedOfferId],
+  );
+}
+
 app.post('/api/stats/sync', requireDb, async (req, res) => {
   try {
     const { playerId, stats = {}, path: currentPath } = req.body || {};
@@ -493,43 +864,328 @@ app.get('/api/market/posts', requireDb, async (_req, res) => {
   res.json({ posts: result.rows });
 });
 
-app.post('/api/market/buy', requireDb, requireUser, async (req, res) => {
-  const { postId } = req.body || {};
-  const postResult = await pool.query(`SELECT * FROM market_posts WHERE id = $1 AND active = TRUE`, [postId]);
-  const post = postResult.rows[0];
-  if (!post) return res.status(404).json({ error: 'post missing' });
+app.post('/api/market/buy', requireDb, async (req, res) => {
+  try {
+    const { playerId, listingId } = req.body || {};
+    if (!playerId || !listingId) return res.status(400).json({ error: 'missing fields' });
 
-  await pool.query(
-    `INSERT INTO user_inventory (user_id, item_key, item_name, item_type, quantity)
-     VALUES ($1, $2, $3, $4, 1)
-     ON CONFLICT (user_id, item_key)
-     DO UPDATE SET quantity = user_inventory.quantity + 1`,
-    [req.userId, post.item_key, post.item_name, post.item_type],
-  );
-  await pool.query(`UPDATE market_posts SET active = FALSE WHERE id = $1`, [post.id]);
-  res.json({ ok: true, item: post });
+    const soldFor = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const listingResult = await db.query(
+        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
+        [listingId],
+      );
+      const listing = listingResult.rows[0];
+      if (!listing) throw new Error('listing not found');
+
+      await settleListingSale(db, listing, playerId, Number(listing.ask_price));
+      return Number(listing.ask_price);
+    });
+
+    res.json({ ok: true, boughtFor: soldFor });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'market buy failed' });
+  }
 });
 
-app.post('/api/market/offer', requireDb, requireUser, async (req, res) => {
-  const { postId, offerPrice } = req.body || {};
-  const postResult = await pool.query(`SELECT * FROM market_posts WHERE id = $1 AND active = TRUE`, [postId]);
-  const post = postResult.rows[0];
-  if (!post) return res.status(404).json({ error: 'post missing' });
+app.post('/api/market/offer', requireDb, async (req, res) => {
+  try {
+    const { playerId, listingId, offeredPrice } = req.body || {};
+    if (!playerId || !listingId || !offeredPrice) return res.status(400).json({ error: 'missing fields' });
 
-  const offer = Number(offerPrice || 0);
-  const threshold = Number(post.price) * (0.78 + Math.random() * 0.22);
-  const accepted = offer >= threshold;
-  if (!accepted) return res.json({ accepted: false, message: 'NPC a refuzat oferta.' });
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const listingResult = await db.query(
+        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
+        [listingId],
+      );
+      const listing = listingResult.rows[0];
+      if (!listing) throw new Error('listing not found');
+      if (listing.seller_player_id === playerId) throw new Error('cannot offer on your own listing');
 
-  await pool.query(
-    `INSERT INTO user_inventory (user_id, item_key, item_name, item_type, quantity)
-     VALUES ($1, $2, $3, $4, 1)
-     ON CONFLICT (user_id, item_key)
-     DO UPDATE SET quantity = user_inventory.quantity + 1`,
-    [req.userId, post.item_key, post.item_name, post.item_type],
-  );
-  await pool.query(`UPDATE market_posts SET active = FALSE WHERE id = $1`, [post.id]);
-  return res.json({ accepted: true, message: 'NPC a acceptat oferta.', item: post });
+      const buyerResult = await db.query(`SELECT clean_money FROM players WHERE player_id = $1`, [playerId]);
+      if (Number(buyerResult.rows[0]?.clean_money ?? 0) < Number(offeredPrice)) {
+        throw new Error('insufficient funds');
+      }
+
+      const inserted = await db.query(
+        `INSERT INTO market_offers (listing_id, buyer_player_id, offered_price, status)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, created_at`,
+        [listingId, playerId, offeredPrice, listing.seller_npc_id ? 'REJECTED' : 'PENDING'],
+      );
+
+      if (listing.seller_npc_id) {
+        const accepted = Number(offeredPrice) >= Math.floor(Number(listing.ask_price) * 0.9);
+        await db.query(
+          `UPDATE market_offers SET status = $2, updated_at = NOW() WHERE id = $1`,
+          [inserted.rows[0].id, accepted ? 'ACCEPTED' : 'REJECTED'],
+        );
+        if (accepted) {
+          await settleListingSale(db, listing, playerId, Number(offeredPrice), inserted.rows[0].id);
+        }
+      }
+
+      return inserted.rows[0];
+    });
+
+    res.json({ ok: true, offerId: result.id, createdAt: asIso(result.created_at) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'market offer failed' });
+  }
+});
+
+app.get('/api/market/listings', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    const npcCount = await pool.query(
+      `SELECT COUNT(*)::INT AS count FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`,
+    );
+    if ((npcCount.rows[0]?.count ?? 0) === 0) {
+      await refreshNpcListings();
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM market_listings WHERE status = 'ACTIVE' ORDER BY created_at DESC LIMIT 100`,
+    );
+    const listings = (
+      await Promise.all(result.rows.map((listing) => buildMarketListingView(pool, listing, playerId || null)))
+    ).filter(Boolean);
+    res.json({ listings });
+  } catch (error) {
+    res.status(500).json({ error: 'market listings failed' });
+  }
+});
+
+app.post('/api/market/list', requireDb, async (req, res) => {
+  try {
+    const { playerId, assetType, assetRefId, askPrice } = req.body || {};
+    if (!playerId || !assetType || !assetRefId || !askPrice) return res.status(400).json({ error: 'missing fields' });
+
+    const created = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+
+      if (assetType === 'VEHICLE') {
+        const vehicle = await db.query(
+          `SELECT ov.id FROM owned_vehicles ov WHERE ov.id = $1 AND ov.player_id = $2`,
+          [assetRefId, playerId],
+        );
+        if (!vehicle.rows[0]) throw new Error('vehicle not owned');
+      } else if (assetType === 'CLOTHING') {
+        const clothing = await db.query(
+          `SELECT id FROM inventory_items WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+          [assetRefId, playerId],
+        );
+        if (!clothing.rows[0]) throw new Error('clothing not owned');
+      } else if (assetType === 'XENON_VEHICLE') {
+        const xenon = await db.query(
+          `SELECT id FROM inventory_items WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+          [assetRefId, playerId],
+        );
+        if (!xenon.rows[0]) throw new Error('xenon not owned');
+      }
+
+      const existing = await db.query(
+        `SELECT id FROM market_listings
+         WHERE seller_player_id = $1 AND asset_type = $2 AND asset_ref_id = $3 AND status = 'ACTIVE'`,
+        [playerId, assetType, assetRefId],
+      );
+      if (existing.rows[0]) throw new Error('asset already listed');
+
+      const inserted = await db.query(
+        `INSERT INTO market_listings (seller_player_id, asset_type, asset_ref_id, ask_price, status)
+         VALUES ($1, $2, $3, $4, 'ACTIVE')
+         RETURNING id, created_at`,
+        [playerId, assetType, assetRefId, askPrice],
+      );
+      return inserted.rows[0];
+    });
+
+    res.json({ ok: true, listingId: created.id, createdAt: asIso(created.created_at) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'market list failed' });
+  }
+});
+
+app.get('/api/market/seller', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const listingsResult = await pool.query(
+      `SELECT * FROM market_listings WHERE seller_player_id = $1 ORDER BY created_at DESC`,
+      [playerId],
+    );
+    const listings = (
+      await Promise.all(listingsResult.rows.map(async (listing) => {
+        const asset = await resolveListingAsset(pool, listing);
+        if (!asset) return null;
+        return {
+          id: listing.id,
+          assetType: listing.asset_type,
+          assetName: asset.assetName,
+          assetMetadata: asset.assetMetadata,
+          askPrice: Number(listing.ask_price),
+          status: listing.status,
+          createdAt: asIso(listing.created_at),
+        };
+      }))
+    ).filter(Boolean);
+
+    const offersResult = await pool.query(
+      `SELECT mo.*, ml.asset_type, ml.ask_price
+       FROM market_offers mo
+       JOIN market_listings ml ON ml.id = mo.listing_id
+       WHERE ml.seller_player_id = $1
+       ORDER BY mo.created_at DESC`,
+      [playerId],
+    );
+
+    const incomingOffers = (
+      await Promise.all(offersResult.rows.map(async (offer) => {
+        const listing = listingsResult.rows.find((entry) => entry.id === offer.listing_id);
+        const asset = listing ? await resolveListingAsset(pool, listing) : null;
+        if (!asset) return null;
+        return {
+          id: offer.id,
+          listingId: offer.listing_id,
+          buyerPlayerId: offer.buyer_player_id,
+          offeredPrice: Number(offer.offered_price),
+          status: offer.status,
+          createdAt: asIso(offer.created_at),
+          assetName: asset.assetName,
+          assetType: offer.asset_type,
+          askPrice: Number(offer.ask_price),
+        };
+      }))
+    ).filter(Boolean);
+
+    res.json({ listings, incomingOffers });
+  } catch (error) {
+    res.status(500).json({ error: 'market seller failed' });
+  }
+});
+
+app.get('/api/market/buyer', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const offersResult = await pool.query(
+      `SELECT mo.*, ml.asset_type, ml.ask_price, ml.status AS listing_status
+       FROM market_offers mo
+       JOIN market_listings ml ON ml.id = mo.listing_id
+       WHERE mo.buyer_player_id = $1
+       ORDER BY mo.created_at DESC`,
+      [playerId],
+    );
+
+    const offers = (
+      await Promise.all(offersResult.rows.map(async (offer) => {
+        const listingResult = await pool.query(`SELECT * FROM market_listings WHERE id = $1`, [offer.listing_id]);
+        const listing = listingResult.rows[0];
+        const asset = listing ? await resolveListingAsset(pool, listing) : null;
+        if (!asset) return null;
+        return {
+          id: offer.id,
+          listingId: offer.listing_id,
+          offeredPrice: Number(offer.offered_price),
+          status: offer.status,
+          createdAt: asIso(offer.created_at),
+          assetName: asset.assetName,
+          assetType: offer.asset_type,
+          askPrice: Number(offer.ask_price),
+          listingStatus: offer.listing_status,
+        };
+      }))
+    ).filter(Boolean);
+
+    res.json({ offers });
+  } catch (error) {
+    res.status(500).json({ error: 'market buyer failed' });
+  }
+});
+
+app.post('/api/market/offer/accept', requireDb, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'missing fields' });
+
+    const soldFor = await withTransaction(async (db) => {
+      const offerResult = await db.query(`SELECT * FROM market_offers WHERE id = $1 AND status = 'PENDING'`, [offerId]);
+      const offer = offerResult.rows[0];
+      if (!offer) throw new Error('offer not found');
+
+      const listingResult = await db.query(`SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`, [offer.listing_id]);
+      const listing = listingResult.rows[0];
+      if (!listing || listing.seller_player_id !== playerId) throw new Error('listing not available');
+
+      await settleListingSale(db, listing, offer.buyer_player_id, Number(offer.offered_price), offer.id);
+      return Number(offer.offered_price);
+    });
+
+    res.json({ ok: true, soldFor });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'offer accept failed' });
+  }
+});
+
+app.post('/api/market/offer/reject', requireDb, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'missing fields' });
+
+    const updated = await pool.query(
+      `UPDATE market_offers mo
+       SET status = 'REJECTED', updated_at = NOW()
+       FROM market_listings ml
+       WHERE mo.id = $1 AND mo.listing_id = ml.id AND ml.seller_player_id = $2
+       RETURNING mo.id`,
+      [offerId, playerId],
+    );
+
+    if (!updated.rows[0]) return res.status(404).json({ error: 'offer not found' });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'offer reject failed' });
+  }
+});
+
+app.post('/api/market/listing/cancel', requireDb, async (req, res) => {
+  try {
+    const { playerId, listingId } = req.body || {};
+    if (!playerId || !listingId) return res.status(400).json({ error: 'missing fields' });
+
+    await withTransaction(async (db) => {
+      const updated = await db.query(
+        `UPDATE market_listings
+         SET status = 'CANCELLED', updated_at = NOW()
+         WHERE id = $1 AND seller_player_id = $2 AND status = 'ACTIVE'
+         RETURNING id`,
+        [listingId, playerId],
+      );
+      if (!updated.rows[0]) throw new Error('listing not found');
+
+      await db.query(
+        `UPDATE market_offers SET status = 'REJECTED', updated_at = NOW()
+         WHERE listing_id = $1 AND status = 'PENDING'`,
+        [listingId],
+      );
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'listing cancel failed' });
+  }
+});
+
+app.post('/api/market/npc/refresh', requireDb, async (_req, res) => {
+  try {
+    await refreshNpcListings();
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: 'npc refresh failed' });
+  }
 });
 
 // ========== BATCH A: Bootstrap, Showroom, Roulette ==========
@@ -644,75 +1300,69 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
     const { playerId, modelId, useVoucher } = req.body || {};
     if (!playerId || !modelId) return res.status(400).json({ error: 'missing fields' });
 
-    // Get vehicle model
-    const vmRes = await pool.query(`SELECT * FROM vehicle_models WHERE id = $1`, [modelId]);
-    const model = vmRes.rows[0];
-    if (!model) return res.status(404).json({ error: 'vehicle not found' });
+    const result = await withTransaction(async (db) => {
+      const player = await ensurePlayer(db, playerId);
+      await ensureVehicleCapacity(db, playerId);
 
-    // Get player
-    const playerRes = await pool.query(`SELECT * FROM players WHERE player_id = $1`, [playerId]);
-    const player = playerRes.rows[0];
-    if (!player) return res.status(404).json({ error: 'player not found' });
+      const vmRes = await db.query(`SELECT * FROM vehicle_models WHERE id = $1`, [modelId]);
+      const model = vmRes.rows[0];
+      if (!model) throw new Error('vehicle not found');
+      if (model.stock <= 0) throw new Error('vehicle out of stock');
 
-    // Check slots
-    const vehiclesRes = await pool.query(
-      `SELECT COUNT(*) as count FROM owned_vehicles WHERE player_id = $1`,
-      [playerId],
-    );
-    const usedSlots = parseInt(vehiclesRes.rows[0].count);
-    const totalSlots = player.vehicle_slots_base + player.vehicle_slots_extra;
-    if (usedSlots >= totalSlots) return res.status(400).json({ error: 'no vehicle slots available' });
+      let finalPrice = Number(model.base_price);
+      let discountPct = 0;
 
-    // Calculate price with voucher discount
-    let finalPrice = Number(model.base_price);
-    let discountPct = 0;
-
-    if (useVoucher) {
-      const voucherRes = await pool.query(
-        `SELECT id FROM inventory_items WHERE player_id = $1 AND item_type = 'VOUCHER_SHOWROOM' AND quantity > 0 LIMIT 1`,
-        [playerId],
-      );
-      if (voucherRes.rows.length === 0) {
-        return res.status(400).json({ error: 'no vouchers available' });
+      if (useVoucher) {
+        const voucherRes = await db.query(
+          `SELECT id FROM inventory_items WHERE player_id = $1 AND item_type = 'VOUCHER_SHOWROOM' AND quantity > 0 ORDER BY created_at ASC LIMIT 1`,
+          [playerId],
+        );
+        if (!voucherRes.rows[0]) throw new Error('no vouchers available');
+        discountPct = Math.floor(10 + Math.random() * 25);
+        finalPrice = Math.floor(finalPrice * (1 - discountPct / 100));
+        await consumeInventoryItem(db, voucherRes.rows[0].id, 1);
       }
-      discountPct = Math.floor(10 + Math.random() * 25); // 10-35% discount
-      finalPrice = Math.floor(finalPrice * (1 - discountPct / 100));
 
-      // Use voucher
-      await pool.query(
-        `UPDATE inventory_items SET quantity = quantity - 1 WHERE player_id = $1 AND item_type = 'VOUCHER_SHOWROOM' AND quantity > 0`,
-        [playerId],
-      );
-    }
+      if (Number(player.clean_money) < finalPrice) {
+        throw new Error('insufficient funds');
+      }
 
-    // Check funds
-    if (Number(player.clean_money) < finalPrice) {
-      return res.status(400).json({ error: 'insufficient funds' });
-    }
-
-    // Deduct money and add vehicle
-    await pool.query(`BEGIN`);
-    try {
-      await pool.query(
+      await db.query(
         `UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`,
         [finalPrice, playerId],
       );
-
-      await pool.query(
-        `INSERT INTO owned_vehicles (player_id, model_id, purchase_price) VALUES ($1, $2, $3)`,
+      await db.query(
+        `UPDATE vehicle_models SET stock = stock - 1 WHERE id = $1`,
+        [modelId],
+      );
+      const inserted = await db.query(
+        `INSERT INTO owned_vehicles (player_id, model_id, purchase_price)
+         VALUES ($1, $2, $3)
+         RETURNING id, model_id, purchase_price, purchased_at`,
         [playerId, modelId, finalPrice],
       );
+      const updatedPlayer = await db.query(`SELECT clean_money FROM players WHERE player_id = $1`, [playerId]);
+      const updatedModel = await db.query(`SELECT stock FROM vehicle_models WHERE id = $1`, [modelId]);
 
-      await pool.query(`COMMIT`);
-    } catch (e) {
-      await pool.query(`ROLLBACK`);
-      throw e;
-    }
+      return {
+        discountPct,
+        vehicle: {
+          id: inserted.rows[0].id,
+          modelId: inserted.rows[0].model_id,
+          modelName: model.name,
+          brand: model.brand,
+          purchasePrice: Number(inserted.rows[0].purchase_price),
+          purchasedAt: asIso(inserted.rows[0].purchased_at),
+        },
+        newBalance: Number(updatedPlayer.rows[0].clean_money),
+        stockRemaining: updatedModel.rows[0].stock,
+      };
+    });
 
-    res.json({ ok: true, bought: model.name, price: finalPrice, discountPct });
+    res.json({ ok: true, ...result });
   } catch (e) {
     console.error('showroom/buy error', e);
-    res.status(500).json({ error: 'purchase failed' });
+    res.status(400).json({ error: e.message || 'purchase failed' });
   }
 });
 
@@ -751,85 +1401,82 @@ app.post('/api/roulette/spin', requireDb, async (req, res) => {
     const { playerId, costType } = req.body || {};
     if (!playerId || !costType) return res.status(400).json({ error: 'missing fields' });
 
-    const playerRes = await pool.query(`SELECT * FROM players WHERE player_id = $1`, [playerId]);
-    const player = playerRes.rows[0];
-    if (!player) return res.status(404).json({ error: 'player not found' });
+    const result = await withTransaction(async (db) => {
+      const player = await ensurePlayer(db, playerId);
+      const cost = costType === 'flowcoins' ? 30 : 100_000;
+      if (costType === 'flowcoins' && player.flow_coins < cost) throw new Error('insufficient flowcoins');
+      if (costType === 'cash' && Number(player.clean_money) < cost) throw new Error('insufficient funds');
 
-    const cost = costType === 'flowcoins' ? 30 : 100_000;
-
-    if (costType === 'flowcoins' && player.flow_coins < cost) {
-      return res.status(400).json({ error: 'insufficient flowcoins' });
-    }
-    if (costType === 'cash' && Number(player.clean_money) < cost) {
-      return res.status(400).json({ error: 'insufficient funds' });
-    }
-
-    // Deduct cost
-    if (costType === 'flowcoins') {
-      await pool.query(`UPDATE players SET flow_coins = flow_coins - $1 WHERE player_id = $2`, [cost, playerId]);
-    } else {
-      await pool.query(`UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`, [cost, playerId]);
-    }
-
-    // Pick reward
-    const reward = pickWeightedReward();
-    let payout = 0;
-
-    if (reward.valueMin === reward.valueMax && reward.valueMin > 0) {
-      payout = reward.valueMin;
-    } else if (reward.valueMin < reward.valueMax) {
-      payout = Math.floor(reward.valueMin + Math.random() * (reward.valueMax - reward.valueMin));
-    }
-
-    // Grant reward
-    await pool.query(`BEGIN`);
-    try {
-      if (reward.name === 'Bani' || reward.name === 'Mystery Box' || reward.name === 'Xenon Vehicul') {
-        await pool.query(`UPDATE players SET clean_money = clean_money + $1 WHERE player_id = $2`, [payout, playerId]);
-      } else if (reward.name === 'FlowCoins') {
-        await pool.query(`UPDATE players SET flow_coins = flow_coins + $1 WHERE player_id = $2`, [payout, playerId]);
-      } else if (reward.itemType) {
-        await pool.query(
-          `INSERT INTO inventory_items (player_id, item_type, quantity) VALUES ($1, $2, $3)
-           ON CONFLICT (player_id, item_type) DO UPDATE SET quantity = inventory_items.quantity + EXCLUDED.quantity`,
-          [playerId, reward.itemType, payout || 1],
-        );
-
-        // Add boost expiry if needed
-        if (reward.itemType === 'VIP_GOLD' || reward.itemType === 'VIP_SILVER' || reward.itemType === 'JOB_BOOST_PILOT') {
-          const boostHours = reward.itemType === 'JOB_BOOST_PILOT' ? 12 : 6 + Math.floor(Math.random() * 7);
-          await pool.query(
-            `INSERT INTO active_boosts (player_id, boost_type, expires_at)
-             VALUES ($1, $2, NOW() + INTERVAL '${boostHours} hours')`,
-            [playerId, reward.itemType],
-          );
-        }
+      if (costType === 'flowcoins') {
+        await db.query(`UPDATE players SET flow_coins = flow_coins - $1 WHERE player_id = $2`, [cost, playerId]);
+      } else {
+        await db.query(`UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`, [cost, playerId]);
       }
 
-      await pool.query(`COMMIT`);
-    } catch (e) {
-      await pool.query(`ROLLBACK`);
-      throw e;
-    }
+      const reward = pickWeightedReward();
+      const payout = reward.valueMin === reward.valueMax
+        ? reward.valueMin
+        : Math.floor(reward.valueMin + Math.random() * (reward.valueMax - reward.valueMin));
 
-    // Return result
-    const updatedPlayerRes = await pool.query(`SELECT flow_coins, clean_money, roulette_fragments FROM players WHERE player_id = $1`, [playerId]);
-    const updatedPlayer = updatedPlayerRes.rows[0];
+      let rewardType = reward.itemType || 'CASH';
+      let rewardSubtitle = '';
+      let emoji = '🎁';
+      let metadata = {};
 
-    res.json({
-      rewardType: reward.itemType || 'cash',
-      rewardName: reward.name,
-      tier: reward.tier,
-      payout,
-      player: {
-        cleanMoney: Number(updatedPlayer.clean_money),
-        flowCoins: updatedPlayer.flow_coins,
-        rouletteFragments: updatedPlayer.roulette_fragments,
-      },
+      if (reward.name === 'Bani') {
+        await db.query(`UPDATE players SET clean_money = clean_money + $1 WHERE player_id = $2`, [payout, playerId]);
+        rewardSubtitle = `+${payout.toLocaleString('ro-RO')} $`;
+        emoji = '💵';
+      } else if (reward.name === 'FlowCoins') {
+        await db.query(`UPDATE players SET flow_coins = flow_coins + $1 WHERE player_id = $2`, [payout, playerId]);
+        rewardSubtitle = `+${payout} FlowCoins`;
+        emoji = '🟠';
+      } else if (reward.itemType === 'ROULETTE_FRAGMENTS') {
+        await db.query(`UPDATE players SET roulette_fragments = roulette_fragments + $1 WHERE player_id = $2`, [payout, playerId]);
+        rewardSubtitle = `+${payout} fragmente`;
+        emoji = '🪙';
+      } else if (reward.itemType) {
+        await addInventoryItem(db, playerId, reward.itemType, payout || 1, {});
+        rewardSubtitle = reward.name;
+        emoji = {
+          VIP_GOLD: '💎',
+          VIP_SILVER: '💠',
+          MYSTERY_BOX: '📦',
+          SLOT_VEHICLE: '➕',
+          VOUCHER_SHOWROOM: '🎟️',
+          JOB_BOOST_PILOT: '✈️',
+          TAX_EXEMPTION: '💸',
+          XENON_VEHICLE: '🔩',
+        }[reward.itemType] || '🎁';
+        metadata = reward.itemType === 'VOUCHER_SHOWROOM' ? { discount: randomInt(10, 35) } : {};
+      }
+
+      const updatedPlayerRes = await db.query(
+        `SELECT clean_money, flow_coins, roulette_fragments FROM players WHERE player_id = $1`,
+        [playerId],
+      );
+      const updatedPlayer = updatedPlayerRes.rows[0];
+
+      return {
+        rewardType,
+        rewardName: reward.name,
+        rewardSubtitle,
+        tier: reward.tier,
+        emoji,
+        payout,
+        metadata,
+        player: {
+          cleanMoney: Number(updatedPlayer.clean_money),
+          flowCoins: updatedPlayer.flow_coins,
+          rouletteFragments: updatedPlayer.roulette_fragments,
+        },
+      };
     });
+
+    res.json(result);
   } catch (e) {
     console.error('roulette spin error', e);
-    res.status(500).json({ error: 'spin failed' });
+    res.status(400).json({ error: e.message || 'spin failed' });
   }
 });
 
@@ -839,27 +1486,43 @@ app.post('/api/mystery/open', requireDb, async (req, res) => {
     const { playerId } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
-    // Get a random clothing item
-    const clothRes = await pool.query(
-      `SELECT id, name, category, rarity, min_value, max_value FROM clothing_items ORDER BY RANDOM() LIMIT 1`,
-    );
-    const cloth = clothRes.rows[0];
-    if (!cloth) return res.status(404).json({ error: 'no clothing items' });
+    const clothing = await withTransaction(async (db) => {
+      const mysteryRes = await db.query(
+        `SELECT id FROM inventory_items WHERE player_id = $1 AND item_type = 'MYSTERY_BOX' AND quantity > 0 ORDER BY created_at ASC LIMIT 1`,
+        [playerId],
+      );
+      if (!mysteryRes.rows[0]) throw new Error('no mystery box available');
 
-    const marketValue = Math.floor(cloth.min_value + Math.random() * (cloth.max_value - cloth.min_value));
+      await consumeInventoryItem(db, mysteryRes.rows[0].id, 1);
 
-    res.json({
-      clothing: {
+      const clothRes = await db.query(
+        `SELECT id, name, category, rarity, min_value, max_value FROM clothing_items ORDER BY RANDOM() LIMIT 1`,
+      );
+      const cloth = clothRes.rows[0];
+      if (!cloth) throw new Error('no clothing items');
+
+      const marketValue = randomInt(Number(cloth.min_value), Number(cloth.max_value));
+      await addInventoryItem(db, playerId, 'CLOTHING', 1, {
+        name: cloth.name,
+        category: cloth.category,
+        rarity: cloth.rarity,
+        marketValue,
+        imagePath: getClothingImagePath(cloth.name, cloth.category),
+      });
+
+      return {
         id: cloth.id,
         name: cloth.name,
         category: cloth.category,
         rarity: cloth.rarity,
         marketValue,
-      },
+      };
     });
+
+    res.json({ clothing });
   } catch (e) {
     console.error('mystery open error', e);
-    res.status(500).json({ error: 'open failed' });
+    res.status(400).json({ error: e.message || 'open failed' });
   }
 });
 
@@ -869,38 +1532,56 @@ app.post('/api/inventory/use', requireDb, async (req, res) => {
     const { playerId, itemId } = req.body || {};
     if (!playerId || !itemId) return res.status(400).json({ error: 'missing fields' });
 
-    const itemRes = await pool.query(`SELECT * FROM inventory_items WHERE player_id = $1 AND id = $2`, [playerId, itemId]);
-    const item = itemRes.rows[0];
-    if (!item) return res.status(404).json({ error: 'item not found' });
-    if (item.quantity < 1) return res.status(400).json({ error: 'not enough items' });
+    const result = await withTransaction(async (db) => {
+      const itemRes = await db.query(`SELECT * FROM inventory_items WHERE player_id = $1 AND id = $2`, [playerId, itemId]);
+      const item = itemRes.rows[0];
+      if (!item) throw new Error('item not found');
+      if (item.quantity < 1) throw new Error('not enough items');
 
-    // Handle different item types
-    await pool.query(`BEGIN`);
-    try {
-      // Deduct item
-      await pool.query(`UPDATE inventory_items SET quantity = quantity - 1 WHERE id = $1`, [itemId]);
+      let effect = 'item_used';
+      const metadata = {};
+
+      await consumeInventoryItem(db, itemId, 1);
 
       if (item.item_type === 'SLOT_VEHICLE') {
-        await pool.query(`UPDATE players SET vehicle_slots_extra = vehicle_slots_extra + 1 WHERE player_id = $1`, [playerId]);
+        await db.query(`UPDATE players SET vehicle_slots_extra = vehicle_slots_extra + 1 WHERE player_id = $1`, [playerId]);
+        effect = 'vehicle_slot_added';
       } else if (item.item_type === 'TAX_EXEMPTION') {
-        await pool.query(`UPDATE players SET skip_next_tax = TRUE WHERE player_id = $1`, [playerId]);
+        await db.query(`UPDATE players SET skip_next_tax = TRUE WHERE player_id = $1`, [playerId]);
+        effect = 'tax_exemption_activated';
       } else if (item.item_type === 'JOB_BOOST_PILOT') {
-        await pool.query(
-          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'JOB_BOOST_PILOT', NOW() + INTERVAL '12 hours')`,
+        await db.query(
+          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'JOB_PILOT', NOW() + INTERVAL '12 hours')`,
           [playerId],
         );
+        effect = 'pilot_boost_activated';
+      } else if (item.item_type === 'JOB_BOOST_SLEEP') {
+        await db.query(
+          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'JOB_SLEEP', NOW() + INTERVAL '12 hours')`,
+          [playerId],
+        );
+        effect = 'sleep_boost_activated';
+      } else if (item.item_type === 'VIP_GOLD') {
+        await db.query(
+          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'VIP_GOLD', NOW() + INTERVAL '10 minutes')`,
+          [playerId],
+        );
+        effect = 'vip_gold_activated';
+      } else if (item.item_type === 'VIP_SILVER') {
+        await db.query(
+          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'VIP_SILVER', NOW() + INTERVAL '5 minutes')`,
+          [playerId],
+        );
+        effect = 'vip_silver_activated';
       }
 
-      await pool.query(`COMMIT`);
-    } catch (e) {
-      await pool.query(`ROLLBACK`);
-      throw e;
-    }
+      return { effect, metadata };
+    });
 
-    res.json({ ok: true, used: item.item_type });
+    res.json({ ok: true, ...result });
   } catch (e) {
     console.error('inventory use error', e);
-    res.status(500).json({ error: 'use failed' });
+    res.status(400).json({ error: e.message || 'use failed' });
   }
 });
 
@@ -995,38 +1676,93 @@ app.get('*', (_req, res) => {
 // ========== SEED DATA ==========
 
 const VEHICLE_MODELS = [
-  { brand: 'DRAVIA', name: 'Dravia Nova',     base_price: 100_000,   is_jackpot: false },
-  { brand: 'DRAVIA', name: 'Dravia Dustera',  base_price: 180_000,   is_jackpot: false },
-  { brand: 'BERVIK', name: 'Bervik M4R',      base_price: 650_000,   is_jackpot: false },
-  { brand: 'BERVIK', name: 'Bervik X8',       base_price: 900_000,   is_jackpot: false },
-  { brand: 'AURON',  name: 'Auron RS7',       base_price: 1_200_000, is_jackpot: false },
-  { brand: 'AURON',  name: 'Auron Q8X',       base_price: 1_500_000, is_jackpot: false },
-  { brand: 'FERANO', name: 'Ferano Roma X',   base_price: 2_300_000, is_jackpot: false },
-  { brand: 'FERANO', name: 'Ferano F8R',      base_price: 2_800_000, is_jackpot: false },
-  { brand: 'VORTEK', name: 'Vortek Cayenne X',base_price: 3_200_000, is_jackpot: true  },
-  { brand: 'VORTEK', name: 'Vortek 911R',     base_price: 4_000_000, is_jackpot: true  },
+  { brand: 'DRAVIA', name: 'Dravia Nova', base_price: 100_000, is_jackpot: false, image_path: '/cars/Dravia Nova.png' },
+  { brand: 'DRAVIA', name: 'Dravia Dustera', base_price: 180_000, is_jackpot: false, image_path: '/cars/Dravia Dustera.png' },
+  { brand: 'BERVIK', name: 'Bervik M4R', base_price: 650_000, is_jackpot: false, image_path: '/cars/Bervik M4R.png' },
+  { brand: 'BERVIK', name: 'Bervik X8', base_price: 900_000, is_jackpot: false, image_path: '/cars/Bervik X8.png' },
+  { brand: 'AURON', name: 'Auron RS7', base_price: 1_200_000, is_jackpot: false, image_path: '/cars/Auron RS7.png' },
+  { brand: 'AURON', name: 'Auron Q8X', base_price: 1_500_000, is_jackpot: false, image_path: '/cars/Auron Q8X.png' },
+  { brand: 'FERANO', name: 'Ferano Roma X', base_price: 2_300_000, is_jackpot: false, image_path: '/cars/Ferano Roma X.png' },
+  { brand: 'FERANO', name: 'Ferano F8R', base_price: 2_800_000, is_jackpot: false, image_path: '/cars/Ferano F8R.png' },
+  { brand: 'VORTEK', name: 'Vortek Cayenne X', base_price: 3_200_000, is_jackpot: true, image_path: '/cars/Vortek Cayenne X.png' },
+  { brand: 'VORTEK', name: 'Vortek 911R', base_price: 4_000_000, is_jackpot: true, image_path: '/cars/Vortek 911R.png' },
 ];
 
 const CLOTHING_ITEMS = [
   // TSHIRTS
-  { name: 'Like Basic Tee',        category: 'TSHIRT', rarity: 'BLUE',         min_value: 10_000,  max_value: 80_000  },
-  { name: 'Adibas Sport Tee',      category: 'TSHIRT', rarity: 'LIGHT_PURPLE', min_value: 50_000,  max_value: 200_000 },
-  { name: 'Guci Monogram Tee',     category: 'TSHIRT', rarity: 'YELLOW',       min_value: 500_000, max_value: 900_000 },
-  { name: 'Balencii Oversize Tee', category: 'TSHIRT', rarity: 'RED',          min_value: 250_000, max_value: 500_000 },
-  { name: 'Stone Ilan Patch Tee',  category: 'TSHIRT', rarity: 'DARK_PURPLE',  min_value: 120_000, max_value: 350_000 },
+  { name: 'Like Basic Tee', category: 'TSHIRT', rarity: 'BLUE', min_value: 10_000, max_value: 80_000, image_path: '/Clothes/tshirt/Like Basic Tee.png' },
+  { name: 'Adibas Sport Tee', category: 'TSHIRT', rarity: 'LIGHT_PURPLE', min_value: 50_000, max_value: 200_000, image_path: '/Clothes/tshirt/Adibas Sport Tee.png' },
+  { name: 'Guci Monogram Tee', category: 'TSHIRT', rarity: 'YELLOW', min_value: 500_000, max_value: 900_000, image_path: '/Clothes/tshirt/Guci Monogram Tee.png' },
+  { name: 'Balencii Oversize Tee', category: 'TSHIRT', rarity: 'RED', min_value: 250_000, max_value: 500_000, image_path: '/Clothes/tshirt/Balencii Oversize Tee.png' },
+  { name: 'Stone Ilan Patch Tee', category: 'TSHIRT', rarity: 'DARK_PURPLE', min_value: 120_000, max_value: 350_000, image_path: '/Clothes/tshirt/Stone Ilan Patch Tee.png' },
   // PANTS
-  { name: 'Like Track Pants',      category: 'PANTS',  rarity: 'BLUE',         min_value: 10_000,  max_value: 80_000  },
-  { name: 'Adibas Stripe Pants',   category: 'PANTS',  rarity: 'LIGHT_PURPLE', min_value: 50_000,  max_value: 200_000 },
-  { name: 'Levios Urban Jeans',    category: 'PANTS',  rarity: 'DARK_PURPLE',  min_value: 120_000, max_value: 350_000 },
-  { name: 'Stone Ilan Cargo Pants',category: 'PANTS',  rarity: 'RED',          min_value: 250_000, max_value: 500_000 },
-  { name: 'Balencii Baggy Pants',  category: 'PANTS',  rarity: 'YELLOW',       min_value: 500_000, max_value: 900_000 },
+  { name: 'Like Track Pants', category: 'PANTS', rarity: 'BLUE', min_value: 10_000, max_value: 80_000, image_path: '/Clothes/pants/Like Track Pants.png' },
+  { name: 'Adibas Stripe Pants', category: 'PANTS', rarity: 'LIGHT_PURPLE', min_value: 50_000, max_value: 200_000, image_path: '/Clothes/pants/Adibas Stripe Pants.png' },
+  { name: 'Levios Urban Jeans', category: 'PANTS', rarity: 'DARK_PURPLE', min_value: 120_000, max_value: 350_000, image_path: '/Clothes/pants/Levios Urban Jeans.png' },
+  { name: 'Stone Ilan Cargo Pants', category: 'PANTS', rarity: 'RED', min_value: 250_000, max_value: 500_000, image_path: '/Clothes/pants/Stone Ilan Cargo Pants.png' },
+  { name: 'Balencii Baggy Pants', category: 'PANTS', rarity: 'YELLOW', min_value: 500_000, max_value: 900_000, image_path: '/Clothes/pants/Balencii Baggy Pants.png' },
   // SHOES
-  { name: 'Like Air Run',          category: 'SHOES',  rarity: 'YELLOW',       min_value: 500_000, max_value: 900_000 },
-  { name: 'Adibas Ultra Move',     category: 'SHOES',  rarity: 'RED',          min_value: 250_000, max_value: 500_000 },
-  { name: 'Niu Balanse 550',       category: 'SHOES',  rarity: 'DARK_PURPLE',  min_value: 120_000, max_value: 350_000 },
-  { name: 'Convoy Classic High',   category: 'SHOES',  rarity: 'LIGHT_PURPLE', min_value: 50_000,  max_value: 200_000 },
-  { name: 'Luma Street Rider',     category: 'SHOES',  rarity: 'BLUE',         min_value: 10_000,  max_value: 80_000  },
+  { name: 'Like Air Run', category: 'SHOES', rarity: 'YELLOW', min_value: 500_000, max_value: 900_000, image_path: '/Clothes/shoes/Like Air Run.png' },
+  { name: 'Adibas Ultra Move', category: 'SHOES', rarity: 'RED', min_value: 250_000, max_value: 500_000, image_path: '/Clothes/shoes/Adibas Ultra Move.png' },
+  { name: 'Niu Balanse 550', category: 'SHOES', rarity: 'DARK_PURPLE', min_value: 120_000, max_value: 350_000, image_path: '/Clothes/shoes/Niu Balanse 550.png' },
+  { name: 'Convoy Classic High', category: 'SHOES', rarity: 'LIGHT_PURPLE', min_value: 50_000, max_value: 200_000, image_path: '/Clothes/shoes/Convoy Classic High.png' },
+  { name: 'Luma Street Rider', category: 'SHOES', rarity: 'BLUE', min_value: 10_000, max_value: 80_000, image_path: '/Clothes/shoes/Luma Street Rider.png' },
 ];
+
+const NPC_SELLERS = [
+  { id: 'shadow_dealer', name: 'Shadow Dealer', emoji: '🕵️' },
+  { id: 'gold_rush', name: 'Gold Rush', emoji: '🤑' },
+  { id: 'street_king', name: 'Street King', emoji: '👑' },
+  { id: 'midnight_shift', name: 'Midnight Shift', emoji: '🌙' },
+  { id: 'chrome_broker', name: 'Chrome Broker', emoji: '🔧' },
+  { id: 'velvet_tag', name: 'Velvet Tag', emoji: '🧥' },
+  { id: 'runway_flip', name: 'Runway Flip', emoji: '👠' },
+  { id: 'nitro_node', name: 'Nitro Node', emoji: '⚡' },
+];
+
+async function seedNpcSellers() {
+  for (const npc of NPC_SELLERS) {
+    await pool.query(
+      `INSERT INTO npc_sellers (id, name, emoji)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, emoji = EXCLUDED.emoji`,
+      [npc.id, npc.name, npc.emoji],
+    );
+  }
+}
+
+async function refreshNpcListings() {
+  await pool.query(`DELETE FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`);
+
+  const vehicleRows = await pool.query(`SELECT id, brand, name, base_price FROM vehicle_models`);
+  const clothingRows = await pool.query(`SELECT id, name, category, rarity, min_value, max_value FROM clothing_items`);
+
+  const sellers = [...NPC_SELLERS].sort(() => Math.random() - 0.5).slice(0, randomInt(3, 5));
+  for (const seller of sellers) {
+    const listingCount = randomInt(1, 3);
+    for (let index = 0; index < listingCount; index += 1) {
+      const useVehicle = Math.random() < 0.6;
+      if (useVehicle && vehicleRows.rows.length > 0) {
+        const vehicle = vehicleRows.rows[randomInt(0, vehicleRows.rows.length - 1)];
+        const askPrice = Math.floor(Number(vehicle.base_price) * (0.9 + Math.random() * 0.6));
+        await pool.query(
+          `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
+           VALUES ($1, 'VEHICLE', $2, $3, 'ACTIVE')`,
+          [seller.id, vehicle.id, askPrice],
+        );
+      } else if (clothingRows.rows.length > 0) {
+        const clothing = clothingRows.rows[randomInt(0, clothingRows.rows.length - 1)];
+        const midValue = Math.round((Number(clothing.min_value) + Number(clothing.max_value)) / 2);
+        const askPrice = Math.floor(midValue * (0.7 + Math.random() * 1.15));
+        await pool.query(
+          `INSERT INTO market_listings (seller_npc_id, asset_type, asset_ref_id, ask_price, status)
+           VALUES ($1, 'CLOTHING', $2, $3, 'ACTIVE')`,
+          [seller.id, clothing.id, askPrice],
+        );
+      }
+    }
+  }
+}
 
 async function seedGameData() {
   try {
@@ -1077,11 +1813,14 @@ if (!pool) {
   startServer();
 } else {
   initDb()
-    .then(() => {
+    .then(async () => {
       dbReady = true;
-      seedGameData().catch(() => {});
-      seedBotPosts().catch(() => {});
+      await seedGameData();
+      await seedNpcSellers();
+      await refreshNpcListings();
+      await seedBotPosts();
       setInterval(() => {
+        refreshNpcListings().catch(() => {});
         seedBotPosts().catch(() => {});
       }, 5 * 60 * 1000);
       startServer();

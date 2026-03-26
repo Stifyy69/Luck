@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { useShowroom } from '../hooks/useShowroom';
+import { getVehicleImagePath } from '../lib/assets';
 import type { VehicleModelData } from '../types/game';
 
 const BRAND_EMOJI: Record<string, string> = {
@@ -232,6 +233,13 @@ function VehicleCard({
 
   return (
     <div className="hud-card flex flex-col gap-3 p-4">
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img
+          src={getVehicleImagePath(model.name)}
+          alt={model.name}
+          className="h-28 w-full object-contain"
+        />
+      </div>
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-[11px] uppercase tracking-wide text-white/45">{BRAND_LABEL[model.brand] ?? model.brand}</p>

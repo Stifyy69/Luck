@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
+import { getClothingImagePath, getVehicleImagePath } from '../lib/assets';
 import type { OwnedVehicle, OwnedClothingMetadata } from '../types/game';
 
 const BRAND_EMOJI: Record<string, string> = {
@@ -135,6 +136,13 @@ export default function OwnedAssetsPage() {
 function VehicleCard({ vehicle }: { vehicle: OwnedVehicle }) {
   return (
     <div className="hud-card flex flex-col gap-3 p-4">
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img
+          src={getVehicleImagePath(vehicle.modelName)}
+          alt={vehicle.modelName}
+          className="h-28 w-full object-contain"
+        />
+      </div>
       <div className="flex items-start gap-3">
         <span className="text-3xl leading-none">{BRAND_EMOJI[vehicle.brand] ?? '🚗'}</span>
         <div className="min-w-0 flex-1">
@@ -157,6 +165,13 @@ function ClothingCard({ meta, quantity }: { meta: Partial<OwnedClothingMetadata>
   const colorCls = RARITY_COLORS[rarity] ?? '';
   return (
     <div className={`hud-card flex flex-col gap-2 border p-4 ${colorCls}`}>
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2">
+        <img
+          src={getClothingImagePath(meta.name ?? '')}
+          alt={meta.name ?? 'Haină'}
+          className="h-28 w-full object-contain"
+        />
+      </div>
       <div className="flex items-start gap-3">
         <span className="text-3xl leading-none">👕</span>
         <div className="min-w-0 flex-1">
