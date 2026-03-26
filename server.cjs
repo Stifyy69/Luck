@@ -151,6 +151,8 @@ async function initDb() {
       seller_npc_id TEXT,
       asset_type TEXT NOT NULL,
       asset_ref_id INT,
+      asset_name TEXT NOT NULL DEFAULT 'Unknown Listing',
+      asset_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       ask_price BIGINT NOT NULL,
       status TEXT NOT NULL DEFAULT 'ACTIVE',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -159,12 +161,33 @@ async function initDb() {
   `);
 
   await pool.query(`ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS seller_type TEXT;`);
+  await pool.query(`ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS asset_name TEXT;`);
+  await pool.query(`ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS asset_metadata JSONB;`);
   await pool.query(`ALTER TABLE market_listings ALTER COLUMN seller_type SET DEFAULT 'PLAYER';`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_name SET DEFAULT 'Unknown Listing';`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_metadata SET DEFAULT '{}'::jsonb;`);
   await pool.query(`
     UPDATE market_listings
     SET seller_type = CASE WHEN seller_npc_id IS NOT NULL THEN 'NPC' ELSE 'PLAYER' END
     WHERE seller_type IS NULL OR seller_type = '';
   `);
+  await pool.query(`
+    UPDATE market_listings
+    SET asset_name = CASE
+      WHEN asset_type = 'VEHICLE' THEN 'Vehicle Listing'
+      WHEN asset_type = 'CLOTHING' THEN 'Clothing Listing'
+      WHEN asset_type = 'XENON_VEHICLE' THEN 'Xenon Vehicle'
+      ELSE 'Unknown Listing'
+    END
+    WHERE asset_name IS NULL OR asset_name = '';
+  `);
+  await pool.query(`
+    UPDATE market_listings
+    SET asset_metadata = '{}'::jsonb
+    WHERE asset_metadata IS NULL;
+  `);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_name SET NOT NULL;`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_metadata SET NOT NULL;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS market_offers (
@@ -1254,25 +1277,57 @@ app.post('/api/market/list', requireDb, async (req, res) => {
 
     const created = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
+      let assetName = 'Unknown Listing';
+      let assetMetadata = {};
 
       if (assetType === 'VEHICLE') {
         const vehicle = await db.query(
-          `SELECT ov.id FROM owned_vehicles ov WHERE ov.id = $1 AND ov.player_id = $2`,
+          `SELECT ov.id, ov.purchase_price, vm.brand, vm.name
+           FROM owned_vehicles ov
+           JOIN vehicle_models vm ON vm.id = ov.model_id
+           WHERE ov.id = $1 AND ov.player_id = $2`,
           [normalizedAssetRefId, playerId],
         );
-        if (!vehicle.rows[0]) throw new Error('vehicle not owned');
+        const row = vehicle.rows[0];
+        if (!row) throw new Error('vehicle not owned');
+        assetName = row.name;
+        assetMetadata = {
+          id: row.id,
+          brand: row.brand,
+          purchasePrice: Number(row.purchase_price),
+          marketPrice: Number(row.purchase_price),
+          imagePath: getVehicleImagePath(row.name),
+        };
       } else if (assetType === 'CLOTHING') {
         const clothing = await db.query(
-          `SELECT id FROM inventory_items WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+          `SELECT id, metadata
+           FROM inventory_items
+           WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
           [normalizedAssetRefId, playerId],
         );
-        if (!clothing.rows[0]) throw new Error('clothing not owned');
+        const row = clothing.rows[0];
+        if (!row) throw new Error('clothing not owned');
+        const meta = row.metadata || {};
+        assetName = String(meta.name || 'Clothing');
+        assetMetadata = {
+          ...meta,
+          id: row.id,
+          imagePath: getClothingImagePath(String(meta.name || 'Like Basic Tee'), String(meta.category || 'TSHIRT')),
+        };
       } else if (assetType === 'XENON_VEHICLE') {
         const xenon = await db.query(
-          `SELECT id FROM inventory_items WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+          `SELECT id, metadata
+           FROM inventory_items
+           WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
           [normalizedAssetRefId, playerId],
         );
-        if (!xenon.rows[0]) throw new Error('xenon not owned');
+        const row = xenon.rows[0];
+        if (!row) throw new Error('xenon not owned');
+        assetName = 'Xenon Vehicle';
+        assetMetadata = {
+          id: row.id,
+          ...(row.metadata || {}),
+        };
       }
 
       const existing = await db.query(
@@ -1283,10 +1338,10 @@ app.post('/api/market/list', requireDb, async (req, res) => {
       if (existing.rows[0]) throw new Error('asset already listed');
 
       const inserted = await db.query(
-        `INSERT INTO market_listings (seller_type, seller_player_id, asset_type, asset_ref_id, ask_price, status)
-         VALUES ('PLAYER', $1, $2, $3, $4, 'ACTIVE')
+        `INSERT INTO market_listings (seller_type, seller_player_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
+         VALUES ('PLAYER', $1, $2, $3, $4, $5::jsonb, $6, 'ACTIVE')
          RETURNING id, created_at`,
-        [playerId, assetType, normalizedAssetRefId, normalizedAskPrice],
+        [playerId, assetType, normalizedAssetRefId, assetName, JSON.stringify(assetMetadata), normalizedAskPrice],
       );
       return inserted.rows[0];
     });
@@ -2090,10 +2145,17 @@ async function refreshNpcListings() {
     if (useVehicle && vehicleRows.rows.length > 0) {
       const vehicle = vehicleRows.rows[randomInt(0, vehicleRows.rows.length - 1)];
       const askPrice = toDynamicNpcPrice(Number(vehicle.base_price));
+      const assetMetadata = {
+        id: vehicle.id,
+        brand: vehicle.brand,
+        basePrice: Number(vehicle.base_price),
+        marketPrice: Number(vehicle.base_price),
+        imagePath: getVehicleImagePath(vehicle.name),
+      };
       await pool.query(
-        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, ask_price, status)
-         VALUES ('NPC', $1, 'VEHICLE', $2, $3, 'ACTIVE')`,
-        [seller.id, vehicle.id, askPrice],
+        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
+         VALUES ('NPC', $1, 'VEHICLE', $2, $3, $4::jsonb, $5, 'ACTIVE')`,
+        [seller.id, vehicle.id, vehicle.name, JSON.stringify(assetMetadata), askPrice],
       );
       created += 1;
       continue;
@@ -2103,10 +2165,19 @@ async function refreshNpcListings() {
       const clothing = clothingRows.rows[randomInt(0, clothingRows.rows.length - 1)];
       const midValue = Math.round((Number(clothing.min_value) + Number(clothing.max_value)) / 2);
       const askPrice = toDynamicNpcPrice(midValue);
+      const assetMetadata = {
+        id: clothing.id,
+        name: clothing.name,
+        category: clothing.category,
+        rarity: clothing.rarity,
+        marketValue: midValue,
+        marketPrice: midValue,
+        imagePath: getClothingImagePath(clothing.name, clothing.category),
+      };
       await pool.query(
-        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, ask_price, status)
-         VALUES ('NPC', $1, 'CLOTHING', $2, $3, 'ACTIVE')`,
-        [seller.id, clothing.id, askPrice],
+        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
+         VALUES ('NPC', $1, 'CLOTHING', $2, $3, $4::jsonb, $5, 'ACTIVE')`,
+        [seller.id, clothing.id, clothing.name, JSON.stringify(assetMetadata), askPrice],
       );
       created += 1;
     }

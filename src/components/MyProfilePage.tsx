@@ -58,8 +58,9 @@ export default function MyProfilePage() {
                 onClick={openRename}
                 className="rounded-xl border border-white/10 bg-black/20 p-3 text-left transition hover:border-[#ffd95a]/35 hover:bg-black/30"
               >
-                <p className="text-[11px] uppercase tracking-widest text-white/45">Player ID</p>
-                <p className="mt-1 truncate text-sm font-black text-white">{player.playerId}</p>
+                <p className="text-[11px] uppercase tracking-widest text-white/45">Display Name</p>
+                <p className="mt-1 truncate text-sm font-black text-white">{displayName}</p>
+                <p className="mt-1 truncate text-[10px] text-white/50">ID: {player.playerId}</p>
                 <p className="mt-1 text-[10px] uppercase tracking-[0.15em] text-[#ffd95a]">Edit Name</p>
               </button>
               <InfoCard label="Clean Money" value={`${fmt(player.cleanMoney)} $`} />

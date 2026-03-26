@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { usePlayer } from '../hooks/usePlayer';
 
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
@@ -23,6 +24,7 @@ function loadGameState() {
 }
 
 export default function SharedStatsPanel() {
+  const { player } = usePlayer();
   const [stats, setStats] = useState<Record<string, number>>({});
 
   if (typeof window !== 'undefined' && window.location.pathname !== '/profile') {
@@ -33,7 +35,7 @@ export default function SharedStatsPanel() {
     const refresh = () => {
       const s = loadGameState() || {};
       setStats({
-        cash: Number(s.cashBalance ?? 0),
+        cash: Number(player?.cleanMoney ?? s.cashBalance ?? 0),
         dirty: Number(s.baniMurdari ?? 0),
         farmEarned: Number(s.farmEarned ?? 0),
         spent: Number(s.rouletteSpent ?? 0),
@@ -51,7 +53,7 @@ export default function SharedStatsPanel() {
     refresh();
     const timer = window.setInterval(refresh, 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [player?.cleanMoney]);
 
   const totalTime = (stats.timeFarm ?? 0) + (stats.timeSleep ?? 0) + (stats.timePilot ?? 0);
 
