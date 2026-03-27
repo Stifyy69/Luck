@@ -956,6 +956,43 @@ function fisherPrepareCatchFromSpot(spot, withTravel) {
   };
 }
 
+function fisherComputeAutoCatchResult({ session, progressBefore, spot, fishRarity, fishSize, fishWeightKg, qualityScore }) {
+  const rodTier = Math.max(1, Math.min(5, Number(progressBefore.rodTier || 1)));
+  const rodModel = fisherRodTierModel(rodTier);
+
+  const kgPrice = Number(FISHER_CONFIG.kgBasePrice[fishSize] || 1000);
+  const baseReward = Math.max(0, Math.floor(fishWeightKg * kgPrice));
+  const baseXp = Number(FISHER_CONFIG.fishRarityXpBase[fishRarity] || 20);
+  const spotMultiplier = Number(spot.spotMultiplier || 1);
+  const levelMultiplier = levelPayoutMultiplier(progressBefore.level) * Number(rodModel.payoutMultiplier || 1);
+  const qualityMultiplier = 0.7 + qualityScore * 0.65;
+  const streakMultiplier = 1 + Math.min(4, Number(session.streak || 0)) * FISHER_CONFIG.streakBonusPerStep;
+  const integrityMultiplier = 1;
+  const bonusLootValue = fishRarity === 'LEGENDARY' ? randomInt(120, 300) : fishRarity === 'RARE' ? randomInt(45, 120) : 0;
+
+  const totalReward = Math.max(
+    0,
+    Math.floor(baseReward * spotMultiplier * levelMultiplier * qualityMultiplier * streakMultiplier * integrityMultiplier) + bonusLootValue,
+  );
+
+  const qualityXpBonus = qualityScore >= 0.9 ? 12 : qualityScore >= 0.75 ? 7 : qualityScore >= 0.6 ? 3 : 0;
+  const streakXpBonus = Math.min(10, Number(session.streak || 0) * 2);
+  const xpGained = Math.max(0, Math.floor(baseXp + qualityXpBonus + streakXpBonus));
+
+  return {
+    baseReward,
+    spotMultiplier,
+    levelMultiplier,
+    qualityMultiplier,
+    streakMultiplier,
+    integrityMultiplier,
+    bonusLootValue,
+    totalReward,
+    xpGained,
+    qualityScore,
+  };
+}
+
 function getFisherSession(playerId) {
   return fisherSessions.get(playerId) || {
     shiftState: 'IDLE',
@@ -976,6 +1013,7 @@ function getFisherSession(playerId) {
     carryEstimatedValue: 0,
     carriedFish: [],
     currentDockCell: null,
+    targetDockCell: null,
   };
 }
 
@@ -1137,7 +1175,11 @@ function fisherStateView(session, progressView) {
     carryEstimatedValue: Number(session.carryEstimatedValue || 0),
     carriedFish: [...(session.carriedFish || [])],
     currentDockCell: session.currentDockCell,
-    dockPrompt: session.shiftState === 'SELECTING_DOCK' ? 'Go to your dock marker and click a 4x4 square to start fishing.' : null,
+    targetDockCell: session.targetDockCell || null,
+    dockPrompt:
+      session.shiftState === 'SELECTING_DOCK'
+        ? `Go to spot ${session.activeSpot?.name || ''} and click the green 4x4 square marker.`.trim()
+        : null,
     repairSecondsLeft,
     repairLabel: session.repairLabel || null,
     activeCatch,
@@ -3043,7 +3085,7 @@ app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
 
     const nextSession = {
       ...session,
-      shiftState: 'SELECTING_DOCK',
+      shiftState: 'SELECTING_SPOT',
       spotOptions: [],
       optionsGeneratedAt: 0,
       activeSpot: null,
@@ -3052,6 +3094,7 @@ app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
       lastActionAt: 0,
       lastReelTickAt: 0,
       currentDockCell: null,
+      targetDockCell: null,
     };
     setFisherSession(playerId, nextSession);
     res.json(fisherStateView(nextSession, progressView));
@@ -3165,14 +3208,101 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
     const session = getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_DOCK') {
-      return res.status(400).json({ error: 'dock already selected' });
+      return res.status(400).json({ error: 'not ready for dock marker' });
+    }
+    if (!session.activeSpot || !session.targetDockCell) {
+      return res.status(400).json({ error: 'select spot first' });
     }
     enforceFisherActionCooldown(session);
 
+    if (parsedCell !== Number(session.targetDockCell)) {
+      throw new Error('wrong square, go to the green marker');
+    }
+
+    const spotModel = session.activeSpot;
+    const carryLeft = Math.max(0, Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg) - Number(session.carryWeightKg || 0));
+    if (carryLeft <= 0.05) {
+      throw new Error('bag full, sell fish first');
+    }
+
+    const fishRarity = fisherRollRarity(spotModel.tier);
+    const fishSize = fisherRollFishSize(progress);
+    const fishWeightKg = fisherRollFishWeight(fishSize, spotModel.tier, progress.level, carryLeft);
+    const fishName = fisherBuildFishName(fishRarity, fishSize, spotModel.tier);
+    const qualityScore = Math.max(0.55, Math.min(0.99, 0.74 + Math.random() * 0.2));
+
+    const calc = fisherComputeAutoCatchResult({
+      session,
+      progressBefore: view,
+      spot: spotModel,
+      fishRarity,
+      fishSize,
+      fishWeightKg,
+      qualityScore,
+    });
+
+    const levelOutcome = await fisherApplyCatchProgress(pool, playerId, {
+      reward: calc.totalReward,
+      xpGained: calc.xpGained,
+      fishRarity,
+      fishSize,
+      fishWeightKg,
+    });
+    const progressAfter = levelOutcome.progress;
+
+    const nextStreak = Number(session.streak || 0) + 1;
+    const nextCarryWeight = Math.min(Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg), Number(session.carryWeightKg || 0) + fishWeightKg);
+
+    session.streak = nextStreak;
+    session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
+    session.carryWeightKg = Math.round(nextCarryWeight * 10) / 10;
+    session.carryEstimatedValue = Number(session.carryEstimatedValue || 0) + calc.totalReward;
+    session.carriedFish = [
+      ...(session.carriedFish || []),
+      {
+        name: fishName,
+        rarity: fishRarity,
+        size: fishSize,
+        weightKg: fishWeightKg,
+        value: calc.totalReward,
+      },
+    ].slice(-25);
     session.currentDockCell = parsedCell;
+    session.targetDockCell = null;
+    session.activeCatch = null;
+    session.activeSpot = null;
     session.shiftState = 'SELECTING_SPOT';
+    session.lastResult = {
+      caught: true,
+      failReason: null,
+      fishName,
+      fishRarity,
+      fishSize,
+      fishWeightKg,
+      breakdown: {
+        baseReward: calc.baseReward,
+        spotMultiplier: calc.spotMultiplier,
+        levelMultiplier: calc.levelMultiplier,
+        qualityMultiplier: calc.qualityMultiplier,
+        streakMultiplier: calc.streakMultiplier,
+        integrityMultiplier: calc.integrityMultiplier,
+        bonusLootValue: calc.bonusLootValue,
+        totalReward: calc.totalReward,
+        xpGained: calc.xpGained,
+        qualityScore: calc.qualityScore,
+      },
+      progression: {
+        levelBefore: view.level,
+        levelAfter: progressAfter.level,
+        xpBefore: view.xp,
+        xpAfter: progressAfter.xp,
+        unlockedTier: levelOutcome.unlockedTier,
+      },
+    };
+    session.spotOptions = [];
+    syncFisherSessionTime(session);
     setFisherSession(playerId, session);
-    res.json(fisherStateView(session, view));
+    res.json(fisherStateView(session, progressAfter));
   } catch (error) {
     res.status(400).json({ error: error.message || 'dock select failed' });
   }
@@ -3188,7 +3318,6 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
     const session = getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_SPOT') return res.status(400).json({ error: 'not selecting spot' });
-    if (!session.currentDockCell) return res.status(400).json({ error: 'select a dock square first' });
     enforceFisherActionCooldown(session);
 
     const selected = (session.spotOptions || []).find((entry) => entry.spotId === spotId);
@@ -3210,14 +3339,11 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
       travelSec: selected.travelSec,
     };
 
-    const isSameSpot =
-      session.activeSpot &&
-      String(session.activeSpot.tier) === String(spotModel.tier) &&
-      String(session.activeSpot.name) === String(spotModel.name);
-
     session.activeSpot = spotModel;
-    session.activeCatch = fisherPrepareCatchFromSpot(spotModel, !isSameSpot);
-    session.shiftState = isSameSpot ? 'BAIT_STEP' : 'TRAVEL_TO_SPOT';
+    session.activeCatch = null;
+    session.shiftState = 'SELECTING_DOCK';
+    session.targetDockCell = randomInt(1, 16);
+    session.currentDockCell = null;
     session.spotOptions = [];
     session.lastResult = null;
     syncFisherSessionTime(session);
@@ -3768,7 +3894,6 @@ app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
       const progressView = toFisherProgressView(progressRow);
       const session = getFisherSession(playerId);
       enforceFisherActionCooldown(session);
-      if (!session.currentDockCell) throw new Error('go to dock square first');
 
       const sellValue = Math.max(0, Math.floor(Number(session.carryEstimatedValue || 0)));
       if (sellValue <= 0) {

@@ -358,6 +358,7 @@ export interface FisherStateResponse {
   repairSecondsLeft?: number;
   repairLabel?: string | null;
   currentDockCell?: number | null;
+  targetDockCell?: number | null;
   dockPrompt?: string | null;
   activeCatch: {
     spotId: string;
