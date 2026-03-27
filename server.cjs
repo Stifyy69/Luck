@@ -255,6 +255,7 @@ async function initDb() {
       player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
       fisher_level INT NOT NULL DEFAULT 1,
       fisher_xp INT NOT NULL DEFAULT 0,
+      fisher_rod_tier INT NOT NULL DEFAULT 1,
       fisher_total_catches INT NOT NULL DEFAULT 0,
       fisher_perfect_catches INT NOT NULL DEFAULT 0,
       fisher_best_streak INT NOT NULL DEFAULT 0,
@@ -263,6 +264,11 @@ async function initDb() {
       fisher_legendary_catches INT NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_fisher_progress
+    ADD COLUMN IF NOT EXISTS fisher_rod_tier INT NOT NULL DEFAULT 1;
   `);
 
   const requiredColumns = [
@@ -725,6 +731,18 @@ const FISHER_CONFIG = {
   randomPullTensionPenalty: 12,
   randomPullQualityPenalty: 0.08,
   carryCapacityKg: 20,
+  kgBasePrice: {
+    NORMAL: 1000,
+    BIG: 2000,
+    GIANT: 3000,
+  },
+  rodShop: [
+    { tier: 1, name: 'Street Rod', price: 10000, sizeBonus: { NORMAL: 0, BIG: 0, GIANT: 0 }, payoutMultiplier: 1.0 },
+    { tier: 2, name: 'Lake Rod', price: 50000, sizeBonus: { NORMAL: -0.05, BIG: 0.04, GIANT: 0.01 }, payoutMultiplier: 1.05 },
+    { tier: 3, name: 'Pro River Rod', price: 150000, sizeBonus: { NORMAL: -0.09, BIG: 0.07, GIANT: 0.02 }, payoutMultiplier: 1.12 },
+    { tier: 4, name: 'Deep Master Rod', price: 300000, sizeBonus: { NORMAL: -0.12, BIG: 0.08, GIANT: 0.04 }, payoutMultiplier: 1.2 },
+    { tier: 5, name: 'Legend Hunter Rod', price: 500000, sizeBonus: { NORMAL: -0.16, BIG: 0.1, GIANT: 0.06 }, payoutMultiplier: 1.3 },
+  ],
   fishRarityRewardBase: {
     COMMON: 220,
     UNCOMMON: 360,
@@ -820,6 +838,11 @@ function fisherRodLabelForLevel(level) {
   return 'Basic Rod + Common Bait';
 }
 
+function fisherRodTierModel(tier) {
+  const safeTier = Math.max(1, Math.min(5, Math.floor(Number(tier) || 1)));
+  return FISHER_CONFIG.rodShop.find((entry) => entry.tier === safeTier) || FISHER_CONFIG.rodShop[0];
+}
+
 function fisherAvailableSpotTiers(level) {
   const result = ['COMMON'];
   if (level >= FISHER_CONFIG.spots.BETTER.levelMin) result.push('BETTER');
@@ -846,12 +869,16 @@ function fisherCastScoreFromMeter(meter) {
   return { quality: 'BAD', score: 0.52, meter: safe };
 }
 
-function fisherFishSizeRoll(castMeter) {
+function fisherFishSizeRoll(castMeter, rodTier = 1) {
   const safe = Math.max(0, Math.min(100, Number(castMeter) || 0));
   const distance = Math.abs(50 - safe);
   let normal = 0.75;
   let big = 0.2;
   let giant = 0.05;
+  const rod = fisherRodTierModel(rodTier);
+  normal += Number(rod.sizeBonus.NORMAL || 0);
+  big += Number(rod.sizeBonus.BIG || 0);
+  giant += Number(rod.sizeBonus.GIANT || 0);
 
   if (distance <= 8) {
     normal -= 0.15;
@@ -862,6 +889,14 @@ function fisherFishSizeRoll(castMeter) {
     big += 0.05;
     giant += 0.02;
   }
+
+  if (normal < 0.3) normal = 0.3;
+  if (big < 0.05) big = 0.05;
+  if (giant < 0.02) giant = 0.02;
+  const total = normal + big + giant;
+  normal /= total;
+  big /= total;
+  giant /= total;
 
   const roll = Math.random();
   if (roll <= normal) return 'NORMAL';
@@ -940,6 +975,7 @@ function getFisherSession(playerId) {
     carryWeightKg: 0,
     carryEstimatedValue: 0,
     carriedFish: [],
+    currentDockCell: null,
   };
 }
 
@@ -1041,6 +1077,7 @@ function toFisherProgressView(row) {
     totalEarnings: Number(row?.fisher_total_earnings || 0),
     rareCatches: Number(row?.fisher_rare_catches || 0),
     legendaryCatches: Number(row?.fisher_legendary_catches || 0),
+    rodTier: Math.max(1, Math.min(5, Number(row?.fisher_rod_tier || 1))),
   };
 }
 
@@ -1090,7 +1127,7 @@ function fisherStateView(session, progressView) {
   return {
     progress: {
       ...progressView,
-      rodTierLabel: fisherRodLabelForLevel(progressView.level),
+      rodTierLabel: fisherRodTierModel(progressView.rodTier).name,
       unlockedSpotTier: fisherTierForLevel(progressView.level),
     },
     shiftState: session.shiftState,
@@ -1099,6 +1136,8 @@ function fisherStateView(session, progressView) {
     carryWeightKg: Number(session.carryWeightKg || 0),
     carryEstimatedValue: Number(session.carryEstimatedValue || 0),
     carriedFish: [...(session.carriedFish || [])],
+    currentDockCell: session.currentDockCell,
+    dockPrompt: session.shiftState === 'SELECTING_DOCK' ? 'Go to your dock marker and click a 4x4 square to start fishing.' : null,
     repairSecondsLeft,
     repairLabel: session.repairLabel || null,
     activeCatch,
@@ -3004,7 +3043,7 @@ app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
 
     const nextSession = {
       ...session,
-      shiftState: 'SELECTING_SPOT',
+      shiftState: 'SELECTING_DOCK',
       spotOptions: [],
       optionsGeneratedAt: 0,
       activeSpot: null,
@@ -3012,6 +3051,7 @@ app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
       lastResult: null,
       lastActionAt: 0,
       lastReelTickAt: 0,
+      currentDockCell: null,
     };
     setFisherSession(playerId, nextSession);
     res.json(fisherStateView(nextSession, progressView));
@@ -3032,6 +3072,7 @@ app.post('/api/fisher/shift/end', requireDb, async (req, res) => {
       spotOptions: [],
       activeSpot: null,
       activeCatch: null,
+      lastResult: null,
       cooldownUntil: Date.now() + FISHER_CONFIG.shiftStartCooldownMs,
     };
     setFisherSession(playerId, next);
@@ -3112,6 +3153,31 @@ app.post('/api/fisher/spots/options', requireDb, async (req, res) => {
   }
 });
 
+app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, cellId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const parsedCell = Math.max(1, Math.min(16, Math.floor(Number(cellId || 0))));
+    if (!parsedCell) return res.status(400).json({ error: 'invalid cellId' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_DOCK') {
+      return res.status(400).json({ error: 'dock already selected' });
+    }
+    enforceFisherActionCooldown(session);
+
+    session.currentDockCell = parsedCell;
+    session.shiftState = 'SELECTING_SPOT';
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'dock select failed' });
+  }
+});
+
 app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
   try {
     const { playerId, spotId } = req.body || {};
@@ -3122,6 +3188,7 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
     const session = getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_SPOT') return res.status(400).json({ error: 'not selecting spot' });
+    if (!session.currentDockCell) return res.status(400).json({ error: 'select a dock square first' });
     enforceFisherActionCooldown(session);
 
     const selected = (session.spotOptions || []).find((entry) => entry.spotId === spotId);
@@ -3361,7 +3428,7 @@ app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
     const castBoost = Number(active.castScore || 0.5);
     const hookBoost = Number(active.hookScore || 0.45);
 
-    if (isReeling) {
+    if (isReeling !== false) {
       const progressGain = (4.6 + castBoost * 2.4 + hookBoost * 1.8) / reelDifficultyPenalty;
       active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + progressGain);
       active.tension = Math.min(100, Number(active.tension || 0) + (6.2 * reelDifficultyPenalty - castBoost * 2.4));
@@ -3531,14 +3598,17 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
       rarityWeights.RARE += qualityScore >= 0.82 ? 0.08 : 0;
       rarityWeights.LEGENDARY += qualityScore >= 0.92 ? 0.05 : 0;
       const fishRarity = fisherPickRarity(rarityWeights);
-      const fishSize = fisherFishSizeRoll(active.castMeter);
+      const rodTier = Math.max(1, Math.min(5, Number(progressBefore.rodTier || 1)));
+      const rodModel = fisherRodTierModel(rodTier);
+      const fishSize = fisherFishSizeRoll(active.castMeter, rodTier);
       const fishName = fisherChooseFishName(fishRarity, active.spotTier);
       const fishWeightKg = fisherFishWeightKg(active.spotTier, fishSize);
 
-      const baseReward = Number(FISHER_CONFIG.fishRarityRewardBase[fishRarity] || 220);
+      const kgPrice = Number(FISHER_CONFIG.kgBasePrice[fishSize] || 1000);
+      const baseReward = Math.max(0, Math.floor(fishWeightKg * kgPrice));
       const baseXp = Number(FISHER_CONFIG.fishRarityXpBase[fishRarity] || 20);
       const spotMultiplier = Number(spot.spotMultiplier || 1);
-      const levelMultiplier = levelPayoutMultiplier(progressBefore.level);
+      const levelMultiplier = levelPayoutMultiplier(progressBefore.level) * Number(rodModel.payoutMultiplier || 1);
       const qualityMultiplier = 0.7 + qualityScore * 0.65;
       const streakMultiplier = 1 + Math.min(4, Number(session.streak || 0)) * FISHER_CONFIG.streakBonusPerStep;
       const integrityMultiplier = Math.max(0.35, Number(active.lineIntegrity || 100) / 100);
@@ -3549,8 +3619,7 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
         Math.floor(baseReward * spotMultiplier * levelMultiplier * qualityMultiplier * streakMultiplier * integrityMultiplier) + bonusLootValue,
       );
 
-      const weightMultiplier = fishSize === 'GIANT' ? 1.32 : fishSize === 'BIG' ? 1.14 : 1;
-      const fishValue = Math.max(0, Math.floor(totalReward * weightMultiplier));
+      const fishValue = totalReward;
 
       const nextCarryWeight = Number(session.carryWeightKg || 0) + fishWeightKg;
       const carryLimit = Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
@@ -3699,6 +3768,7 @@ app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
       const progressView = toFisherProgressView(progressRow);
       const session = getFisherSession(playerId);
       enforceFisherActionCooldown(session);
+      if (!session.currentDockCell) throw new Error('go to dock square first');
 
       const sellValue = Math.max(0, Math.floor(Number(session.carryEstimatedValue || 0)));
       if (sellValue <= 0) {
@@ -3724,6 +3794,42 @@ app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
     res.json(outcome);
   } catch (error) {
     res.status(400).json({ error: error.message || 'sell fish failed' });
+  }
+});
+
+app.post('/api/fisher/rod/buy', requireDb, async (req, res) => {
+  try {
+    const { playerId, tier } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const targetTier = Math.max(1, Math.min(5, Math.floor(Number(tier || 1))));
+    const rod = fisherRodTierModel(targetTier);
+
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const progress = await ensureFisherProgress(db, playerId);
+      const currentTier = Math.max(1, Math.min(5, Number(progress.fisher_rod_tier || 1)));
+      if (targetTier <= currentTier) throw new Error('already unlocked');
+
+      const player = await db.query(`SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
+      const currentMoney = Number(player.rows[0]?.clean_money || 0);
+      if (currentMoney < Number(rod.price || 0)) throw new Error('insufficient funds');
+
+      await db.query(`UPDATE players SET clean_money = clean_money - $2, updated_at = NOW() WHERE player_id = $1`, [playerId, Number(rod.price || 0)]);
+      await db.query(`UPDATE player_fisher_progress SET fisher_rod_tier = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, targetTier]);
+
+      return {
+        boughtTier: targetTier,
+        rodName: rod.name,
+        cost: Number(rod.price || 0),
+      };
+    });
+
+    const nextProgress = await ensureFisherProgress(pool, playerId);
+    const session = getFisherSession(playerId);
+    setFisherSession(playerId, session);
+    res.json({ ...result, state: fisherStateView(session, toFisherProgressView(nextProgress)) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'rod buy failed' });
   }
 });
 

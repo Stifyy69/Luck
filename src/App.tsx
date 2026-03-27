@@ -94,7 +94,7 @@ export default function App() {
         <span className="text-lg leading-none">{menuOpen ? '◀' : '▶'}</span>
       </button>
 
-      <div className={`hud-panel fixed inset-y-0 left-0 z-[60] w-[242px] rounded-r-2xl p-4 backdrop-blur-xl transition-transform md:left-5 md:top-4 md:h-[calc(100vh-2rem)] md:w-[226px] md:rounded-2xl ${menuOpen ? 'translate-x-0' : '-translate-x-[86%] md:translate-x-0'}`}>
+      <div className={`hud-panel fixed inset-y-0 left-0 z-[60] w-[242px] overflow-y-auto rounded-r-2xl p-4 backdrop-blur-xl transition-transform md:left-5 md:top-4 md:h-[calc(100vh-2rem)] md:w-[226px] md:rounded-2xl ${menuOpen ? 'translate-x-0' : '-translate-x-[86%] md:translate-x-0'}`}>
         <div className="mb-4 border-b border-white/10 pb-4">
           <div className="mb-3 rounded-xl border border-[#ffd95a]/45 bg-gradient-to-r from-[#ffb347]/20 to-[#ff7aa2]/12 px-3 py-2">
             <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#ffd36a]">CityFlow No-RP</p>

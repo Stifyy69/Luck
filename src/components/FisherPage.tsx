@@ -31,6 +31,14 @@ const STATE_LABELS: Record<string, string> = {
   END_SHIFT: 'End Shift',
 };
 
+const ROD_SHOP = [
+  { tier: 1, name: 'Street Rod', price: 10000, bonus: 'Balanced starter rod' },
+  { tier: 2, name: 'Lake Rod', price: 50000, bonus: 'Higher chance for bigger fish' },
+  { tier: 3, name: 'Pro River Rod', price: 150000, bonus: 'Better fish size and payout' },
+  { tier: 4, name: 'Deep Master Rod', price: 300000, bonus: 'Strong bonus for premium catches' },
+  { tier: 5, name: 'Legend Hunter Rod', price: 500000, bonus: 'Best chance for top catches and cash' },
+];
+
 function fmt(n: number) {
   return n.toLocaleString('en-US');
 }
@@ -65,6 +73,7 @@ export default function FisherPage() {
 
   const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
   const canSelectSpot = state?.shiftState === 'SELECTING_SPOT';
+  const canSelectDock = state?.shiftState === 'SELECTING_DOCK';
 
   const loadState = useCallback(async () => {
     try {
@@ -176,6 +185,22 @@ export default function FisherPage() {
     }
   };
 
+  const selectDock = async (cellId: number) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await api.fisherDockSelect(playerId, cellId);
+      setState(next);
+      const data = await api.fisherSpotOptions(playerId);
+      setOptions(data.options || []);
+      pushPopup(`Dock square ${cellId} selected. Pick your fishing spot.`);
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Dock select failed', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const changeSpot = async () => {
     if (busy) return;
     setBusy(true);
@@ -202,6 +227,21 @@ export default function FisherPage() {
       pushPopup(`Sold fish for +${fmt(payload.soldValue)} $.`);
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Could not sell fish', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const buyRod = async (tier: number) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const payload = await api.fisherRodBuy(playerId, tier);
+      setState(payload.state);
+      refresh();
+      pushPopup(`Bought ${payload.rodName} for ${fmt(payload.cost)} $.`);
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Rod purchase failed', true);
     } finally {
       setBusy(false);
     }
@@ -328,7 +368,7 @@ export default function FisherPage() {
   const active = state?.activeCatch;
   const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
   const readableState = STATE_LABELS[String(state?.shiftState || 'IDLE')] || String(state?.shiftState || 'Idle').replace(/_/g, ' ');
-  const canChangeSpot = state?.shiftState && state.shiftState !== 'IDLE' && state.shiftState !== 'SELECTING_SPOT';
+  const canChangeSpot = state?.shiftState && state.shiftState !== 'IDLE' && state.shiftState !== 'SELECTING_SPOT' && state.shiftState !== 'SELECTING_DOCK';
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(33,179,210,0.18),_transparent_55%),linear-gradient(180deg,rgba(6,14,23,0.94),rgba(2,8,14,0.98))] px-4 py-6 md:py-8">
@@ -359,10 +399,22 @@ export default function FisherPage() {
             <Stat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} / ${(state?.carryCapacityKg ?? 20).toFixed(0)} kg`} />
           </div>
 
-          <div className="mt-3 rounded-xl border border-cyan-500/25 bg-cyan-900/10 p-3">
-            <p className="text-xs uppercase tracking-[0.16em] text-cyan-200/85">Carry Hold</p>
-            <p className="mt-1 text-sm font-bold text-cyan-100">Estimated sell value: {fmt(state?.carryEstimatedValue ?? 0)} $</p>
-            <p className="text-xs text-cyan-100/70">Bag limit is 20kg. Sell fish when near full.</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-[1.2fr_1fr]">
+            <div className="rounded-xl border border-cyan-500/25 bg-cyan-900/10 p-3">
+              <p className="text-xs uppercase tracking-[0.16em] text-cyan-200/85">Carry Hold</p>
+              <p className="mt-1 text-sm font-bold text-cyan-100">Estimated sell value: {fmt(state?.carryEstimatedValue ?? 0)} $</p>
+              <p className="text-xs text-cyan-100/70">Bag limit is 20kg. Sell fish when near full.</p>
+            </div>
+            <div className="rounded-xl border border-white/15 bg-black/25 p-3">
+              <p className="text-xs uppercase tracking-[0.16em] text-white/70">Rod Prices</p>
+              <div className="mt-2 space-y-1">
+                {ROD_SHOP.map((rod) => (
+                  <p key={`rod-price-${rod.tier}`} className="text-xs text-white/80">
+                    T{rod.tier}: {rod.name} - {fmt(rod.price)} $
+                  </p>
+                ))}
+              </div>
+            </div>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
@@ -412,6 +464,30 @@ export default function FisherPage() {
             </button>
           </div>
         </div>
+
+        {canSelectDock && (
+          <div className="hud-panel p-5">
+            <h2 className="text-lg font-black text-white">Dock Marker 4x4</h2>
+            <p className="mt-1 text-sm text-white/70">{state?.dockPrompt || 'Go there and click a square before fishing.'}</p>
+            <div className="mt-4 grid grid-cols-4 gap-2">
+              {Array.from({ length: 16 }).map((_, idx) => {
+                const cell = idx + 1;
+                const selected = state?.currentDockCell === cell;
+                return (
+                  <button
+                    key={`dock-${cell}`}
+                    type="button"
+                    onClick={() => selectDock(cell).catch(() => {})}
+                    disabled={busy}
+                    className={`h-14 rounded-lg border text-sm font-black transition ${selected ? 'border-cyan-300 bg-cyan-500/30 text-cyan-100' : 'border-white/20 bg-white/5 text-white/75 hover:bg-white/10'} disabled:opacity-60`}
+                  >
+                    {cell}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {canSelectSpot && (
           <div className="hud-panel p-5">
@@ -573,8 +649,7 @@ export default function FisherPage() {
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => reelTick(true).catch(() => {})} disabled={busy || underRepair} className="rounded-xl border border-emerald-500/40 bg-emerald-900/20 px-4 py-3 text-sm font-bold text-emerald-100 disabled:opacity-60">Reel</button>
-                  <button type="button" onClick={() => reelTick(false).catch(() => {})} disabled={busy || underRepair} className="rounded-xl border border-sky-500/40 bg-sky-900/20 px-4 py-3 text-sm font-bold text-sky-100 disabled:opacity-60">Release</button>
+                  <button type="button" onClick={() => reelTick(true).catch(() => {})} disabled={busy || underRepair} className="rounded-xl border border-emerald-500/40 bg-emerald-900/20 px-4 py-3 text-sm font-bold text-emerald-100 disabled:opacity-60">Reel (Click)</button>
                 </div>
               </div>
             )}
@@ -594,11 +669,13 @@ export default function FisherPage() {
           </div>
         )}
 
-        {state?.lastResult && (
+        {state?.shiftState !== 'IDLE' && state?.lastResult && (
           <div className="hud-panel p-5">
             <h2 className="text-lg font-black text-white">Last Catch Result</h2>
             {state.lastResult.caught ? (
-              <p className="mt-2 text-sm text-white/80">{state.lastResult.fishName} · {state.lastResult.fishRarity} · {state.lastResult.fishSize} · {state.lastResult.fishWeightKg} kg</p>
+              <p className="mt-2 text-sm text-white/80">
+                {state.lastResult.fishName} · {state.lastResult.fishRarity} · {state.lastResult.fishSize === 'GIANT' ? 'Best Size' : state.lastResult.fishSize === 'BIG' ? 'Medium Size' : 'Normal Size'} · {state.lastResult.fishWeightKg} kg
+              </p>
             ) : (
               <p className="mt-2 text-sm text-red-200">{state.lastResult.failReason}</p>
             )}
@@ -611,6 +688,33 @@ export default function FisherPage() {
               <Summary label="Quality Multiplier" value={`${state.lastResult.breakdown.qualityMultiplier.toFixed(2)}x`} />
               <Summary label="Streak Multiplier" value={`${state.lastResult.breakdown.streakMultiplier.toFixed(2)}x`} />
               <Summary label="Integrity Multiplier" value={`${state.lastResult.breakdown.integrityMultiplier.toFixed(2)}x`} />
+            </div>
+          </div>
+        )}
+
+        {state?.shiftState === 'IDLE' && (
+          <div className="hud-panel p-5">
+            <h2 className="text-lg font-black text-white">Rod Shop</h2>
+            <p className="mt-1 text-sm text-white/70">Upgrade rods for better fish size chance and higher catch payouts.</p>
+            <div className="mt-4 grid gap-2 md:grid-cols-2">
+              {ROD_SHOP.map((rod) => {
+                const owned = Number(state?.progress.rodTier || 1) >= rod.tier;
+                return (
+                  <div key={`rod-shop-${rod.tier}`} className="rounded-xl border border-white/15 bg-black/20 p-3">
+                    <p className="text-sm font-black text-white">Tier {rod.tier} · {rod.name}</p>
+                    <p className="text-xs text-white/70">{rod.bonus}</p>
+                    <p className="mt-1 text-sm font-black text-[#ffd95a]">{fmt(rod.price)} $</p>
+                    <button
+                      type="button"
+                      onClick={() => buyRod(rod.tier).catch(() => {})}
+                      disabled={busy || owned}
+                      className="mt-2 rounded-lg border border-cyan-500/40 bg-cyan-900/20 px-3 py-2 text-xs font-bold text-cyan-100 disabled:opacity-50"
+                    >
+                      {owned ? 'Owned' : 'Buy Rod'}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

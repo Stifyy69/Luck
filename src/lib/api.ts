@@ -196,6 +196,9 @@ export const api = {
   fisherSpotOptions: (playerId: string) =>
     post<{ options: FisherSpotOption[] }>('/api/fisher/spots/options', { playerId }),
 
+  fisherDockSelect: (playerId: string, cellId: number) =>
+    post<FisherStateResponse>('/api/fisher/dock/select', { playerId, cellId }),
+
   fisherSpotSelect: (playerId: string, spotId: string) =>
     post<FisherStateResponse>('/api/fisher/spot/select', { playerId, spotId }),
 
@@ -211,7 +214,7 @@ export const api = {
   fisherHookAttempt: (playerId: string) =>
     post<FisherStateResponse>('/api/fisher/hook/attempt', { playerId }),
 
-  fisherReelTick: (playerId: string, isReeling: boolean) =>
+  fisherReelTick: (playerId: string, isReeling = true) =>
     post<FisherStateResponse>('/api/fisher/reel/tick', { playerId, isReeling }),
 
   fisherPullRespond: (playerId: string, direction: 'LEFT' | 'RIGHT') =>
@@ -222,4 +225,7 @@ export const api = {
 
   fisherCatchSell: (playerId: string) =>
     post<{ soldValue: number; state: FisherStateResponse }>('/api/fisher/catch/sell', { playerId }),
+
+  fisherRodBuy: (playerId: string, tier: number) =>
+    post<{ boughtTier: number; rodName: string; cost: number; state: FisherStateResponse }>('/api/fisher/rod/buy', { playerId, tier }),
 };

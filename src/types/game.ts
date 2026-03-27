@@ -294,6 +294,7 @@ export interface PizzerDeliveryResult {
 export type FisherShiftState =
   | 'IDLE'
   | 'STARTING_SHIFT'
+  | 'SELECTING_DOCK'
   | 'SELECTING_SPOT'
   | 'TRAVEL_TO_SPOT'
   | 'PREPARING_GEAR'
@@ -317,6 +318,7 @@ export interface FisherProgress {
   totalEarnings: number;
   rareCatches: number;
   legendaryCatches: number;
+  rodTier: number;
   rodTierLabel: string;
   unlockedSpotTier: 'COMMON' | 'BETTER' | 'PREMIUM';
 }
@@ -355,6 +357,8 @@ export interface FisherStateResponse {
   }>;
   repairSecondsLeft?: number;
   repairLabel?: string | null;
+  currentDockCell?: number | null;
+  dockPrompt?: string | null;
   activeCatch: {
     spotId: string;
     spotTier: 'COMMON' | 'BETTER' | 'PREMIUM';
