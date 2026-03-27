@@ -1174,6 +1174,7 @@ function fisherStateView(session, progressView) {
     carryWeightKg: Number(session.carryWeightKg || 0),
     carryEstimatedValue: Number(session.carryEstimatedValue || 0),
     carriedFish: [...(session.carriedFish || [])],
+    activeSpotName: session.activeSpot?.name || null,
     currentDockCell: session.currentDockCell,
     targetDockCell: session.targetDockCell || null,
     dockPrompt:
@@ -3225,10 +3226,18 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
       throw new Error('bag full, sell fish first');
     }
 
-    const fishRarity = fisherRollRarity(spotModel.tier);
-    const fishSize = fisherRollFishSize(progress);
-    const fishWeightKg = fisherRollFishWeight(fishSize, spotModel.tier, progress.level, carryLeft);
-    const fishName = fisherBuildFishName(fishRarity, fishSize, spotModel.tier);
+    const spotConfig = FISHER_CONFIG.spots[spotModel.tier] || FISHER_CONFIG.spots.COMMON;
+    const rarityWeights = { ...spotConfig.rarityWeights };
+    const fishRarity = fisherPickRarity(rarityWeights);
+    const rodTier = Math.max(1, Math.min(5, Number(view.rodTier || 1)));
+    const autoCastMeter = 50 + randomInt(-8, 8);
+    const fishSize = fisherFishSizeRoll(autoCastMeter, rodTier);
+    const fishName = fisherChooseFishName(fishRarity, spotModel.tier);
+    let fishWeightKg = fisherFishWeightKg(spotModel.tier, fishSize);
+    fishWeightKg = Math.min(fishWeightKg, Math.round(carryLeft * 10) / 10);
+    if (fishWeightKg <= 0.05) {
+      throw new Error('bag full, sell fish first');
+    }
     const qualityScore = Math.max(0.55, Math.min(0.99, 0.74 + Math.random() * 0.2));
 
     const calc = fisherComputeAutoCatchResult({
@@ -3241,12 +3250,46 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
       qualityScore,
     });
 
-    const levelOutcome = await fisherApplyCatchProgress(pool, playerId, {
-      reward: calc.totalReward,
-      xpGained: calc.xpGained,
-      fishRarity,
-      fishSize,
-      fishWeightKg,
+    const levelOutcome = await withTransaction(async (db) => {
+      const progressRow = await ensureFisherProgress(db, playerId);
+      const progressBefore = toFisherProgressView(progressRow);
+
+      const nextXp = Number(progressBefore.xp) + Number(calc.xpGained || 0);
+      const nextLevel = computeFisherLevel(nextXp);
+      const unlockedTier = nextLevel > progressBefore.level ? fisherTierForLevel(nextLevel) : null;
+      const nextStreak = Number(session.streak || 0) + 1;
+      const bestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+      const isPerfect = Number(calc.qualityScore || 0) >= 0.92;
+
+      await db.query(
+        `UPDATE player_fisher_progress
+         SET fisher_level = $2,
+             fisher_xp = $3,
+             fisher_total_catches = fisher_total_catches + 1,
+             fisher_perfect_catches = fisher_perfect_catches + $4,
+             fisher_best_streak = GREATEST(fisher_best_streak, $5),
+             fisher_total_earnings = fisher_total_earnings + $6,
+             fisher_rare_catches = fisher_rare_catches + $7,
+             fisher_legendary_catches = fisher_legendary_catches + $8,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          isPerfect ? 1 : 0,
+          bestStreak,
+          calc.totalReward,
+          fishRarity === 'RARE' ? 1 : 0,
+          fishRarity === 'LEGENDARY' ? 1 : 0,
+        ],
+      );
+
+      const updatedProgress = await ensureFisherProgress(db, playerId);
+      return {
+        progress: toFisherProgressView(updatedProgress),
+        unlockedTier,
+      };
     });
     const progressAfter = levelOutcome.progress;
 

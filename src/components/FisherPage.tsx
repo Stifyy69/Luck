@@ -321,7 +321,7 @@ export default function FisherPage() {
                     type="button"
                     onClick={() => selectDock(cell).catch(() => {})}
                     disabled={busy}
-                    className={`h-14 rounded-lg border text-sm font-black transition ${target ? 'border-emerald-300 bg-emerald-500/30 text-emerald-100' : selected ? 'border-cyan-300 bg-cyan-500/30 text-cyan-100' : 'border-white/20 bg-white/5 text-white/75 hover:bg-white/10'} disabled:opacity-60`}
+                    className={`h-14 rounded-lg border text-sm font-black transition ${target ? 'border-emerald-300 bg-emerald-500/35 text-emerald-100 shadow-[0_0_0_1px_rgba(16,185,129,0.45)]' : selected ? 'border-cyan-300 bg-cyan-500/25 text-cyan-100' : 'border-slate-700 bg-slate-900/70 text-slate-400 hover:border-slate-500 hover:bg-slate-800/75'} disabled:opacity-60`}
                   >
                     {target ? 'GO' : cell}
                   </button>
@@ -372,7 +372,7 @@ export default function FisherPage() {
             <h2 className="text-lg font-black text-white">Fishing Flow</h2>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Stat label="State" value={readableState} />
-              <Stat label="Current Spot" value={state?.activeCatch?.spotName || 'Not selected'} />
+              <Stat label="Current Spot" value={state?.activeSpotName || state?.activeCatch?.spotName || 'Not selected'} />
               <Stat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} kg`} />
               <Stat label="Sell Value" value={`${fmt(state?.carryEstimatedValue ?? 0)} $`} />
             </div>
@@ -409,7 +409,10 @@ export default function FisherPage() {
             <p className="mt-1 text-sm text-white/70">Upgrade rods for better fish size chance and higher catch payouts.</p>
             <div className="mt-4 grid gap-2 md:grid-cols-2">
               {ROD_SHOP.map((rod) => {
-                const owned = Number(state?.progress.rodTier || 1) >= rod.tier;
+                const currentTier = Number(state?.progress.rodTier || 1);
+                const isCurrentTier = currentTier === rod.tier;
+                const isLowerIncluded = currentTier > rod.tier;
+                const disabled = busy || isCurrentTier || isLowerIncluded;
                 return (
                   <div key={`rod-shop-${rod.tier}`} className="rounded-xl border border-white/15 bg-black/20 p-3">
                     <p className="text-sm font-black text-white">Tier {rod.tier} · {rod.name}</p>
@@ -418,10 +421,10 @@ export default function FisherPage() {
                     <button
                       type="button"
                       onClick={() => buyRod(rod.tier).catch(() => {})}
-                      disabled={busy || owned}
+                      disabled={disabled}
                       className="mt-2 rounded-lg border border-cyan-500/40 bg-cyan-900/20 px-3 py-2 text-xs font-bold text-cyan-100 disabled:opacity-50"
                     >
-                      {owned ? 'Owned' : 'Buy Rod'}
+                      {isCurrentTier ? 'Owned' : isLowerIncluded ? 'Included' : 'Buy Rod'}
                     </button>
                   </div>
                 );
