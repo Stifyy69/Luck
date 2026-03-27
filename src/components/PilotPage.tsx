@@ -268,31 +268,49 @@ export default function PilotPage() {
           <h2 className="text-lg font-black text-white">Route Selection</h2>
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {(state?.routes || []).map((route) => {
-              const selected = route.id === state?.selectedRouteId;
               const completionTarget = Math.max(1, Number(route.requiredPreviousCompletions || 0));
               const completed = Number(route.progressionCompletions || 0) >= completionTarget;
+              const locked = !!route.locked;
+              const stateLabel = locked ? 'Locked' : completed ? 'Completed' : 'Ongoing';
+
+              const cardTone = locked
+                ? 'border-slate-500/45 bg-slate-700/20'
+                : completed
+                  ? 'border-emerald-300/70 bg-emerald-500/25'
+                  : 'border-amber-300/70 bg-amber-500/22';
+
+              const badgeTone = locked
+                ? 'border-slate-400/55 bg-slate-700/35 text-slate-200'
+                : completed
+                  ? 'border-emerald-300/70 bg-emerald-500/35 text-emerald-100'
+                  : 'border-amber-300/70 bg-amber-500/35 text-amber-100';
+
+              const headingTone = locked ? 'text-slate-200' : 'text-white';
+              const themeTone = locked ? 'text-slate-400' : completed ? 'text-emerald-100' : 'text-amber-100';
+              const textTone = locked ? 'text-slate-300/85' : completed ? 'text-emerald-50/95' : 'text-amber-50/95';
+
               return (
                 <button
                   key={route.id}
                   type="button"
                   onClick={() => selectRoute(route.id).catch(() => {})}
                   disabled={busy || route.locked || !!state?.activeFlight}
-                  className={`rounded-2xl border p-4 text-left transition ${completed ? 'border-emerald-300/70 bg-emerald-500/25' : selected ? 'border-sky-300/60 bg-sky-500/15' : 'border-white/15 bg-white/5 hover:bg-white/10'} disabled:cursor-not-allowed disabled:opacity-60`}
+                  className={`rounded-2xl border p-4 text-left transition ${cardTone} disabled:cursor-not-allowed disabled:opacity-80`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-black text-white">{route.name}</p>
-                    <span className={`rounded border px-2 py-0.5 text-[10px] font-black ${route.locked ? 'border-orange-400/40 bg-orange-500/15 text-orange-200' : completed ? 'border-emerald-300/70 bg-emerald-500/35 text-emerald-100' : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'}`}>
-                      {route.locked ? 'Locked' : completed ? 'Completed' : 'Available'}
+                    <p className={`text-sm font-black ${headingTone}`}>{route.name}</p>
+                    <span className={`rounded border px-2 py-0.5 text-[10px] font-black ${badgeTone}`}>
+                      {stateLabel}
                     </span>
                   </div>
-                  <p className="mt-1 text-xs uppercase tracking-[0.15em] text-sky-200/85">{route.theme}</p>
-                  <p className="mt-2 text-xs text-white/75">{route.routePath}</p>
-                  <p className="mt-2 text-xs text-white/70">Duration: {route.durationSeconds}s</p>
-                  <p className="text-xs text-white/70">Base Reward: {fmt(route.baseReward)} $</p>
-                  <p className="text-xs text-white/70">Base XP: {route.baseXp}</p>
-                  <p className="text-xs text-white/70">Progress: {route.progressLabel}</p>
+                  <p className={`mt-1 text-xs uppercase tracking-[0.15em] ${themeTone}`}>{route.theme}</p>
+                  <p className={`mt-2 text-xs ${textTone}`}>{route.routePath}</p>
+                  <p className={`mt-2 text-xs ${textTone}`}>Duration: {route.durationSeconds}s</p>
+                  <p className={`text-xs ${textTone}`}>Base Reward: {fmt(route.baseReward)} $</p>
+                  <p className={`text-xs ${textTone}`}>Base XP: {route.baseXp}</p>
+                  <p className={`text-xs ${textTone}`}>Progress: {route.progressLabel}</p>
                   {route.lockReasons.map((reason) => (
-                    <p key={`${route.id}-${reason}`} className="mt-1 text-xs font-bold text-orange-200">
+                    <p key={`${route.id}-${reason}`} className="mt-1 text-xs font-bold text-amber-200">
                       {reason}
                     </p>
                   ))}
