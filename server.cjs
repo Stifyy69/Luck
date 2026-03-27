@@ -1088,13 +1088,29 @@ function fisherBuildSpotOption(level, tierKey = null) {
 }
 
 function fisherChooseFishName(rarity, tier) {
-  const common = ['caras', 'biban', 'macrou'];
-  const uncommon = ['stiuca', 'pastrav', 'avat'];
-  const rare = ['somn mare', 'ton', 'sturion'];
+  const common = ['crucian carp', 'perch', 'mackerel'];
+  const uncommon = ['pike', 'trout', 'asp'];
+  const rare = ['catfish', 'tuna', 'sturgeon'];
   const legendary = ['golden fish', 'old relic catch', 'trophy monster'];
   const pool = rarity === 'LEGENDARY' ? legendary : rarity === 'RARE' ? rare : rarity === 'UNCOMMON' ? uncommon : common;
   const prefix = tier === 'PREMIUM' ? 'Deep' : tier === 'BETTER' ? 'River' : 'Shore';
   return `${prefix} ${pool[randomInt(0, pool.length - 1)]}`;
+}
+
+async function addFarmTimeForCatch(db, playerId, hours = 0.1) {
+  const value = Number(hours || 0);
+  if (value <= 0) return;
+  await db.query(
+    `
+    INSERT INTO player_stats (player_id, time_spent, last_seen, updated_at)
+    VALUES ($1, $2, NOW(), NOW())
+    ON CONFLICT (player_id) DO UPDATE SET
+      time_spent = player_stats.time_spent + $2,
+      last_seen = NOW(),
+      updated_at = NOW()
+    `,
+    [playerId, value],
+  );
 }
 
 async function ensureFisherProgress(db, playerId) {
@@ -3300,6 +3316,8 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
         ],
       );
 
+      await addFarmTimeForCatch(db, playerId, 0.1);
+
       const updatedProgress = await ensureFisherProgress(db, playerId);
       return {
         progress: toFisherProgressView(updatedProgress),
@@ -3860,6 +3878,8 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
           fishRarity === 'LEGENDARY' ? 1 : 0,
         ],
       );
+
+      await addFarmTimeForCatch(db, playerId, 0.1);
 
       const updatedProgress = await ensureFisherProgress(db, playerId);
       const progressAfter = toFisherProgressView(updatedProgress);

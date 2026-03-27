@@ -42,12 +42,15 @@ export default function FisherPage() {
   const [options, setOptions] = useState<FisherSpotOption[]>([]);
   const [popup, setPopup] = useState<Popup>(null);
   const [busy, setBusy] = useState(false);
-  const [autoFlowText, setAutoFlowText] = useState<string | null>(null);
   const lastOptionsFetchRef = useRef(0);
+  const popupTimerRef = useRef<number | null>(null);
 
   const pushPopup = useCallback((text: string, isError = false) => {
+    if (popupTimerRef.current) {
+      window.clearTimeout(popupTimerRef.current);
+    }
     setPopup({ text, isError });
-    window.setTimeout(() => setPopup(null), 2800);
+    popupTimerRef.current = window.setTimeout(() => setPopup(null), 2000);
   }, []);
 
   const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
@@ -152,23 +155,24 @@ export default function FisherPage() {
     try {
       const isTarget = Number(state?.targetDockCell || 0) === Number(cellId);
       if (isTarget) {
-        setAutoFlowText('Applying bait...');
         pushPopup('Applying bait...');
-        await wait(500);
-        setAutoFlowText('Fish bite detected...');
+        await wait(2000);
         pushPopup('Fish bite detected...');
-        await wait(500);
-        setAutoFlowText('Auto reeling and landing...');
+        await wait(2000);
         pushPopup('Auto reeling and landing...');
-        await wait(600);
+        await wait(2000);
       }
       const next = await api.fisherDockSelect(playerId, cellId);
       setState(next);
-      pushPopup(`Catch complete at marker ${cellId}. Continue on same spot or sell.`);
+      if (next?.lastResult?.caught) {
+        await wait(500);
+        const fish = next.lastResult.fishName || 'Fish';
+        const reward = Number(next.lastResult.breakdown?.totalReward || 0);
+        pushPopup(`Caught ${fish} (+${fmt(reward)} $)`);
+      }
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Dock select failed', true);
     } finally {
-      setAutoFlowText(null);
       setBusy(false);
     }
   };
@@ -226,14 +230,10 @@ export default function FisherPage() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(33,179,210,0.18),_transparent_55%),linear-gradient(180deg,rgba(6,14,23,0.94),rgba(2,8,14,0.98))] px-4 py-6 md:py-8">
       {popup && (
-        <div className={`fixed right-4 top-6 z-[80] max-w-md rounded-xl border px-4 py-3 text-sm font-bold shadow-xl backdrop-blur ${popup.isError ? 'border-red-500/40 bg-red-900/80 text-red-200' : 'border-cyan-500/40 bg-cyan-900/80 text-cyan-100'}`}>
-          {popup.text}
-        </div>
-      )}
-
-      {autoFlowText && (
-        <div className="fixed left-1/2 top-20 z-[75] -translate-x-1/2 rounded-xl border border-emerald-400/45 bg-emerald-950/85 px-5 py-3 text-sm font-black uppercase tracking-[0.12em] text-emerald-100 shadow-2xl">
-          {autoFlowText}
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 px-4">
+          <div className={`w-full max-w-2xl rounded-2xl border px-6 py-5 text-center text-base font-black shadow-2xl backdrop-blur ${popup.isError ? 'border-red-500/50 bg-red-950/90 text-red-100' : 'border-cyan-400/50 bg-cyan-950/90 text-cyan-100'}`}>
+            {popup.text}
+          </div>
         </div>
       )}
 
