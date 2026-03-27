@@ -85,62 +85,55 @@ export default function PilotPage() {
     }
   };
 
+  const runFlightLifecycle = async (flightState: PilotStateResponse) => {
+    const payload = await api.pilotFlightStart(playerId);
+    setState(payload.state);
+
+    const route = (payload.state.routes || []).find((entry) => entry.id === payload.flight.routeId) || null;
+    if (!route) throw new Error('Route data missing');
+
+    setOverlayRoute(route);
+    setOverlayOpen(true);
+    setOverlayStageIndex(0);
+    setOverlayProgress(0);
+
+    const stageCount = Math.max(1, route.stages.length);
+    const stageDurationMs = Math.max(200, Math.floor((route.durationSeconds * 1000) / stageCount));
+
+    for (let i = 0; i < stageCount; i += 1) {
+      setOverlayStageIndex(i);
+      setOverlayProgress(Math.floor(((i + 1) / stageCount) * 100));
+      await wait(stageDurationMs);
+    }
+
+    await wait(500);
+    const finished = await api.pilotFlightComplete(playerId);
+    setState(finished.state);
+    await refresh();
+    setOverlayOpen(false);
+    setOverlayRoute(null);
+    setOverlayStageIndex(0);
+    setOverlayProgress(0);
+
+    if (finished.result?.completed) {
+      pushPopup(`Flight completed. +${fmt(finished.result.breakdown.totalCash)} $ / +${finished.result.breakdown.totalXp} XP`);
+    }
+  };
+
   const selectRoute = async (routeId: string) => {
     if (busy) return;
     setBusy(true);
     try {
       const next = await api.pilotRouteSelect(playerId, routeId);
       setState(next);
-      pushPopup('Route selected. Press Start Flight.');
+      pushPopup('Route selected. Flight starting...');
+      await runFlightLifecycle(next);
     } catch (e) {
+      setOverlayOpen(false);
+      setOverlayRoute(null);
+      setOverlayStageIndex(0);
+      setOverlayProgress(0);
       pushPopup(e instanceof Error ? e.message : 'Route selection failed', true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const startFlight = async () => {
-    if (busy || !state?.selectedRouteId) return;
-    setBusy(true);
-    try {
-      const payload = await api.pilotFlightStart(playerId);
-      setState(payload.state);
-
-      const route = (payload.state.routes || []).find((entry) => entry.id === payload.flight.routeId) || null;
-      if (!route) throw new Error('Route data missing');
-
-      setOverlayRoute(route);
-      setOverlayOpen(true);
-      setOverlayStageIndex(0);
-      setOverlayProgress(0);
-
-      const stageCount = Math.max(1, route.stages.length);
-      const stageDurationMs = Math.max(200, Math.floor((route.durationSeconds * 1000) / stageCount));
-
-      for (let i = 0; i < stageCount; i += 1) {
-        setOverlayStageIndex(i);
-        setOverlayProgress(Math.floor(((i + 1) / stageCount) * 100));
-        await wait(stageDurationMs);
-      }
-
-      await wait(500);
-      const finished = await api.pilotFlightComplete(playerId);
-      setState(finished.state);
-      await refresh();
-      setOverlayOpen(false);
-      setOverlayRoute(null);
-      setOverlayStageIndex(0);
-      setOverlayProgress(0);
-
-      if (finished.result?.completed) {
-        pushPopup(`Flight completed. +${fmt(finished.result.breakdown.totalCash)} $ / +${finished.result.breakdown.totalXp} XP`);
-      }
-    } catch (e) {
-      setOverlayOpen(false);
-      setOverlayRoute(null);
-      setOverlayStageIndex(0);
-      setOverlayProgress(0);
-      pushPopup(e instanceof Error ? e.message : 'Start flight failed', true);
       await loadState();
     } finally {
       setBusy(false);
@@ -169,7 +162,6 @@ export default function PilotPage() {
   const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
   const selectedRoute = useMemo(() => (state?.routes || []).find((route) => route.id === state.selectedRouteId) || null, [state]);
   const canStartShift = state?.shiftState === 'IDLE';
-  const canStartFlight = state?.shiftState === 'ROUTE_READY' && !!selectedRoute && !busy;
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(42,148,255,0.16),_transparent_55%),linear-gradient(180deg,rgba(5,10,22,0.95),rgba(2,7,16,0.98))] px-4 py-6 md:py-8">
@@ -247,14 +239,6 @@ export default function PilotPage() {
               className="rounded-xl border border-red-500/35 bg-red-900/20 px-4 py-2 text-sm font-bold text-red-200 disabled:opacity-50"
             >
               End Shift
-            </button>
-            <button
-              type="button"
-              onClick={() => startFlight().catch(() => {})}
-              disabled={!canStartFlight}
-              className="rounded-xl border border-sky-400/40 bg-sky-900/25 px-4 py-2 text-sm font-bold text-sky-100 disabled:opacity-50"
-            >
-              Start Flight
             </button>
           </div>
         </div>
