@@ -21,6 +21,8 @@ import type {
   FisherSpotOption,
   FisherStateResponse,
   FisherCatchResult,
+  PilotStateResponse,
+  PilotFlightResult,
 } from '../types/game';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -183,6 +185,27 @@ export const api = {
 
   pizzerAdminReset: (playerId: string) =>
     post<{ ok: boolean }>('/api/pizzer/admin/reset', { playerId }),
+
+  pilotState: (playerId: string) =>
+    get<PilotStateResponse>('/api/pilot/state', { playerId }),
+
+  pilotShiftStart: (playerId: string) =>
+    post<PilotStateResponse>('/api/pilot/shift/start', { playerId }),
+
+  pilotShiftEnd: (playerId: string) =>
+    post<PilotStateResponse>('/api/pilot/shift/end', { playerId }),
+
+  pilotRouteSelect: (playerId: string, routeId: string) =>
+    post<PilotStateResponse>('/api/pilot/route/select', { playerId, routeId }),
+
+  pilotFlightStart: (playerId: string) =>
+    post<{ state: PilotStateResponse; flight: { sessionId: string; routeId: string; durationSeconds: number; stages: string[] } }>('/api/pilot/flight/start', { playerId }),
+
+  pilotFlightCancel: (playerId: string) =>
+    post<{ state: PilotStateResponse }>('/api/pilot/flight/cancel', { playerId }),
+
+  pilotFlightComplete: (playerId: string) =>
+    post<{ state: PilotStateResponse; result: PilotFlightResult }>('/api/pilot/flight/complete', { playerId }),
 
   fisherState: (playerId: string) =>
     get<FisherStateResponse>('/api/fisher/state', { playerId }),

@@ -268,6 +268,24 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_pilot_progress (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      pilot_level INT NOT NULL DEFAULT 1,
+      pilot_xp INT NOT NULL DEFAULT 0,
+      pilot_total_earnings BIGINT NOT NULL DEFAULT 0,
+      pilot_streak INT NOT NULL DEFAULT 0,
+      pilot_best_streak INT NOT NULL DEFAULT 0,
+      pilot_total_flights INT NOT NULL DEFAULT 0,
+      route_1_completions INT NOT NULL DEFAULT 0,
+      route_2_completions INT NOT NULL DEFAULT 0,
+      route_3_completions INT NOT NULL DEFAULT 0,
+      route_4_completions INT NOT NULL DEFAULT 0,
+      route_5_completions INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     ALTER TABLE player_fisher_progress
     ADD COLUMN IF NOT EXISTS fisher_rod_tier INT NOT NULL DEFAULT 1;
   `);
@@ -275,6 +293,61 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE player_fisher_progress
     ADD COLUMN IF NOT EXISTS fisher_carry_capacity_kg INT NOT NULL DEFAULT 20;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_level INT NOT NULL DEFAULT 1;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_xp INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_total_earnings BIGINT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_streak INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_best_streak INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_total_flights INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_1_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_2_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_3_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_4_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_5_completions INT NOT NULL DEFAULT 0;
   `);
 
   const requiredColumns = [
@@ -1217,6 +1290,343 @@ function fisherStateView(session, progressView) {
 function fisherSetRepair(session, label) {
   session.repairUntil = Date.now() + FISHER_CONFIG.repairCooldownMs;
   session.repairLabel = label;
+}
+
+const PILOT_MAX_LEVEL = 50;
+
+const PILOT_CONFIG = {
+  startCooldownMs: 15000,
+  actionCooldownMs: 500,
+  completionGraceMs: 250,
+  streakBonusPerStep: 0.015,
+  streakBonusMax: 0.12,
+  firstCompletionBonusCash: 2500,
+  firstCompletionBonusXp: 25,
+  milestoneBonusCash: {
+    5: 2500,
+    10: 5000,
+    25: 10000,
+  },
+  milestoneBonusXp: {
+    5: 15,
+    10: 30,
+    25: 60,
+  },
+  routes: [
+    {
+      id: 'ROUTE_1',
+      index: 1,
+      name: 'Route 1',
+      theme: 'Skydivers',
+      routePath: 'Sandy Airport -> Paleto Airport',
+      durationSeconds: 5,
+      baseReward: 20000,
+      baseXp: 120,
+      unlockLevel: 1,
+      requiredPreviousRouteId: null,
+      requiredPreviousCompletions: 0,
+      progressionCompletions: 25,
+      stages: [
+        'Preparing aircraft for skydiving mission',
+        'Boarding skydivers',
+        'Taking off from Sandy Airport',
+        'En route to Paleto Airport',
+        'Arrived at Paleto Airport',
+        'Skydivers deployed',
+        'Mission confirmed',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_2',
+      index: 2,
+      name: 'Route 2',
+      theme: 'Farm Fertilizer Spraying',
+      routePath: 'Paleto Airport -> Farm Airport',
+      durationSeconds: 7,
+      baseReward: 20000,
+      baseXp: 170,
+      unlockLevel: 10,
+      requiredPreviousRouteId: 'ROUTE_1',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'Refueling crop-dusting aircraft',
+        'Loading fertilizer tanks',
+        'Taking off from Paleto Airport',
+        'Flying to Farm Airport',
+        'Spraying fertilizer over the fields',
+        'Operation complete',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_3',
+      index: 3,
+      name: 'Route 3',
+      theme: 'Military Transport',
+      routePath: 'Military Base -> Los Santos Airport',
+      durationSeconds: 10,
+      baseReward: 35000,
+      baseXp: 240,
+      unlockLevel: 20,
+      requiredPreviousRouteId: 'ROUTE_2',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'Military authorization check',
+        'Loading military cargo',
+        'Taking off from Military Base',
+        'Secure flight in progress',
+        'Landing at Los Santos Airport',
+        'Unloading military cargo',
+        'Mission confirmed',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_4',
+      index: 4,
+      name: 'Route 4',
+      theme: 'Passenger Transport',
+      routePath: 'Los Santos Airport -> Cayo Airport -> Sandy Airport -> Paleto Airport',
+      durationSeconds: 12,
+      baseReward: 50000,
+      baseXp: 320,
+      unlockLevel: 30,
+      requiredPreviousRouteId: 'ROUTE_3',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'Passenger check-in at Los Santos Airport',
+        'Taking off from Los Santos Airport',
+        'Landing at Cayo Airport',
+        'Passenger transfer at Cayo',
+        'Departing to Sandy Airport',
+        'Landing at Sandy Airport',
+        'Passenger transfer at Sandy',
+        'Departing to Paleto Airport',
+        'Final arrival at Paleto Airport',
+        'Passenger transport complete',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_5',
+      index: 5,
+      name: 'Route 5',
+      theme: 'NASA Mission',
+      routePath: 'Military Base Airport -> Los Santos -> Paleto -> Sandy -> NASA Airport',
+      durationSeconds: 15,
+      baseReward: 75000,
+      baseXp: 450,
+      unlockLevel: 40,
+      requiredPreviousRouteId: 'ROUTE_4',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'NASA mission briefing',
+        'Loading special equipment',
+        'Taking off from Military Base Airport',
+        'Stopover at Los Santos',
+        'Stopover at Paleto',
+        'Stopover at Sandy',
+        'Final approach to NASA Airport',
+        'NASA landing clearance approved',
+        'Unloading mission equipment',
+        'Special mission confirmed',
+        'Flight completed',
+      ],
+    },
+  ],
+};
+
+const pilotSessions = new Map();
+
+function pilotXpForLevel(level) {
+  return pizzerXpForLevel(level);
+}
+
+function computePilotLevel(xp) {
+  const safeXp = Math.max(0, Math.floor(Number(xp) || 0));
+  let level = 1;
+  for (let i = 2; i <= PILOT_MAX_LEVEL; i += 1) {
+    if (safeXp >= pilotXpForLevel(i)) level = i;
+  }
+  return Math.min(PILOT_MAX_LEVEL, level);
+}
+
+function pilotLevelStartXp(level) {
+  return pilotXpForLevel(level);
+}
+
+function pilotNextLevelXp(level) {
+  if (level >= PILOT_MAX_LEVEL) return null;
+  return pilotXpForLevel(level + 1);
+}
+
+function pilotCompletionColumnByRoute(routeId) {
+  if (routeId === 'ROUTE_1') return 'route_1_completions';
+  if (routeId === 'ROUTE_2') return 'route_2_completions';
+  if (routeId === 'ROUTE_3') return 'route_3_completions';
+  if (routeId === 'ROUTE_4') return 'route_4_completions';
+  return 'route_5_completions';
+}
+
+function pilotCompletionsByRoute(progressView, routeId) {
+  if (routeId === 'ROUTE_1') return Number(progressView.route1Completions || 0);
+  if (routeId === 'ROUTE_2') return Number(progressView.route2Completions || 0);
+  if (routeId === 'ROUTE_3') return Number(progressView.route3Completions || 0);
+  if (routeId === 'ROUTE_4') return Number(progressView.route4Completions || 0);
+  return Number(progressView.route5Completions || 0);
+}
+
+function pilotRouteById(routeId) {
+  return PILOT_CONFIG.routes.find((route) => route.id === routeId) || null;
+}
+
+function pilotRouteLockReasons(route, progressView) {
+  const reasons = [];
+  if (Number(progressView.level || 1) < Number(route.unlockLevel || 1)) {
+    reasons.push(`Requires Level ${route.unlockLevel}`);
+  }
+  if (route.requiredPreviousRouteId && Number(route.requiredPreviousCompletions || 0) > 0) {
+    const currentPrev = pilotCompletionsByRoute(progressView, route.requiredPreviousRouteId);
+    if (currentPrev < Number(route.requiredPreviousCompletions || 0)) {
+      const prevRoute = pilotRouteById(route.requiredPreviousRouteId);
+      reasons.push(`Requires ${route.requiredPreviousCompletions} completions of ${prevRoute?.name || route.requiredPreviousRouteId}`);
+    }
+  }
+  return reasons;
+}
+
+function pilotBuildRouteView(route, progressView) {
+  const completions = pilotCompletionsByRoute(progressView, route.id);
+  const lockReasons = pilotRouteLockReasons(route, progressView);
+  const stageCount = Math.max(1, Number(route.stages?.length || 1));
+  const stageDurationMs = Math.floor((Number(route.durationSeconds || 1) * 1000) / stageCount);
+  return {
+    id: route.id,
+    index: route.index,
+    name: route.name,
+    theme: route.theme,
+    routePath: route.routePath,
+    durationSeconds: route.durationSeconds,
+    baseReward: route.baseReward,
+    baseXp: route.baseXp,
+    unlockLevel: route.unlockLevel,
+    requiredPreviousRouteId: route.requiredPreviousRouteId,
+    requiredPreviousCompletions: route.requiredPreviousCompletions,
+    progressionCompletions: route.progressionCompletions,
+    completions,
+    progressLabel: `${completions}/${route.progressionCompletions}`,
+    locked: lockReasons.length > 0,
+    lockReasons,
+    stageDurationMs,
+    stages: [...route.stages],
+  };
+}
+
+function pilotUnlockedRouteIds(progressView) {
+  return PILOT_CONFIG.routes
+    .filter((route) => pilotRouteLockReasons(route, progressView).length === 0)
+    .map((route) => route.id);
+}
+
+async function ensurePilotProgress(db, playerId) {
+  await db.query(
+    `INSERT INTO player_pilot_progress (player_id)
+     VALUES ($1)
+     ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM player_pilot_progress WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+function toPilotProgressView(row) {
+  const xp = Number(row?.pilot_xp || 0);
+  const level = Math.max(1, Math.min(PILOT_MAX_LEVEL, Number(row?.pilot_level || computePilotLevel(xp))));
+  const currentStart = pilotLevelStartXp(level);
+  const next = pilotNextLevelXp(level);
+  return {
+    level,
+    xp,
+    currentLevelXp: xp - currentStart,
+    nextLevelXp: next,
+    totalEarnings: Number(row?.pilot_total_earnings || 0),
+    streak: Number(row?.pilot_streak || 0),
+    bestStreak: Number(row?.pilot_best_streak || 0),
+    totalFlights: Number(row?.pilot_total_flights || 0),
+    route1Completions: Number(row?.route_1_completions || 0),
+    route2Completions: Number(row?.route_2_completions || 0),
+    route3Completions: Number(row?.route_3_completions || 0),
+    route4Completions: Number(row?.route_4_completions || 0),
+    route5Completions: Number(row?.route_5_completions || 0),
+  };
+}
+
+function getPilotSession(playerId) {
+  return pilotSessions.get(playerId) || {
+    shiftState: 'IDLE',
+    selectedRouteId: null,
+    activeFlight: null,
+    lastResult: null,
+    cooldownUntil: 0,
+    lastActionAt: 0,
+  };
+}
+
+function setPilotSession(playerId, session) {
+  pilotSessions.set(playerId, session);
+}
+
+function enforcePilotActionCooldown(session) {
+  const now = Date.now();
+  if (now - Number(session.lastActionAt || 0) < PILOT_CONFIG.actionCooldownMs) {
+    throw new Error('wait 0.5s between actions');
+  }
+  session.lastActionAt = now;
+}
+
+function pilotStateView(session, progressView) {
+  const now = Date.now();
+  const activeFlight = session.activeFlight
+    ? {
+        sessionId: session.activeFlight.sessionId,
+        routeId: session.activeFlight.routeId,
+        startedAt: session.activeFlight.startedAt,
+        minFinishAt: session.activeFlight.minFinishAt,
+        elapsedMs: Math.max(0, now - Number(session.activeFlight.startedAt || 0)),
+        remainingMs: Math.max(0, Number(session.activeFlight.minFinishAt || 0) - now),
+      }
+    : null;
+
+  return {
+    progress: progressView,
+    shiftState: session.shiftState,
+    selectedRouteId: session.selectedRouteId || null,
+    streak: Number(progressView.streak || 0),
+    routes: PILOT_CONFIG.routes.map((route) => pilotBuildRouteView(route, progressView)),
+    activeFlight,
+    lastResult: session.lastResult || null,
+  };
+}
+
+async function addPilotTimeForFlight(db, playerId, hoursToAdd) {
+  const safeHours = Math.max(0, Number(hoursToAdd || 0));
+  if (safeHours <= 0) return;
+  await db.query(
+    `
+    INSERT INTO player_stats (player_id, time_pilot, last_seen, updated_at)
+    VALUES ($1, $2, NOW(), NOW())
+    ON CONFLICT (player_id) DO UPDATE SET
+      time_pilot = player_stats.time_pilot + $2,
+      last_seen = NOW(),
+      updated_at = NOW()
+    `,
+    [playerId, safeHours],
+  );
 }
 
 const NPC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
@@ -2613,6 +3023,413 @@ app.post('/api/player/cash/adjust', requireDb, async (req, res) => {
     res.json({ ok: true, cleanMoney: result });
   } catch (error) {
     res.status(400).json({ error: error.message || 'cash adjust failed' });
+  }
+});
+
+app.get('/api/pilot/state', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    await ensurePlayer(pool, playerId);
+    const progress = await ensurePilotProgress(pool, playerId);
+    const session = getPilotSession(playerId);
+    setPilotSession(playerId, session);
+    res.json(pilotStateView(session, toPilotProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'pilot state failed' });
+  }
+});
+
+app.post('/api/pilot/shift/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePilotProgress(pool, playerId);
+    const progressView = toPilotProgressView(progress);
+    const now = Date.now();
+    const session = getPilotSession(playerId);
+
+    if (session.shiftState !== 'IDLE') {
+      return res.status(400).json({ error: 'shift already active' });
+    }
+    if (session.cooldownUntil && session.cooldownUntil > now) {
+      return res.status(400).json({ error: 'shift cooldown active' });
+    }
+
+    const nextSession = {
+      ...session,
+      shiftState: 'SELECTING_ROUTE',
+      selectedRouteId: null,
+      activeFlight: null,
+      lastResult: null,
+      lastActionAt: 0,
+    };
+    setPilotSession(playerId, nextSession);
+    res.json(pilotStateView(nextSession, progressView));
+  } catch (error) {
+    res.status(500).json({ error: 'start pilot shift failed' });
+  }
+});
+
+app.post('/api/pilot/shift/end', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePilotProgress(db, playerId);
+      const progressBefore = toPilotProgressView(progressRow);
+      const session = getPilotSession(playerId);
+
+      let nextProgress = progressBefore;
+      if (session.activeFlight) {
+        await db.query(`UPDATE player_pilot_progress SET pilot_streak = 0, updated_at = NOW() WHERE player_id = $1`, [playerId]);
+        const updated = await ensurePilotProgress(db, playerId);
+        nextProgress = toPilotProgressView(updated);
+      }
+
+      const nextSession = {
+        ...session,
+        shiftState: 'IDLE',
+        selectedRouteId: null,
+        activeFlight: null,
+        cooldownUntil: Date.now() + PILOT_CONFIG.startCooldownMs,
+      };
+      if (session.activeFlight) {
+        nextSession.lastResult = {
+          routeId: session.activeFlight.routeId,
+          completed: false,
+          cancelled: true,
+          failReason: 'Flight cancelled. Streak reset.',
+          breakdown: {
+            baseReward: 0,
+            levelBonus: 0,
+            streakBonus: 0,
+            milestoneBonus: 0,
+            firstCompletionBonus: 0,
+            totalCash: 0,
+            baseXp: 0,
+            streakXpBonus: 0,
+            milestoneXpBonus: 0,
+            firstCompletionXpBonus: 0,
+            totalXp: 0,
+          },
+          progression: {
+            levelBefore: progressBefore.level,
+            levelAfter: nextProgress.level,
+            xpBefore: progressBefore.xp,
+            xpAfter: nextProgress.xp,
+            newlyUnlockedRouteIds: [],
+            milestoneLabel: null,
+            promotionLabel: null,
+          },
+        };
+      }
+
+      setPilotSession(playerId, nextSession);
+      return {
+        state: pilotStateView(nextSession, nextProgress),
+      };
+    });
+
+    res.json(outcome.state);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'end pilot shift failed' });
+  }
+});
+
+app.post('/api/pilot/route/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, routeId } = req.body || {};
+    if (!playerId || !routeId) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensurePilotProgress(pool, playerId);
+    const progressView = toPilotProgressView(progress);
+    const session = getPilotSession(playerId);
+
+    if (session.shiftState === 'IDLE') {
+      return res.status(400).json({ error: 'shift not active' });
+    }
+    if (session.activeFlight) {
+      return res.status(400).json({ error: 'flight already running' });
+    }
+    enforcePilotActionCooldown(session);
+
+    const route = pilotRouteById(String(routeId));
+    if (!route) return res.status(404).json({ error: 'route not found' });
+
+    const lockReasons = pilotRouteLockReasons(route, progressView);
+    if (lockReasons.length > 0) {
+      return res.status(400).json({ error: lockReasons[0] });
+    }
+
+    session.selectedRouteId = route.id;
+    session.shiftState = 'ROUTE_READY';
+    session.lastResult = null;
+    setPilotSession(playerId, session);
+
+    res.json(pilotStateView(session, progressView));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'select route failed' });
+  }
+});
+
+app.post('/api/pilot/flight/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePilotProgress(pool, playerId);
+    const progressView = toPilotProgressView(progress);
+    const session = getPilotSession(playerId);
+
+    if (session.shiftState !== 'ROUTE_READY') {
+      return res.status(400).json({ error: 'route not ready' });
+    }
+    if (!session.selectedRouteId) {
+      return res.status(400).json({ error: 'select route first' });
+    }
+    if (session.activeFlight) {
+      return res.status(400).json({ error: 'flight already running' });
+    }
+    enforcePilotActionCooldown(session);
+
+    const route = pilotRouteById(session.selectedRouteId);
+    if (!route) return res.status(404).json({ error: 'route not found' });
+    const lockReasons = pilotRouteLockReasons(route, progressView);
+    if (lockReasons.length > 0) return res.status(400).json({ error: lockReasons[0] });
+
+    const now = Date.now();
+    session.activeFlight = {
+      sessionId: crypto.randomBytes(10).toString('hex'),
+      routeId: route.id,
+      startedAt: now,
+      minFinishAt: now + Number(route.durationSeconds || 1) * 1000,
+      completing: false,
+    };
+    session.shiftState = 'FLIGHT_STAGE_PROGRESS';
+    session.lastResult = null;
+    setPilotSession(playerId, session);
+
+    res.json({
+      state: pilotStateView(session, progressView),
+      flight: {
+        sessionId: session.activeFlight.sessionId,
+        routeId: route.id,
+        durationSeconds: route.durationSeconds,
+        stages: [...route.stages],
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'start flight failed' });
+  }
+});
+
+app.post('/api/pilot/flight/cancel', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePilotProgress(db, playerId);
+      const progressBefore = toPilotProgressView(progressRow);
+      const session = getPilotSession(playerId);
+
+      if (!session.activeFlight) throw new Error('no active flight');
+      await db.query(`UPDATE player_pilot_progress SET pilot_streak = 0, updated_at = NOW() WHERE player_id = $1`, [playerId]);
+      const updated = await ensurePilotProgress(db, playerId);
+      const progressAfter = toPilotProgressView(updated);
+
+      session.activeFlight = null;
+      session.shiftState = 'SELECTING_ROUTE';
+      session.lastResult = {
+        routeId: session.selectedRouteId,
+        completed: false,
+        cancelled: true,
+        failReason: 'Flight cancelled. Streak reset.',
+        breakdown: {
+          baseReward: 0,
+          levelBonus: 0,
+          streakBonus: 0,
+          milestoneBonus: 0,
+          firstCompletionBonus: 0,
+          totalCash: 0,
+          baseXp: 0,
+          streakXpBonus: 0,
+          milestoneXpBonus: 0,
+          firstCompletionXpBonus: 0,
+          totalXp: 0,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          newlyUnlockedRouteIds: [],
+          milestoneLabel: null,
+          promotionLabel: null,
+        },
+      };
+      setPilotSession(playerId, session);
+      return {
+        state: pilotStateView(session, progressAfter),
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'cancel flight failed' });
+  }
+});
+
+app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const session = getPilotSession(playerId);
+    if (!session.activeFlight) {
+      return res.status(400).json({ error: 'no active flight' });
+    }
+    if (session.activeFlight.completing) {
+      return res.status(400).json({ error: 'flight already being completed' });
+    }
+
+    session.activeFlight.completing = true;
+    setPilotSession(playerId, session);
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePilotProgress(db, playerId);
+      const progressBefore = toPilotProgressView(progressRow);
+      const activeSession = getPilotSession(playerId);
+      const activeFlight = activeSession.activeFlight;
+      if (!activeFlight) throw new Error('no active flight');
+
+      const route = pilotRouteById(activeFlight.routeId);
+      if (!route) throw new Error('route not found');
+
+      const lockReasons = pilotRouteLockReasons(route, progressBefore);
+      if (lockReasons.length > 0) throw new Error(lockReasons[0]);
+
+      const now = Date.now();
+      if (now + PILOT_CONFIG.completionGraceMs < Number(activeFlight.minFinishAt || 0)) {
+        throw new Error('flight duration not completed yet');
+      }
+
+      const beforeUnlocked = pilotUnlockedRouteIds(progressBefore);
+      const routeCompletionsBefore = pilotCompletionsByRoute(progressBefore, route.id);
+      const totalFlightsAfter = Number(progressBefore.totalFlights || 0) + 1;
+      const currentStreak = Number(progressBefore.streak || 0);
+      const nextStreak = currentStreak + 1;
+
+      const levelMultiplier = 1 + (Math.max(1, Number(progressBefore.level || 1)) - 1) * 0.01;
+      const streakMultiplier = 1 + Math.min(PILOT_CONFIG.streakBonusMax, currentStreak * PILOT_CONFIG.streakBonusPerStep);
+
+      const baseReward = Number(route.baseReward || 0);
+      const levelBonus = Math.max(0, Math.floor(baseReward * (levelMultiplier - 1)));
+      const streakBonus = Math.max(0, Math.floor((baseReward + levelBonus) * (streakMultiplier - 1)));
+      const milestoneBonus = Number(PILOT_CONFIG.milestoneBonusCash[String(totalFlightsAfter)] || 0);
+      const firstCompletionBonus = routeCompletionsBefore === 0 ? Number(PILOT_CONFIG.firstCompletionBonusCash || 0) : 0;
+      const totalCash = Math.max(0, baseReward + levelBonus + streakBonus + milestoneBonus + firstCompletionBonus);
+
+      const baseXp = Number(route.baseXp || 0);
+      const streakXpBonus = Math.max(0, Math.min(30, currentStreak * 2));
+      const milestoneXpBonus = Number(PILOT_CONFIG.milestoneBonusXp[String(totalFlightsAfter)] || 0);
+      const firstCompletionXpBonus = routeCompletionsBefore === 0 ? Number(PILOT_CONFIG.firstCompletionBonusXp || 0) : 0;
+      const totalXp = Math.max(0, Math.floor(baseXp + streakXpBonus + milestoneXpBonus + firstCompletionXpBonus));
+
+      const nextXp = Number(progressBefore.xp || 0) + totalXp;
+      const nextLevel = computePilotLevel(nextXp);
+      const nextBestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+      const routeColumn = pilotCompletionColumnByRoute(route.id);
+
+      await db.query(
+        `UPDATE player_pilot_progress
+         SET pilot_level = $2,
+             pilot_xp = $3,
+             pilot_total_earnings = pilot_total_earnings + $4,
+             pilot_streak = $5,
+             pilot_best_streak = GREATEST(pilot_best_streak, $6),
+             pilot_total_flights = pilot_total_flights + 1,
+             ${routeColumn} = ${routeColumn} + 1,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          totalCash,
+          nextStreak,
+          nextBestStreak,
+        ],
+      );
+
+      if (totalCash > 0) {
+        await db.query(`UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`, [playerId, totalCash]);
+      }
+
+      await addPilotTimeForFlight(db, playerId, Number(route.durationSeconds || 0) / 3600);
+
+      const updatedProgressRow = await ensurePilotProgress(db, playerId);
+      const progressAfter = toPilotProgressView(updatedProgressRow);
+      const afterUnlocked = pilotUnlockedRouteIds(progressAfter);
+      const newlyUnlockedRouteIds = afterUnlocked.filter((routeId) => !beforeUnlocked.includes(routeId));
+
+      const milestoneLabel = [5, 10, 25].includes(totalFlightsAfter)
+        ? `Milestone Reached: ${totalFlightsAfter} Completed Flights`
+        : null;
+      const promotionLabel = nextLevel > Number(progressBefore.level || 1)
+        ? `Pilot Promotion Achieved: Pilot Lv. ${nextLevel}`
+        : null;
+
+      activeSession.activeFlight = null;
+      activeSession.shiftState = 'SELECTING_ROUTE';
+      activeSession.lastResult = {
+        sessionId: activeFlight.sessionId,
+        routeId: route.id,
+        completed: true,
+        cancelled: false,
+        failReason: null,
+        breakdown: {
+          baseReward,
+          levelBonus,
+          streakBonus,
+          milestoneBonus,
+          firstCompletionBonus,
+          totalCash,
+          baseXp,
+          streakXpBonus,
+          milestoneXpBonus,
+          firstCompletionXpBonus,
+          totalXp,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          newlyUnlockedRouteIds,
+          milestoneLabel,
+          promotionLabel,
+        },
+      };
+      setPilotSession(playerId, activeSession);
+
+      return {
+        state: pilotStateView(activeSession, progressAfter),
+        result: activeSession.lastResult,
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    const session = getPilotSession(req.body?.playerId);
+    if (session?.activeFlight?.completing) {
+      session.activeFlight.completing = false;
+      setPilotSession(req.body?.playerId, session);
+    }
+    res.status(400).json({ error: error.message || 'complete flight failed' });
   }
 });
 

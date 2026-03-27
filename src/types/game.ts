@@ -413,3 +413,97 @@ export interface FisherCatchResult {
     unlockedTier: 'COMMON' | 'BETTER' | 'PREMIUM' | null;
   };
 }
+
+export type PilotShiftState =
+  | 'IDLE'
+  | 'STARTING_SHIFT'
+  | 'SELECTING_ROUTE'
+  | 'ROUTE_READY'
+  | 'FLIGHT_RUNNING'
+  | 'FLIGHT_STAGE_PROGRESS'
+  | 'FLIGHT_RESULT'
+  | 'END_SHIFT';
+
+export interface PilotProgress {
+  level: number;
+  xp: number;
+  currentLevelXp: number;
+  nextLevelXp: number | null;
+  totalEarnings: number;
+  streak: number;
+  bestStreak: number;
+  totalFlights: number;
+  route1Completions: number;
+  route2Completions: number;
+  route3Completions: number;
+  route4Completions: number;
+  route5Completions: number;
+}
+
+export interface PilotRouteView {
+  id: string;
+  index: number;
+  name: string;
+  theme: string;
+  routePath: string;
+  durationSeconds: number;
+  baseReward: number;
+  baseXp: number;
+  unlockLevel: number;
+  requiredPreviousRouteId: string | null;
+  requiredPreviousCompletions: number;
+  progressionCompletions: number;
+  completions: number;
+  progressLabel: string;
+  locked: boolean;
+  lockReasons: string[];
+  stageDurationMs: number;
+  stages: string[];
+}
+
+export interface PilotStateResponse {
+  progress: PilotProgress;
+  shiftState: PilotShiftState;
+  selectedRouteId: string | null;
+  streak: number;
+  routes: PilotRouteView[];
+  activeFlight: {
+    sessionId: string;
+    routeId: string;
+    startedAt: number;
+    minFinishAt: number;
+    elapsedMs: number;
+    remainingMs: number;
+  } | null;
+  lastResult?: PilotFlightResult | null;
+}
+
+export interface PilotFlightResult {
+  sessionId?: string;
+  routeId: string;
+  completed: boolean;
+  cancelled: boolean;
+  failReason: string | null;
+  breakdown: {
+    baseReward: number;
+    levelBonus: number;
+    streakBonus: number;
+    milestoneBonus: number;
+    firstCompletionBonus: number;
+    totalCash: number;
+    baseXp: number;
+    streakXpBonus: number;
+    milestoneXpBonus: number;
+    firstCompletionXpBonus: number;
+    totalXp: number;
+  };
+  progression: {
+    levelBefore: number;
+    levelAfter: number;
+    xpBefore: number;
+    xpAfter: number;
+    newlyUnlockedRouteIds: string[];
+    milestoneLabel: string | null;
+    promotionLabel: string | null;
+  };
+}

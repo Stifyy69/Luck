@@ -1,163 +1,353 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
+import type { PilotRouteView, PilotStateResponse } from '../types/game';
 
-const GAME_KEY = 'luck_game_state_v1';
-const GAME_SALT = 'stifyy-ogromania-salt';
+type Popup = { text: string; isError?: boolean } | null;
 
-function signPayload(payload: unknown) {
-  const raw = JSON.stringify(payload) + GAME_SALT;
-  let hash = 0;
-  for (let i = 0; i < raw.length; i += 1) hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
-  return String(hash);
+function fmt(n: number) {
+  return n.toLocaleString('en-US');
 }
 
-function loadGameState() {
-  try {
-    const raw = localStorage.getItem(GAME_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.data || !parsed?.sig) return null;
-    return signPayload(parsed.data) === parsed.sig ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveGameState(data: unknown) {
-  try {
-    localStorage.setItem(GAME_KEY, JSON.stringify({ data, sig: signPayload(data) }));
-  } catch {}
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 export default function PilotPage() {
-  const { player, playerId, refresh } = usePlayer();
-  const [timer, setTimer] = useState(0);
-  const [cooldown, setCooldown] = useState(0);
-  const [popup, setPopup] = useState<string | null>(null);
-  const [runBoostMultiplier, setRunBoostMultiplier] = useState(1);
+  const { playerId, player, refresh } = usePlayer();
+  const [state, setState] = useState<PilotStateResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [popup, setPopup] = useState<Popup>(null);
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const [overlayRoute, setOverlayRoute] = useState<PilotRouteView | null>(null);
+  const [overlayStageIndex, setOverlayStageIndex] = useState(0);
+  const [overlayProgress, setOverlayProgress] = useState(0);
 
-  const pilotBoostItem = player?.inventory.find((item) => item.itemType === 'JOB_BOOST_PILOT' && item.quantity > 0) ?? null;
-  const pilotBoostCount = pilotBoostItem?.quantity ?? 0;
+  const pushPopup = useCallback((text: string, isError = false) => {
+    setPopup({ text, isError });
+    window.setTimeout(() => setPopup(null), 2400);
+  }, []);
+
+  const loadState = useCallback(async () => {
+    try {
+      const next = await api.pilotState(playerId);
+      setState(next);
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Failed to load pilot state', true);
+    }
+  }, [playerId, pushPopup]);
 
   useEffect(() => {
-    const tick = () => {
-      const state = loadGameState() || {};
-      const now = Date.now();
-      const pilotEndsAt = state.pilotEndsAt ?? 0;
-      setTimer(Math.max(0, Math.ceil((pilotEndsAt - now) / 1000)));
-      setCooldown(Math.max(0, Math.ceil(((state.pilotCooldownUntil ?? 0) - now) / 1000)));
-      if (pilotEndsAt > now) {
-        setRunBoostMultiplier(Number(state.pilotRewardMultiplier ?? 1));
-      } else {
-        setRunBoostMultiplier(1);
+    loadState().catch(() => {});
+  }, [loadState]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!state) return;
+      if (state.shiftState !== 'IDLE') {
+        loadState().catch(() => {});
       }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [state, loadState]);
 
-      if ((state.pilotEndsAt ?? 0) > 0 && (state.pilotEndsAt ?? 0) <= now && !state.pilotRewardClaimed) {
-        const multiplier = Number(state.pilotRewardMultiplier ?? 1);
-        const reward = 100_000 * multiplier;
-        const nextPilot = Number(state.timePilot ?? 0) + 0.5;
-        saveGameState({
-          ...state,
-          cashBalance: Number(player?.cleanMoney ?? state.cashBalance ?? 0),
-          baniCurati: Number(player?.cleanMoney ?? state.cashBalance ?? 0),
-          timePilot: nextPilot,
-          pilotCount: Number(state.pilotCount ?? 0) + 1,
-          pilotMoney: Number(state.pilotMoney ?? 0) + reward,
-          pilotRewardClaimed: true,
-          pilotRewardMultiplier: 1,
-          pilotCooldownUntil: now + 30_000,
-        });
-
-        (async () => {
-          try {
-            const adjusted = await api.playerCashAdjust(playerId, reward);
-            const newest = loadGameState() || {};
-            saveGameState({
-              ...newest,
-              cashBalance: Number(adjusted.cleanMoney),
-              baniCurati: Number(adjusted.cleanMoney),
-            });
-            refresh();
-          } catch {
-            setPopup('Pilot finished, but cash sync failed. Retry page refresh.');
-          }
-        })();
-
-        setPopup(`Pilot completed. +${reward.toLocaleString('en-US')} clean money. 30s cooldown.`);
-        window.setTimeout(() => setPopup(null), 2200);
-      }
-    };
-
-    tick();
-    const timerId = window.setInterval(tick, 250);
-    return () => window.clearInterval(timerId);
-  }, [player?.cleanMoney, playerId, refresh]);
-
-  const startPilot = async () => {
-    const state = loadGameState() || {};
-    const now = Date.now();
-    if ((state.pilotCooldownUntil ?? 0) > now) return;
-    if ((state.pilotEndsAt ?? 0) > now) return;
-
-    let multiplier = 1;
-    if (pilotBoostItem) {
-      try {
-        await api.inventoryUse(playerId, pilotBoostItem.id);
-        await refresh();
-        multiplier = 2;
-        setPopup('Pilot Boost consumed for this run (x2).');
-        window.setTimeout(() => setPopup(null), 1800);
-      } catch {
-        setPopup('Could not consume Pilot Boost. Starting normal pilot run.');
-        window.setTimeout(() => setPopup(null), 1800);
-      }
+  const startShift = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await api.pilotShiftStart(playerId);
+      setState(next);
+      pushPopup('Pilot shift started. Select a route.');
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Could not start pilot shift', true);
+    } finally {
+      setBusy(false);
     }
-
-    saveGameState({
-      ...state,
-      pilotEndsAt: now + 3000,
-      pilotRewardClaimed: false,
-      pilotRewardMultiplier: multiplier,
-    });
   };
 
-  const isRunning = timer > 0;
+  const endShift = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await api.pilotShiftEnd(playerId);
+      setState(next);
+      setOverlayOpen(false);
+      setOverlayRoute(null);
+      setOverlayStageIndex(0);
+      setOverlayProgress(0);
+      pushPopup('Pilot shift ended.');
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Could not end pilot shift', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectRoute = async (routeId: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await api.pilotRouteSelect(playerId, routeId);
+      setState(next);
+      pushPopup('Route selected. Press Start Flight.');
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Route selection failed', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startFlight = async () => {
+    if (busy || !state?.selectedRouteId) return;
+    setBusy(true);
+    try {
+      const payload = await api.pilotFlightStart(playerId);
+      setState(payload.state);
+
+      const route = (payload.state.routes || []).find((entry) => entry.id === payload.flight.routeId) || null;
+      if (!route) throw new Error('Route data missing');
+
+      setOverlayRoute(route);
+      setOverlayOpen(true);
+      setOverlayStageIndex(0);
+      setOverlayProgress(0);
+
+      const stageCount = Math.max(1, route.stages.length);
+      const stageDurationMs = Math.max(200, Math.floor((route.durationSeconds * 1000) / stageCount));
+
+      for (let i = 0; i < stageCount; i += 1) {
+        setOverlayStageIndex(i);
+        setOverlayProgress(Math.floor(((i + 1) / stageCount) * 100));
+        await wait(stageDurationMs);
+      }
+
+      await wait(500);
+      const finished = await api.pilotFlightComplete(playerId);
+      setState(finished.state);
+      await refresh();
+      setOverlayOpen(false);
+      setOverlayRoute(null);
+      setOverlayStageIndex(0);
+      setOverlayProgress(0);
+
+      if (finished.result?.completed) {
+        pushPopup(`Flight completed. +${fmt(finished.result.breakdown.totalCash)} $ / +${finished.result.breakdown.totalXp} XP`);
+      }
+    } catch (e) {
+      setOverlayOpen(false);
+      setOverlayRoute(null);
+      setOverlayStageIndex(0);
+      setOverlayProgress(0);
+      pushPopup(e instanceof Error ? e.message : 'Start flight failed', true);
+      await loadState();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelFlight = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const payload = await api.pilotFlightCancel(playerId);
+      setState(payload.state);
+      setOverlayOpen(false);
+      setOverlayRoute(null);
+      setOverlayStageIndex(0);
+      setOverlayProgress(0);
+      pushPopup('Flight cancelled. Streak reset.', true);
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Cancel flight failed', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const progress = state?.progress;
+  const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
+  const selectedRoute = useMemo(() => (state?.routes || []).find((route) => route.id === state.selectedRouteId) || null, [state]);
+  const canStartShift = state?.shiftState === 'IDLE';
+  const canStartFlight = state?.shiftState === 'ROUTE_READY' && !!selectedRoute && !busy;
 
   return (
-    <div className="min-h-screen bg-transparent px-4 pb-10 pt-20 text-white sm:px-6">
-      <div className="mx-auto grid max-w-[1040px] grid-cols-1 gap-4">
-        <div className="hud-panel p-6 text-center backdrop-blur-xl">
-          <div className="mx-auto mb-4 flex h-36 w-36 items-center justify-center rounded-full border border-white/20 bg-black/25 text-7xl">🛩️</div>
-          <h1 className="text-4xl font-black uppercase">Pilot Job</h1>
-          <p className="mt-2 text-white/80">Run a pilot mission and get paid.</p>
-          <p className="text-white/70">Base reward: 100,000 clean money.</p>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(42,148,255,0.16),_transparent_55%),linear-gradient(180deg,rgba(5,10,22,0.95),rgba(2,7,16,0.98))] px-4 py-6 md:py-8">
+      {popup && (
+        <div className={`fixed left-1/2 top-8 z-[85] -translate-x-1/2 rounded-xl border px-4 py-3 text-sm font-black shadow-xl backdrop-blur ${popup.isError ? 'border-red-500/40 bg-red-900/80 text-red-100' : 'border-sky-400/45 bg-sky-950/85 text-sky-100'}`}>
+          {popup.text}
+        </div>
+      )}
 
-          <div className="mx-auto mt-5 max-w-md rounded-xl border border-white/15 bg-black/20 p-4 text-left">
-            <p className="text-xs uppercase tracking-widest text-white/45">Pilot Boost</p>
-            <p className="mt-1 text-sm text-white/80">Ready boosts: <span className="font-black text-[#ffd95a]">x{pilotBoostCount}</span></p>
-            <p className="text-sm text-white/70">Current run multiplier: <span className="font-black text-[#45d483]">x{runBoostMultiplier}</span></p>
-            <p className="mt-1 text-xs text-white/45">If you have a boost, it is consumed one-time when you start Pilot.</p>
+      {overlayOpen && overlayRoute && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 px-4 backdrop-blur-md">
+          <div className="w-full max-w-3xl rounded-3xl border border-sky-400/35 bg-[linear-gradient(140deg,rgba(12,25,46,0.96),rgba(7,14,28,0.98))] p-6 shadow-2xl">
+            <p className="text-xs font-bold uppercase tracking-[0.22em] text-sky-200/70">Flight In Progress</p>
+            <h2 className="mt-2 text-3xl font-black text-white">{overlayRoute.theme}</h2>
+            <p className="mt-1 text-sm text-white/70">{overlayRoute.routePath}</p>
+
+            <div className="mt-6 rounded-2xl border border-sky-400/25 bg-sky-900/20 p-6 text-center">
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-200/70">
+                Stage {Math.min(overlayRoute.stages.length, overlayStageIndex + 1)} / {overlayRoute.stages.length}
+              </p>
+              <p className="mt-3 text-2xl font-black text-sky-100">{overlayRoute.stages[overlayStageIndex] || 'Preparing flight...'}</p>
+            </div>
+
+            <div className="mt-5">
+              <div className="mb-1 flex justify-between text-xs font-bold uppercase tracking-wide text-white/60">
+                <span>Route Progress</span>
+                <span>{overlayProgress}%</span>
+              </div>
+              <div className="h-3 rounded-full bg-white/10">
+                <div className="h-3 rounded-full bg-gradient-to-r from-sky-400 to-cyan-300 transition-all" style={{ width: `${Math.max(0, Math.min(100, overlayProgress))}%` }} />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-center">
+              <button
+                type="button"
+                onClick={() => cancelFlight().catch(() => {})}
+                disabled={busy}
+                className="rounded-xl border border-red-500/40 bg-red-950/35 px-4 py-2 text-sm font-black text-red-100 disabled:opacity-50"
+              >
+                Cancel Flight
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mx-auto max-w-[1180px] space-y-4">
+        <div className="hud-panel p-5">
+          <p className="text-xs uppercase tracking-[0.2em] text-white/45">Work</p>
+          <h1 className="text-3xl font-black text-white">Pilot</h1>
+          <p className="mt-1 text-sm text-white/60">{displayName} · Pilot Lv. {progress?.level ?? 1}</p>
+
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <Stat label="Level" value={String(progress?.level ?? 1)} />
+            <Stat label="XP" value={progress ? `${fmt(progress.xp)} / ${progress.nextLevelXp ? fmt(progress.nextLevelXp) : 'MAX'}` : '0'} />
+            <Stat label="Current Streak" value={String(progress?.streak ?? 0)} />
+            <Stat label="Total Flights" value={String(progress?.totalFlights ?? 0)} />
+            <Stat label="Total Earnings" value={`${fmt(progress?.totalEarnings ?? 0)} $`} />
           </div>
 
-          <button
-            type="button"
-            onClick={() => { startPilot().catch(() => {}); }}
-            disabled={isRunning || cooldown > 0}
-            className={`mt-6 rounded-xl px-6 py-3 text-base font-black ${isRunning || cooldown > 0 ? 'btn-ghost text-white/50' : 'btn-secondary'}`}
-          >
-            {isRunning ? `Pilot running... ${timer}s` : cooldown > 0 ? `Cooldown ${cooldown}s` : 'Start Pilot'}
-          </button>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => startShift().catch(() => {})}
+              disabled={busy || !canStartShift}
+              className="btn-primary rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-50"
+            >
+              Start Shift
+            </button>
+            <button
+              type="button"
+              onClick={() => endShift().catch(() => {})}
+              disabled={busy || state?.shiftState === 'IDLE'}
+              className="rounded-xl border border-red-500/35 bg-red-900/20 px-4 py-2 text-sm font-bold text-red-200 disabled:opacity-50"
+            >
+              End Shift
+            </button>
+            <button
+              type="button"
+              onClick={() => startFlight().catch(() => {})}
+              disabled={!canStartFlight}
+              className="rounded-xl border border-sky-400/40 bg-sky-900/25 px-4 py-2 text-sm font-bold text-sky-100 disabled:opacity-50"
+            >
+              Start Flight
+            </button>
+          </div>
         </div>
+
+        <div className="hud-panel p-5">
+          <h2 className="text-lg font-black text-white">Route Selection</h2>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {(state?.routes || []).map((route) => {
+              const selected = route.id === state?.selectedRouteId;
+              return (
+                <button
+                  key={route.id}
+                  type="button"
+                  onClick={() => selectRoute(route.id).catch(() => {})}
+                  disabled={busy || route.locked || !!state?.activeFlight}
+                  className={`rounded-2xl border p-4 text-left transition ${selected ? 'border-sky-300/60 bg-sky-500/15' : 'border-white/15 bg-white/5 hover:bg-white/10'} disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-black text-white">{route.name}</p>
+                    <span className={`rounded border px-2 py-0.5 text-[10px] font-black ${route.locked ? 'border-orange-400/40 bg-orange-500/15 text-orange-200' : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'}`}>
+                      {route.locked ? 'Locked' : 'Available'}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs uppercase tracking-[0.15em] text-sky-200/85">{route.theme}</p>
+                  <p className="mt-2 text-xs text-white/75">{route.routePath}</p>
+                  <p className="mt-2 text-xs text-white/70">Duration: {route.durationSeconds}s</p>
+                  <p className="text-xs text-white/70">Base Reward: {fmt(route.baseReward)} $</p>
+                  <p className="text-xs text-white/70">Base XP: {route.baseXp}</p>
+                  <p className="text-xs text-white/70">Progress: {route.progressLabel}</p>
+                  {route.lockReasons.map((reason) => (
+                    <p key={`${route.id}-${reason}`} className="mt-1 text-xs font-bold text-orange-200">
+                      {reason}
+                    </p>
+                  ))}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {state?.lastResult && (
+          <div className="hud-panel p-5">
+            <h2 className="text-lg font-black text-white">Flight Result</h2>
+            {state.lastResult.completed ? (
+              <p className="mt-2 text-sm text-emerald-200">Route completed successfully.</p>
+            ) : (
+              <p className="mt-2 text-sm text-red-200">{state.lastResult.failReason || 'Flight not completed.'}</p>
+            )}
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <Summary label="Base Reward" value={`${fmt(state.lastResult.breakdown.baseReward)} $`} />
+              <Summary label="Level Bonus" value={`${fmt(state.lastResult.breakdown.levelBonus)} $`} />
+              <Summary label="Streak Bonus" value={`${fmt(state.lastResult.breakdown.streakBonus)} $`} />
+              <Summary label="Milestone Bonus" value={`${fmt(state.lastResult.breakdown.milestoneBonus)} $`} />
+              <Summary label="First Completion Bonus" value={`${fmt(state.lastResult.breakdown.firstCompletionBonus)} $`} />
+              <Summary label="Total Cash" value={`${fmt(state.lastResult.breakdown.totalCash)} $`} />
+              <Summary label="Base XP" value={`${state.lastResult.breakdown.baseXp}`} />
+              <Summary label="Streak XP Bonus" value={`${state.lastResult.breakdown.streakXpBonus}`} />
+              <Summary label="Milestone XP Bonus" value={`${state.lastResult.breakdown.milestoneXpBonus}`} />
+              <Summary label="First Completion XP" value={`${state.lastResult.breakdown.firstCompletionXpBonus}`} />
+              <Summary label="Total XP" value={`${state.lastResult.breakdown.totalXp}`} />
+            </div>
+
+            {state.lastResult.progression.milestoneLabel && (
+              <p className="mt-3 text-sm font-black text-[#ffd95a]">{state.lastResult.progression.milestoneLabel}</p>
+            )}
+            {state.lastResult.progression.newlyUnlockedRouteIds.length > 0 && (
+              <p className="text-sm font-black text-cyan-200">New Route Unlocked</p>
+            )}
+            {state.lastResult.progression.promotionLabel && (
+              <p className="text-sm font-black text-emerald-200">{state.lastResult.progression.promotionLabel}</p>
+            )}
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
 
-      {(popup || isRunning) ? (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-sky-300/40 bg-sky-500/20 px-5 py-5 text-center text-base font-semibold text-sky-100 shadow-xl">
-            {isRunning ? `Pilot running... ${timer}s` : popup}
-          </div>
-        </div>
-      ) : null}
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+      <p className="text-[10px] uppercase tracking-widest text-white/45">{label}</p>
+      <p className="mt-1 truncate text-sm font-black text-white">{value}</p>
+    </div>
+  );
+}
+
+function Summary({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+      <p className="text-xs text-white/55">{label}</p>
+      <p className="text-sm font-black text-white">{value}</p>
     </div>
   );
 }
