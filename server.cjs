@@ -708,21 +708,21 @@ const FISHER_CONFIG = {
   shiftStartCooldownMs: 15000,
   optionsCooldownMs: 10000,
   actionCooldownMs: 500,
-  reelTickCooldownMs: 220,
+  reelTickCooldownMs: 300,
   repairCooldownMs: 9000,
-  hookWindowMs: 1500,
+  hookWindowMs: 2400,
   castVisualDelayMs: 900,
   hookVisualDelayMs: 900,
   landVisualDelayMs: 950,
   streakBonusPerStep: 0.05,
   streakBonusMax: 0.2,
-  lineIntegrityPenaltyPerMiss: 16,
-  tensionRedThreshold: 88,
+  lineIntegrityPenaltyPerMiss: 12,
+  tensionRedThreshold: 92,
   tensionFailThreshold: 100,
-  maxRedTicksBeforeSnap: 3,
-  randomPullEveryTicks: [2, 4],
-  randomPullWindowMs: 1300,
-  randomPullTensionPenalty: 18,
+  maxRedTicksBeforeSnap: 5,
+  randomPullEveryTicks: [3, 6],
+  randomPullWindowMs: 1700,
+  randomPullTensionPenalty: 12,
   randomPullQualityPenalty: 0.08,
   fishRarityRewardBase: {
     COMMON: 220,
@@ -746,7 +746,7 @@ const FISHER_CONFIG = {
       reelDifficulty: 'LOW',
       risk: 'LOW',
       travelSecRange: [6, 12],
-      waitBiteSecRange: [4, 8],
+      waitBiteSecRange: [2, 5],
       spotMultiplier: 1,
       rarityWeights: { COMMON: 0.7, UNCOMMON: 0.23, RARE: 0.06, LEGENDARY: 0.01 },
       fishPool: ['caras', 'biban', 'macrou'],
@@ -760,7 +760,7 @@ const FISHER_CONFIG = {
       reelDifficulty: 'MEDIUM',
       risk: 'MEDIUM',
       travelSecRange: [8, 14],
-      waitBiteSecRange: [5, 9],
+      waitBiteSecRange: [3, 6],
       spotMultiplier: 1.28,
       rarityWeights: { COMMON: 0.45, UNCOMMON: 0.34, RARE: 0.17, LEGENDARY: 0.04 },
       fishPool: ['stiuca', 'pastrav', 'clean'],
@@ -774,7 +774,7 @@ const FISHER_CONFIG = {
       reelDifficulty: 'HIGH',
       risk: 'HIGH',
       travelSecRange: [10, 18],
-      waitBiteSecRange: [6, 11],
+      waitBiteSecRange: [4, 7],
       spotMultiplier: 1.65,
       rarityWeights: { COMMON: 0.24, UNCOMMON: 0.32, RARE: 0.29, LEGENDARY: 0.15 },
       fishPool: ['somn mare', 'ton', 'golden fish'],
@@ -3159,8 +3159,8 @@ app.post('/api/fisher/cast/commit', requireDb, async (req, res) => {
 
     const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
     const baseWait = randomInt(spot.waitBiteSecRange[0], spot.waitBiteSecRange[1]);
-    const castAdjust = cast.quality === 'PERFECT' ? -1.2 : cast.quality === 'GOOD' ? -0.5 : 1.1;
-    const waitSec = Math.max(2.5, baseWait + castAdjust);
+    const castAdjust = cast.quality === 'PERFECT' ? -1 : cast.quality === 'GOOD' ? -0.4 : 0.6;
+    const waitSec = Math.max(1.8, baseWait + castAdjust);
     active.biteAt = Date.now() + Math.floor(waitSec * 1000);
     session.shiftState = 'WAITING_BITE';
     setFisherSession(playerId, session);
@@ -3258,18 +3258,18 @@ app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
     active.reelTicks = Number(active.reelTicks || 0) + 1;
 
     const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
-    const reelDifficultyPenalty = spot.reelDifficulty === 'HIGH' ? 1.18 : spot.reelDifficulty === 'MEDIUM' ? 1.08 : 1;
+    const reelDifficultyPenalty = spot.reelDifficulty === 'HIGH' ? 1.1 : spot.reelDifficulty === 'MEDIUM' ? 1.04 : 1;
     const castBoost = Number(active.castScore || 0.5);
     const hookBoost = Number(active.hookScore || 0.45);
 
     if (isReeling) {
-      const progressGain = (2.8 + castBoost * 2.1 + hookBoost * 1.4) / reelDifficultyPenalty;
+      const progressGain = (4.6 + castBoost * 2.4 + hookBoost * 1.8) / reelDifficultyPenalty;
       active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + progressGain);
-      active.tension = Math.min(100, Number(active.tension || 0) + (8.5 * reelDifficultyPenalty - castBoost * 2.1));
+      active.tension = Math.min(100, Number(active.tension || 0) + (6.2 * reelDifficultyPenalty - castBoost * 2.4));
     } else {
-      const driftGain = 0.25 + castBoost * 0.25;
+      const driftGain = 0.35 + castBoost * 0.3;
       active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + driftGain);
-      active.tension = Math.max(0, Number(active.tension || 0) - (7 + hookBoost * 1.6));
+      active.tension = Math.max(0, Number(active.tension || 0) - (8.5 + hookBoost * 1.9));
     }
 
     if (Number(active.tension || 0) <= 76) {
