@@ -85,8 +85,16 @@ export default function PilotPage() {
     }
   };
 
-  const runFlightLifecycle = async (flightState: PilotStateResponse) => {
-    const payload = await api.pilotFlightStart(playerId);
+  const runFlightLifecycle = async () => {
+    let payload;
+    try {
+      payload = await api.pilotFlightStart(playerId);
+    } catch (startError) {
+      const message = startError instanceof Error ? startError.message.toLowerCase() : '';
+      if (!message.includes('wait 0.5s between actions')) throw startError;
+      await wait(600);
+      payload = await api.pilotFlightStart(playerId);
+    }
     setState(payload.state);
 
     const route = (payload.state.routes || []).find((entry) => entry.id === payload.flight.routeId) || null;
@@ -140,7 +148,7 @@ export default function PilotPage() {
 
       setState(next);
       pushPopup('Route selected. Flight starting...');
-      await runFlightLifecycle(next);
+      await runFlightLifecycle();
     } catch (e) {
       setOverlayOpen(false);
       setOverlayRoute(null);
@@ -261,7 +269,8 @@ export default function PilotPage() {
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {(state?.routes || []).map((route) => {
               const selected = route.id === state?.selectedRouteId;
-              const completed = route.completions > 0;
+              const completionTarget = Math.max(1, Number(route.requiredPreviousCompletions || 0));
+              const completed = Number(route.progressionCompletions || 0) >= completionTarget;
               return (
                 <button
                   key={route.id}
