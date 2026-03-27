@@ -268,8 +268,8 @@ export default function PilotPage() {
           <h2 className="text-lg font-black text-white">Route Selection</h2>
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {(state?.routes || []).map((route) => {
-              const completionTarget = Math.max(1, Number(route.requiredPreviousCompletions || 0));
-              const completed = Number(route.progressionCompletions || 0) >= completionTarget;
+              const completionTarget = Math.max(1, Number(route.progressionCompletions || 0));
+              const completed = Number(route.completions || 0) >= completionTarget;
               const locked = !!route.locked;
               const stateLabel = locked ? 'Locked' : completed ? 'Completed' : 'Ongoing';
 
@@ -305,7 +305,6 @@ export default function PilotPage() {
                   </div>
                   <p className={`mt-1 text-xs uppercase tracking-[0.15em] ${themeTone}`}>{route.theme}</p>
                   <p className={`mt-2 text-xs ${textTone}`}>{route.routePath}</p>
-                  <p className={`mt-2 text-xs ${textTone}`}>Duration: {route.durationSeconds}s</p>
                   <p className={`text-xs ${textTone}`}>Base Reward: {fmt(route.baseReward)} $</p>
                   <p className={`text-xs ${textTone}`}>Base XP: {route.baseXp}</p>
                   <p className={`text-xs ${textTone}`}>Progress: {route.progressLabel}</p>
