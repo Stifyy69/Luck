@@ -42,6 +42,7 @@ export default function FisherPage() {
   const [options, setOptions] = useState<FisherSpotOption[]>([]);
   const [popup, setPopup] = useState<Popup>(null);
   const [busy, setBusy] = useState(false);
+  const [autoFlowText, setAutoFlowText] = useState<string | null>(null);
   const lastOptionsFetchRef = useRef(0);
 
   const pushPopup = useCallback((text: string, isError = false) => {
@@ -137,7 +138,7 @@ export default function FisherPage() {
       const next = await api.fisherSpotSelect(playerId, spotId);
       setState(next);
       setOptions([]);
-      pushPopup('Go to the green square marker. Bait, bite and reel are automatic.');
+      pushPopup('Spot selected. Follow the GO square.');
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Spot select failed', true);
     } finally {
@@ -149,30 +150,25 @@ export default function FisherPage() {
     if (busy) return;
     setBusy(true);
     try {
+      const isTarget = Number(state?.targetDockCell || 0) === Number(cellId);
+      if (isTarget) {
+        setAutoFlowText('Applying bait...');
+        pushPopup('Applying bait...');
+        await wait(500);
+        setAutoFlowText('Fish bite detected...');
+        pushPopup('Fish bite detected...');
+        await wait(500);
+        setAutoFlowText('Auto reeling and landing...');
+        pushPopup('Auto reeling and landing...');
+        await wait(600);
+      }
       const next = await api.fisherDockSelect(playerId, cellId);
       setState(next);
-      const data = await api.fisherSpotOptions(playerId);
-      setOptions(data.options || []);
-      pushPopup(`Auto catch done on spot marker ${cellId}. Pick another spot or sell.`);
+      pushPopup(`Catch complete at marker ${cellId}. Continue on same spot or sell.`);
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Dock select failed', true);
     } finally {
-      setBusy(false);
-    }
-  };
-
-  const changeSpot = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const next = await api.fisherSpotChange(playerId);
-      setState(next);
-      const data = await api.fisherSpotOptions(playerId);
-      setOptions(data.options || []);
-      pushPopup('Pick a new fishing spot.');
-    } catch (e) {
-      pushPopup(e instanceof Error ? e.message : 'Could not change spot', true);
-    } finally {
+      setAutoFlowText(null);
       setBusy(false);
     }
   };
@@ -207,15 +203,37 @@ export default function FisherPage() {
     }
   };
 
+  const buyCarry = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const payload = await api.fisherCarryBuy(playerId);
+      setState(payload.state);
+      refresh();
+      pushPopup(`Carry upgraded to ${payload.nextCapacity}kg for ${fmt(payload.cost)} $.`);
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Carry upgrade failed', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
   const readableState = STATE_LABELS[String(state?.shiftState || 'IDLE')] || String(state?.shiftState || 'Idle').replace(/_/g, ' ');
-  const canChangeSpot = state?.shiftState && state.shiftState !== 'IDLE' && state.shiftState !== 'SELECTING_SPOT' && state.shiftState !== 'SELECTING_DOCK';
+  const nextCarryCapacity = Math.min(100, Number(state?.carryCapacityKg ?? 20) + 5);
+  const canUpgradeCarry = state?.shiftState === 'IDLE' && Number(state?.carryCapacityKg ?? 20) < 100;
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(33,179,210,0.18),_transparent_55%),linear-gradient(180deg,rgba(6,14,23,0.94),rgba(2,8,14,0.98))] px-4 py-6 md:py-8">
       {popup && (
         <div className={`fixed right-4 top-6 z-[80] max-w-md rounded-xl border px-4 py-3 text-sm font-bold shadow-xl backdrop-blur ${popup.isError ? 'border-red-500/40 bg-red-900/80 text-red-200' : 'border-cyan-500/40 bg-cyan-900/80 text-cyan-100'}`}>
           {popup.text}
+        </div>
+      )}
+
+      {autoFlowText && (
+        <div className="fixed left-1/2 top-20 z-[75] -translate-x-1/2 rounded-xl border border-emerald-400/45 bg-emerald-950/85 px-5 py-3 text-sm font-black uppercase tracking-[0.12em] text-emerald-100 shadow-2xl">
+          {autoFlowText}
         </div>
       )}
 
@@ -240,22 +258,10 @@ export default function FisherPage() {
             <Stat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} / ${(state?.carryCapacityKg ?? 20).toFixed(0)} kg`} />
           </div>
 
-          <div className="mt-3 grid gap-3 md:grid-cols-[1.2fr_1fr]">
-            <div className="rounded-xl border border-cyan-500/25 bg-cyan-900/10 p-3">
-              <p className="text-xs uppercase tracking-[0.16em] text-cyan-200/85">Carry Hold</p>
-              <p className="mt-1 text-sm font-bold text-cyan-100">Estimated sell value: {fmt(state?.carryEstimatedValue ?? 0)} $</p>
-              <p className="text-xs text-cyan-100/70">Bag limit is 20kg. Sell fish when near full.</p>
-            </div>
-            <div className="rounded-xl border border-white/15 bg-black/25 p-3">
-              <p className="text-xs uppercase tracking-[0.16em] text-white/70">Rod Prices</p>
-              <div className="mt-2 space-y-1">
-                {ROD_SHOP.map((rod) => (
-                  <p key={`rod-price-${rod.tier}`} className="text-xs text-white/80">
-                    T{rod.tier}: {rod.name} - {fmt(rod.price)} $
-                  </p>
-                ))}
-              </div>
-            </div>
+          <div className="mt-3 rounded-xl border border-cyan-500/25 bg-cyan-900/10 p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-cyan-200/85">Carry Hold</p>
+            <p className="mt-1 text-sm font-bold text-cyan-100">Estimated sell value: {fmt(state?.carryEstimatedValue ?? 0)} $</p>
+            <p className="text-xs text-cyan-100/70">Carry capacity: {(state?.carryCapacityKg ?? 20).toFixed(0)}kg (max 100kg).</p>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
@@ -283,16 +289,6 @@ export default function FisherPage() {
                 className="rounded-xl border border-white/20 px-4 py-2 text-sm font-bold text-white/75 disabled:opacity-50"
               >
                 Refresh Spots
-              </button>
-            )}
-            {canChangeSpot && (
-              <button
-                type="button"
-                onClick={() => changeSpot().catch(() => {})}
-                disabled={busy || underRepair}
-                className="rounded-xl border border-cyan-500/35 bg-cyan-900/20 px-4 py-2 text-sm font-bold text-cyan-100 disabled:opacity-50"
-              >
-                Change Spot
               </button>
             )}
             <button
@@ -328,7 +324,6 @@ export default function FisherPage() {
                 );
               })}
             </div>
-            <p className="mt-2 text-xs font-bold uppercase tracking-[0.12em] text-emerald-200">Green square = go to the spot. Bait, bite, and reel are automatic.</p>
           </div>
         )}
 
@@ -353,6 +348,8 @@ export default function FisherPage() {
                   <p className="text-xs text-white/70">Cast: {spot.castDifficulty} · Reel: {spot.reelDifficulty}</p>
                   <p className="text-xs text-white/70">Bite: ~{spot.waitBiteEstimateSec}s · Travel: {spot.travelSec}s</p>
                   <p className="text-xs text-white/70">Risk: {spot.failRisk}</p>
+                  <p className="text-xs text-white/70">Size drop: Normal 75% · Big 20% · Giant 5%</p>
+                  <p className="text-xs text-white/70">Approx payout: ~{fmt(spot.estimatedReward)} $ / catch</p>
                   {spot.locked ? (
                     <p className="mt-2 text-xs font-black text-orange-300">Locked until Lv. {spot.unlockLevel}</p>
                   ) : (
@@ -407,6 +404,19 @@ export default function FisherPage() {
           <div className="hud-panel p-5">
             <h2 className="text-lg font-black text-white">Rod Shop</h2>
             <p className="mt-1 text-sm text-white/70">Upgrade rods for better fish size chance and higher catch payouts.</p>
+            <div className="mt-4 rounded-xl border border-emerald-500/35 bg-emerald-900/20 p-3">
+              <p className="text-sm font-black text-emerald-100">Carry Upgrade</p>
+              <p className="text-xs text-emerald-200/80">+5kg for 50,000 $ (max 100kg)</p>
+              <p className="mt-1 text-xs text-emerald-100/80">Current: {(state?.carryCapacityKg ?? 20).toFixed(0)}kg</p>
+              <button
+                type="button"
+                onClick={() => buyCarry().catch(() => {})}
+                disabled={busy || !canUpgradeCarry}
+                className="mt-2 rounded-lg border border-emerald-400/45 bg-emerald-950/30 px-3 py-2 text-xs font-bold text-emerald-100 disabled:opacity-50"
+              >
+                {canUpgradeCarry ? `Upgrade to ${nextCarryCapacity}kg` : 'Carry Maxed'}
+              </button>
+            </div>
             <div className="mt-4 grid gap-2 md:grid-cols-2">
               {ROD_SHOP.map((rod) => {
                 const currentTier = Number(state?.progress.rodTier || 1);

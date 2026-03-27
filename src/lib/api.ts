@@ -228,4 +228,7 @@ export const api = {
 
   fisherRodBuy: (playerId: string, tier: number) =>
     post<{ boughtTier: number; rodName: string; cost: number; state: FisherStateResponse }>('/api/fisher/rod/buy', { playerId, tier }),
+
+  fisherCarryBuy: (playerId: string) =>
+    post<{ previousCapacity: number; nextCapacity: number; cost: number; state: FisherStateResponse }>('/api/fisher/carry/buy', { playerId }),
 };

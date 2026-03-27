@@ -319,6 +319,7 @@ export interface FisherProgress {
   rareCatches: number;
   legendaryCatches: number;
   rodTier: number;
+  carryCapacityKg: number;
   rodTierLabel: string;
   unlockedSpotTier: 'COMMON' | 'BETTER' | 'PREMIUM';
 }

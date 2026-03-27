@@ -256,6 +256,7 @@ async function initDb() {
       fisher_level INT NOT NULL DEFAULT 1,
       fisher_xp INT NOT NULL DEFAULT 0,
       fisher_rod_tier INT NOT NULL DEFAULT 1,
+      fisher_carry_capacity_kg INT NOT NULL DEFAULT 20,
       fisher_total_catches INT NOT NULL DEFAULT 0,
       fisher_perfect_catches INT NOT NULL DEFAULT 0,
       fisher_best_streak INT NOT NULL DEFAULT 0,
@@ -269,6 +270,11 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE player_fisher_progress
     ADD COLUMN IF NOT EXISTS fisher_rod_tier INT NOT NULL DEFAULT 1;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_fisher_progress
+    ADD COLUMN IF NOT EXISTS fisher_carry_capacity_kg INT NOT NULL DEFAULT 20;
   `);
 
   const requiredColumns = [
@@ -731,6 +737,9 @@ const FISHER_CONFIG = {
   randomPullTensionPenalty: 12,
   randomPullQualityPenalty: 0.08,
   carryCapacityKg: 20,
+  carryUpgradeStepKg: 5,
+  carryUpgradeCost: 50000,
+  carryCapacityMaxKg: 100,
   kgBasePrice: {
     NORMAL: 1000,
     BIG: 2000,
@@ -1116,6 +1125,7 @@ function toFisherProgressView(row) {
     rareCatches: Number(row?.fisher_rare_catches || 0),
     legendaryCatches: Number(row?.fisher_legendary_catches || 0),
     rodTier: Math.max(1, Math.min(5, Number(row?.fisher_rod_tier || 1))),
+    carryCapacityKg: Math.max(FISHER_CONFIG.carryCapacityKg, Math.min(FISHER_CONFIG.carryCapacityMaxKg, Number(row?.fisher_carry_capacity_kg || FISHER_CONFIG.carryCapacityKg))),
   };
 }
 
@@ -1170,7 +1180,7 @@ function fisherStateView(session, progressView) {
     },
     shiftState: session.shiftState,
     streak: Number(session.streak || 0),
-    carryCapacityKg: Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg),
+    carryCapacityKg: Number(session.carryCapacityKg || progressView.carryCapacityKg || FISHER_CONFIG.carryCapacityKg),
     carryWeightKg: Number(session.carryWeightKg || 0),
     carryEstimatedValue: Number(session.carryEstimatedValue || 0),
     carriedFish: [...(session.carriedFish || [])],
@@ -3053,14 +3063,16 @@ app.get('/api/fisher/state', requireDb, async (req, res) => {
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
     await ensurePlayer(pool, playerId);
     const progress = await ensureFisherProgress(pool, playerId);
+    const progressView = toFisherProgressView(progress);
     const session = getFisherSession(playerId);
     if (session.repairUntil && session.repairUntil <= Date.now()) {
       session.repairUntil = 0;
       session.repairLabel = null;
     }
+    session.carryCapacityKg = Number(progressView.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
     syncFisherSessionTime(session);
     setFisherSession(playerId, session);
-    res.json(fisherStateView(session, toFisherProgressView(progress)));
+    res.json(fisherStateView(session, progressView));
   } catch (error) {
     res.status(500).json({ error: 'fisher state failed' });
   }
@@ -3094,6 +3106,7 @@ app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
       lastResult: null,
       lastActionAt: 0,
       lastReelTickAt: 0,
+      carryCapacityKg: Number(progressView.carryCapacityKg || FISHER_CONFIG.carryCapacityKg),
       currentDockCell: null,
       targetDockCell: null,
     };
@@ -3117,6 +3130,8 @@ app.post('/api/fisher/shift/end', requireDb, async (req, res) => {
       activeSpot: null,
       activeCatch: null,
       lastResult: null,
+      currentDockCell: null,
+      targetDockCell: null,
       cooldownUntil: Date.now() + FISHER_CONFIG.shiftStartCooldownMs,
     };
     setFisherSession(playerId, next);
@@ -3311,10 +3326,9 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
       },
     ].slice(-25);
     session.currentDockCell = parsedCell;
-    session.targetDockCell = null;
+    session.targetDockCell = randomInt(1, 16);
     session.activeCatch = null;
-    session.activeSpot = null;
-    session.shiftState = 'SELECTING_SPOT';
+    session.shiftState = 'SELECTING_DOCK';
     session.lastResult = {
       caught: true,
       failReason: null,
@@ -3400,27 +3414,7 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
 
 app.post('/api/fisher/spot/change', requireDb, async (req, res) => {
   try {
-    const { playerId } = req.body || {};
-    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
-
-    const progress = await ensureFisherProgress(pool, playerId);
-    const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
-    enforceFisherRepairCooldown(session);
-    enforceFisherActionCooldown(session);
-
-    if (session.shiftState === 'IDLE') {
-      return res.status(400).json({ error: 'shift not active' });
-    }
-
-    session.activeSpot = null;
-    session.activeCatch = null;
-    session.shiftState = 'SELECTING_SPOT';
-    session.spotOptions = [];
-    session.optionsGeneratedAt = 0;
-    setFisherSession(playerId, session);
-
-    res.json(fisherStateView(session, view));
+    return res.status(400).json({ error: 'end shift to change spot' });
   } catch (error) {
     res.status(400).json({ error: error.message || 'change spot failed' });
   }
@@ -3998,6 +3992,57 @@ app.post('/api/fisher/rod/buy', requireDb, async (req, res) => {
     res.json({ ...result, state: fisherStateView(session, toFisherProgressView(nextProgress)) });
   } catch (error) {
     res.status(400).json({ error: error.message || 'rod buy failed' });
+  }
+});
+
+app.post('/api/fisher/carry/buy', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const session = getFisherSession(playerId);
+    if (session.shiftState !== 'IDLE') {
+      throw new Error('end shift to buy carry');
+    }
+
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const progress = await ensureFisherProgress(db, playerId);
+      const currentCapacity = Math.max(FISHER_CONFIG.carryCapacityKg, Math.min(FISHER_CONFIG.carryCapacityMaxKg, Number(progress.fisher_carry_capacity_kg || FISHER_CONFIG.carryCapacityKg)));
+      if (currentCapacity >= FISHER_CONFIG.carryCapacityMaxKg) {
+        throw new Error('carry already maxed');
+      }
+
+      const player = await db.query(`SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
+      const currentMoney = Number(player.rows[0]?.clean_money || 0);
+      if (currentMoney < Number(FISHER_CONFIG.carryUpgradeCost || 0)) {
+        throw new Error('insufficient funds');
+      }
+
+      const nextCapacity = Math.min(FISHER_CONFIG.carryCapacityMaxKg, currentCapacity + Number(FISHER_CONFIG.carryUpgradeStepKg || 5));
+
+      await db.query(`UPDATE players SET clean_money = clean_money - $2, updated_at = NOW() WHERE player_id = $1`, [playerId, Number(FISHER_CONFIG.carryUpgradeCost || 0)]);
+      await db.query(`UPDATE player_fisher_progress SET fisher_carry_capacity_kg = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, nextCapacity]);
+
+      return {
+        previousCapacity: currentCapacity,
+        nextCapacity,
+        cost: Number(FISHER_CONFIG.carryUpgradeCost || 0),
+      };
+    });
+
+    const nextProgressRow = await ensureFisherProgress(pool, playerId);
+    const nextProgress = toFisherProgressView(nextProgressRow);
+    const nextSession = getFisherSession(playerId);
+    nextSession.carryCapacityKg = Number(nextProgress.carryCapacityKg || nextSession.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
+    setFisherSession(playerId, nextSession);
+
+    res.json({
+      ...result,
+      state: fisherStateView(nextSession, nextProgress),
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'carry buy failed' });
   }
 });
 
