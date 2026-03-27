@@ -6,6 +6,30 @@ import type { FisherSpotOption, FisherStateResponse } from '../types/game';
 type Popup = { text: string; isError?: boolean } | null;
 
 const STEP_ORDER = ['BAIT', 'CAST', 'WAIT_BITE', 'HOOK', 'REEL', 'LAND'];
+const STEP_LABELS: Record<string, string> = {
+  BAIT: 'Bait',
+  CAST: 'Cast',
+  WAIT_BITE: 'Wait Bite',
+  HOOK: 'Hook',
+  REEL: 'Reel',
+  LAND: 'Land',
+};
+
+const STATE_LABELS: Record<string, string> = {
+  IDLE: 'Idle',
+  STARTING_SHIFT: 'Starting Shift',
+  SELECTING_SPOT: 'Selecting Spot',
+  TRAVEL_TO_SPOT: 'Traveling To Spot',
+  PREPARING_GEAR: 'Preparing Gear',
+  BAIT_STEP: 'Bait Step',
+  CAST_STEP: 'Cast Step',
+  WAITING_BITE: 'Waiting Bite',
+  HOOK_WINDOW: 'Hook Window',
+  REELING: 'Reeling',
+  LANDING: 'Landing',
+  CATCH_RESULT: 'Catch Result',
+  END_SHIFT: 'End Shift',
+};
 
 function fmt(n: number) {
   return n.toLocaleString('en-US');
@@ -31,6 +55,7 @@ export default function FisherPage() {
   const [busy, setBusy] = useState(false);
   const [castMeter, setCastMeter] = useState(0);
   const [castDir, setCastDir] = useState(1);
+  const [castLockedAt, setCastLockedAt] = useState<number | null>(null);
   const lastOptionsFetchRef = useRef(0);
 
   const pushPopup = useCallback((text: string, isError = false) => {
@@ -76,7 +101,7 @@ export default function FisherPage() {
     if (state?.shiftState !== 'CAST_STEP') return;
     const meter = window.setInterval(() => {
       setCastMeter((current) => {
-        let next = current + castDir * 4;
+        let next = current + castDir * 1.5;
         if (next >= 100) {
           next = 100;
           setCastDir(-1);
@@ -86,7 +111,7 @@ export default function FisherPage() {
         }
         return next;
       });
-    }, 30);
+    }, 70);
     return () => window.clearInterval(meter);
   }, [state?.shiftState, castDir]);
 
@@ -151,12 +176,43 @@ export default function FisherPage() {
     }
   };
 
+  const changeSpot = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await api.fisherSpotChange(playerId);
+      setState(next);
+      const data = await api.fisherSpotOptions(playerId);
+      setOptions(data.options || []);
+      pushPopup('Pick a new fishing spot.');
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Could not change spot', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sellCatch = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const payload = await api.fisherCatchSell(playerId);
+      setState(payload.state);
+      refresh();
+      pushPopup(`Sold fish for +${fmt(payload.soldValue)} $.`);
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Could not sell fish', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const doBait = async () => {
     if (busy) return;
     setBusy(true);
     try {
       pushPopup('Putting bait on hook...');
-      await wait(900);
+      await wait(450);
       const next = await api.fisherStep(playerId, 'BAIT');
       setState(next);
     } catch (e) {
@@ -173,6 +229,7 @@ export default function FisherPage() {
       pushPopup('Casting line...');
       await wait(900);
       const next = await api.fisherCastCommit(playerId, castMeter);
+      setCastLockedAt(Math.round(castMeter));
       setState(next);
       if (next.activeCatch?.castQuality) {
         pushPopup(`Cast quality: ${next.activeCatch.castQuality}`);
@@ -270,11 +327,13 @@ export default function FisherPage() {
 
   const active = state?.activeCatch;
   const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
+  const readableState = STATE_LABELS[String(state?.shiftState || 'IDLE')] || String(state?.shiftState || 'Idle').replace(/_/g, ' ');
+  const canChangeSpot = state?.shiftState && state.shiftState !== 'IDLE' && state.shiftState !== 'SELECTING_SPOT';
 
   return (
-    <div className="min-h-screen px-4 py-6 md:py-8">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(33,179,210,0.18),_transparent_55%),linear-gradient(180deg,rgba(6,14,23,0.94),rgba(2,8,14,0.98))] px-4 py-6 md:py-8">
       {popup && (
-        <div className={`fixed right-4 top-6 z-[80] max-w-md rounded-xl border px-4 py-3 text-sm font-bold shadow-xl backdrop-blur ${popup.isError ? 'border-red-500/40 bg-red-900/80 text-red-200' : 'border-green-500/40 bg-green-900/80 text-green-200'}`}>
+        <div className={`fixed right-4 top-6 z-[80] max-w-md rounded-xl border px-4 py-3 text-sm font-bold shadow-xl backdrop-blur ${popup.isError ? 'border-red-500/40 bg-red-900/80 text-red-200' : 'border-cyan-500/40 bg-cyan-900/80 text-cyan-100'}`}>
           {popup.text}
         </div>
       )}
@@ -282,7 +341,7 @@ export default function FisherPage() {
       <div className="mx-auto max-w-[1100px] space-y-4">
         <div className="hud-panel p-5">
           <p className="text-xs uppercase tracking-[0.2em] text-white/45">Work</p>
-          <h1 className="text-3xl font-black text-white">Fisher / Pescar</h1>
+          <h1 className="text-3xl font-black text-white">Fisher</h1>
           <p className="mt-1 text-sm text-white/60">{displayName} · Fisher Lv. {state?.progress.level ?? 1}</p>
 
           {underRepair && (
@@ -291,12 +350,19 @@ export default function FisherPage() {
             </p>
           )}
 
-          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-6">
             <Stat label="Level" value={String(state?.progress.level ?? 1)} />
             <Stat label="XP" value={state?.progress ? `${fmt(state.progress.xp)} / ${state.progress.nextLevelXp ? fmt(state.progress.nextLevelXp) : 'MAX'}` : '0'} />
             <Stat label="Rod" value={state?.progress.rodTierLabel || 'Basic Rod'} />
             <Stat label="Spot Tier" value={state?.progress.unlockedSpotTier || 'COMMON'} />
             <Stat label="Streak" value={String(state?.streak ?? 0)} />
+            <Stat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} / ${(state?.carryCapacityKg ?? 20).toFixed(0)} kg`} />
+          </div>
+
+          <div className="mt-3 rounded-xl border border-cyan-500/25 bg-cyan-900/10 p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-cyan-200/85">Carry Hold</p>
+            <p className="mt-1 text-sm font-bold text-cyan-100">Estimated sell value: {fmt(state?.carryEstimatedValue ?? 0)} $</p>
+            <p className="text-xs text-cyan-100/70">Bag limit is 20kg. Sell fish when near full.</p>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
@@ -326,6 +392,24 @@ export default function FisherPage() {
                 Refresh Spots
               </button>
             )}
+            {canChangeSpot && (
+              <button
+                type="button"
+                onClick={() => changeSpot().catch(() => {})}
+                disabled={busy || underRepair}
+                className="rounded-xl border border-cyan-500/35 bg-cyan-900/20 px-4 py-2 text-sm font-bold text-cyan-100 disabled:opacity-50"
+              >
+                Change Spot
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => sellCatch().catch(() => {})}
+              disabled={busy || (state?.carryEstimatedValue ?? 0) <= 0}
+              className="rounded-xl border border-emerald-500/40 bg-emerald-900/20 px-4 py-2 text-sm font-bold text-emerald-100 disabled:opacity-50"
+            >
+              Sell Catch
+            </button>
           </div>
         </div>
 
@@ -372,7 +456,7 @@ export default function FisherPage() {
             </p>
 
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <Stat label="State" value={String(state?.shiftState || '')} />
+              <Stat label="State" value={readableState} />
               <Stat label="Progress" value={`${Math.floor(active.catchProgress)}%`} />
               <Stat label="Tension" value={`${Math.floor(active.tension)}%`} />
               <Stat label="Integrity" value={`${Math.floor(active.lineIntegrity)}%`} />
@@ -395,7 +479,7 @@ export default function FisherPage() {
                       key={step}
                       className={`rounded-xl border px-4 py-3 text-sm font-bold ${done ? 'border-green-500/45 bg-green-900/30 text-green-200' : isNext ? 'border-yellow-400/60 bg-yellow-500/20 text-yellow-100' : 'border-white/20 bg-white/5 text-white/80'}`}
                     >
-                      {done ? `Done: ${step}` : isNext ? `Next: ${step}` : step}
+                      {done ? `Done: ${STEP_LABELS[step] || step}` : isNext ? `Next: ${STEP_LABELS[step] || step}` : STEP_LABELS[step] || step}
                     </div>
                   );
                 })}
@@ -417,11 +501,18 @@ export default function FisherPage() {
 
             {state.shiftState === 'CAST_STEP' && (
               <div className="mt-4 space-y-3">
-                <p className="text-sm font-bold text-white/80">Cast Power Meter (click in yellow zone)</p>
+                <p className="text-sm font-bold text-white/80">Cast Power Meter (center gives bigger fish chance)</p>
                 <div className="relative h-4 rounded-full bg-white/10">
-                  <div className="absolute inset-y-0 left-[62%] w-[16%] rounded-full bg-yellow-400/35" />
+                  <div className="absolute inset-y-0 left-[0%] w-[75%] rounded-full bg-emerald-400/20" />
+                  <div className="absolute inset-y-0 left-[75%] w-[20%] rounded-full bg-yellow-400/25" />
+                  <div className="absolute inset-y-0 left-[95%] w-[5%] rounded-full bg-orange-400/30" />
+                  <div className="absolute inset-y-0 left-[45%] w-[10%] rounded-full border border-cyan-300/40 bg-cyan-300/15" />
                   <div className="absolute inset-y-0 w-2 -translate-x-1/2 rounded-full bg-white" style={{ left: `${castMeter}%` }} />
                 </div>
+                <p className="text-xs text-white/65">Normal 75% · Bigger 20% · Huge 5%</p>
+                {castLockedAt !== null && (
+                  <p className="text-xs font-bold text-cyan-200">Last stop: {castLockedAt}%</p>
+                )}
                 <button
                   type="button"
                   onClick={() => commitCast().catch(() => {})}
@@ -470,6 +561,7 @@ export default function FisherPage() {
                     />
                   </div>
                 </div>
+                <p className="text-xs text-white/65">Keep tension out of red. React to pull prompts to stabilize line.</p>
                 {active.pullPrompt && (
                   <div className="rounded-xl border border-orange-500/40 bg-orange-900/25 px-4 py-3">
                     <p className="text-sm font-black text-orange-100">Fish Pull {active.pullPrompt.direction}! React now.</p>
@@ -506,7 +598,7 @@ export default function FisherPage() {
           <div className="hud-panel p-5">
             <h2 className="text-lg font-black text-white">Last Catch Result</h2>
             {state.lastResult.caught ? (
-              <p className="mt-2 text-sm text-white/80">{state.lastResult.fishName} · {state.lastResult.fishRarity}</p>
+              <p className="mt-2 text-sm text-white/80">{state.lastResult.fishName} · {state.lastResult.fishRarity} · {state.lastResult.fishSize} · {state.lastResult.fishWeightKg} kg</p>
             ) : (
               <p className="mt-2 text-sm text-red-200">{state.lastResult.failReason}</p>
             )}

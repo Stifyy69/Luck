@@ -343,6 +343,16 @@ export interface FisherStateResponse {
   progress: FisherProgress;
   shiftState: FisherShiftState;
   streak: number;
+  carryCapacityKg: number;
+  carryWeightKg: number;
+  carryEstimatedValue: number;
+  carriedFish: Array<{
+    name: string;
+    rarity: 'COMMON' | 'UNCOMMON' | 'RARE' | 'LEGENDARY';
+    size: 'NORMAL' | 'BIG' | 'GIANT';
+    weightKg: number;
+    value: number;
+  }>;
   repairSecondsLeft?: number;
   repairLabel?: string | null;
   activeCatch: {
@@ -374,6 +384,8 @@ export interface FisherCatchResult {
   failReason: string | null;
   fishName: string | null;
   fishRarity: 'COMMON' | 'UNCOMMON' | 'RARE' | 'LEGENDARY' | null;
+  fishSize?: 'NORMAL' | 'BIG' | 'GIANT' | null;
+  fishWeightKg?: number | null;
   breakdown: {
     baseReward: number;
     spotMultiplier: number;

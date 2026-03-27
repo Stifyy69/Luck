@@ -709,8 +709,8 @@ const FISHER_CONFIG = {
   optionsCooldownMs: 10000,
   actionCooldownMs: 500,
   reelTickCooldownMs: 300,
-  repairCooldownMs: 9000,
-  hookWindowMs: 2400,
+  repairCooldownMs: 12000,
+  hookWindowMs: 3200,
   castVisualDelayMs: 900,
   hookVisualDelayMs: 900,
   landVisualDelayMs: 950,
@@ -724,6 +724,7 @@ const FISHER_CONFIG = {
   randomPullWindowMs: 1700,
   randomPullTensionPenalty: 12,
   randomPullQualityPenalty: 0.08,
+  carryCapacityKg: 20,
   fishRarityRewardBase: {
     COMMON: 220,
     UNCOMMON: 360,
@@ -749,7 +750,7 @@ const FISHER_CONFIG = {
       waitBiteSecRange: [2, 5],
       spotMultiplier: 1,
       rarityWeights: { COMMON: 0.7, UNCOMMON: 0.23, RARE: 0.06, LEGENDARY: 0.01 },
-      fishPool: ['caras', 'biban', 'macrou'],
+      fishPool: ['Shore Bass', 'Silver Mackerel', 'Striped Carp'],
     },
     BETTER: {
       tier: 'BETTER',
@@ -763,7 +764,7 @@ const FISHER_CONFIG = {
       waitBiteSecRange: [3, 6],
       spotMultiplier: 1.28,
       rarityWeights: { COMMON: 0.45, UNCOMMON: 0.34, RARE: 0.17, LEGENDARY: 0.04 },
-      fishPool: ['stiuca', 'pastrav', 'clean'],
+      fishPool: ['River Pike', 'Rainbow Trout', 'Lake Perch'],
     },
     PREMIUM: {
       tier: 'PREMIUM',
@@ -777,7 +778,7 @@ const FISHER_CONFIG = {
       waitBiteSecRange: [4, 7],
       spotMultiplier: 1.65,
       rarityWeights: { COMMON: 0.24, UNCOMMON: 0.32, RARE: 0.29, LEGENDARY: 0.15 },
-      fishPool: ['somn mare', 'ton', 'golden fish'],
+      fishPool: ['Deep Catfish', 'Bluefin Tuna', 'Golden Relic Fish'],
     },
   },
 };
@@ -839,10 +840,85 @@ function fisherPickRarity(weights) {
 
 function fisherCastScoreFromMeter(meter) {
   const safe = Math.max(0, Math.min(100, Number(meter) || 0));
-  const distance = Math.abs(70 - safe);
+  const distance = Math.abs(50 - safe);
   if (distance <= 6) return { quality: 'PERFECT', score: 1, meter: safe };
   if (distance <= 18) return { quality: 'GOOD', score: 0.78, meter: safe };
   return { quality: 'BAD', score: 0.52, meter: safe };
+}
+
+function fisherFishSizeRoll(castMeter) {
+  const safe = Math.max(0, Math.min(100, Number(castMeter) || 0));
+  const distance = Math.abs(50 - safe);
+  let normal = 0.75;
+  let big = 0.2;
+  let giant = 0.05;
+
+  if (distance <= 8) {
+    normal -= 0.15;
+    big += 0.1;
+    giant += 0.05;
+  } else if (distance <= 18) {
+    normal -= 0.07;
+    big += 0.05;
+    giant += 0.02;
+  }
+
+  const roll = Math.random();
+  if (roll <= normal) return 'NORMAL';
+  if (roll <= normal + big) return 'BIG';
+  return 'GIANT';
+}
+
+function fisherFishWeightKg(spotTier, fishSize) {
+  const ranges = {
+    COMMON: {
+      NORMAL: [0.7, 2.4],
+      BIG: [2.5, 4.8],
+      GIANT: [4.9, 7.5],
+    },
+    BETTER: {
+      NORMAL: [1.2, 3.4],
+      BIG: [3.5, 6.8],
+      GIANT: [6.9, 9.8],
+    },
+    PREMIUM: {
+      NORMAL: [2.0, 4.8],
+      BIG: [4.9, 8.5],
+      GIANT: [8.6, 12.0],
+    },
+  };
+  const [min, max] = ranges[spotTier]?.[fishSize] || ranges.COMMON.NORMAL;
+  const raw = min + Math.random() * (max - min);
+  return Math.round(raw * 10) / 10;
+}
+
+function fisherPrepareCatchFromSpot(spot, withTravel) {
+  const now = Date.now();
+  return {
+    spotId: spot.spotId,
+    spotTier: spot.tier,
+    spotName: spot.name,
+    travelEndsAt: withTravel ? now + Number(spot.travelSec || 0) * 1000 : now,
+    biteAt: 0,
+    hookWindowEndsAt: 0,
+    castQuality: null,
+    castScore: 0.5,
+    castMeter: 0,
+    hookQuality: null,
+    hookScore: 0,
+    catchProgress: 0,
+    tension: 22,
+    lineIntegrity: 100,
+    pullPrompt: null,
+    pullHits: 0,
+    pullMisses: 0,
+    reelTicks: 0,
+    safeTicks: 0,
+    redTicks: 0,
+    qualityPenalty: 0,
+    stepsRequired: ['BAIT', 'CAST', 'WAIT_BITE', 'HOOK', 'REEL', 'LAND'],
+    stepsDone: [],
+  };
 }
 
 function getFisherSession(playerId) {
@@ -860,6 +936,10 @@ function getFisherSession(playerId) {
     lastReelTickAt: 0,
     repairUntil: 0,
     repairLabel: null,
+    carryCapacityKg: FISHER_CONFIG.carryCapacityKg,
+    carryWeightKg: 0,
+    carryEstimatedValue: 0,
+    carriedFish: [],
   };
 }
 
@@ -1015,6 +1095,10 @@ function fisherStateView(session, progressView) {
     },
     shiftState: session.shiftState,
     streak: Number(session.streak || 0),
+    carryCapacityKg: Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg),
+    carryWeightKg: Number(session.carryWeightKg || 0),
+    carryEstimatedValue: Number(session.carryEstimatedValue || 0),
+    carriedFish: [...(session.carriedFish || [])],
     repairSecondsLeft,
     repairLabel: session.repairLabel || null,
     activeCatch,
@@ -3044,9 +3128,7 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
     if (!selected) return res.status(404).json({ error: 'spot option not found' });
     if (selected.locked) return res.status(400).json({ error: 'spot locked for your level' });
 
-    const now = Date.now();
-    session.shiftState = 'TRAVEL_TO_SPOT';
-    session.activeSpot = {
+    const spotModel = {
       spotId: selected.spotId,
       tier: selected.tier,
       name: selected.name,
@@ -3060,31 +3142,15 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
       waitBiteEstimateSec: selected.waitBiteEstimateSec,
       travelSec: selected.travelSec,
     };
-    session.activeCatch = {
-      spotId: selected.spotId,
-      spotTier: selected.tier,
-      spotName: selected.name,
-      travelEndsAt: now + Number(selected.travelSec || 0) * 1000,
-      biteAt: 0,
-      hookWindowEndsAt: 0,
-      castQuality: null,
-      castScore: 0.5,
-      castMeter: 0,
-      hookQuality: null,
-      hookScore: 0,
-      catchProgress: 0,
-      tension: 22,
-      lineIntegrity: 100,
-      pullPrompt: null,
-      pullHits: 0,
-      pullMisses: 0,
-      reelTicks: 0,
-      safeTicks: 0,
-      redTicks: 0,
-      qualityPenalty: 0,
-      stepsRequired: ['BAIT', 'CAST', 'WAIT_BITE', 'HOOK', 'REEL', 'LAND'],
-      stepsDone: [],
-    };
+
+    const isSameSpot =
+      session.activeSpot &&
+      String(session.activeSpot.tier) === String(spotModel.tier) &&
+      String(session.activeSpot.name) === String(spotModel.name);
+
+    session.activeSpot = spotModel;
+    session.activeCatch = fisherPrepareCatchFromSpot(spotModel, !isSameSpot);
+    session.shiftState = isSameSpot ? 'BAIT_STEP' : 'TRAVEL_TO_SPOT';
     session.spotOptions = [];
     session.lastResult = null;
     syncFisherSessionTime(session);
@@ -3093,6 +3159,34 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
     res.json(fisherStateView(session, view));
   } catch (error) {
     res.status(500).json({ error: 'select fisher spot failed' });
+  }
+});
+
+app.post('/api/fisher/spot/change', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    enforceFisherActionCooldown(session);
+
+    if (session.shiftState === 'IDLE') {
+      return res.status(400).json({ error: 'shift not active' });
+    }
+
+    session.activeSpot = null;
+    session.activeCatch = null;
+    session.shiftState = 'SELECTING_SPOT';
+    session.spotOptions = [];
+    session.optionsGeneratedAt = 0;
+    setFisherSession(playerId, session);
+
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'change spot failed' });
   }
 });
 
@@ -3191,7 +3285,7 @@ app.post('/api/fisher/hook/attempt', requireDb, async (req, res) => {
     if (now > Number(active.hookWindowEndsAt || 0)) {
       session.streak = 0;
       fisherSetRepair(session, 'Untangling hook');
-      session.shiftState = 'SELECTING_SPOT';
+      session.shiftState = 'BAIT_STEP';
       session.lastResult = {
         caught: false,
         failReason: 'Fish escaped (missed hook window)',
@@ -3217,7 +3311,12 @@ app.post('/api/fisher/hook/attempt', requireDb, async (req, res) => {
           unlockedTier: null,
         },
       };
-      session.activeCatch = null;
+      if (session.activeSpot) {
+        session.activeCatch = fisherPrepareCatchFromSpot(session.activeSpot, false);
+      } else {
+        session.activeCatch = null;
+        session.shiftState = 'SELECTING_SPOT';
+      }
       setFisherSession(playerId, session);
       return res.json(fisherStateView(session, view));
     }
@@ -3305,7 +3404,7 @@ app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
     if (snapped) {
       session.streak = 0;
       fisherSetRepair(session, 'Repairing snapped line');
-      session.shiftState = 'SELECTING_SPOT';
+      session.shiftState = 'BAIT_STEP';
       session.lastResult = {
         caught: false,
         failReason: 'Line snapped while reeling',
@@ -3331,7 +3430,12 @@ app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
           unlockedTier: null,
         },
       };
-      session.activeCatch = null;
+      if (session.activeSpot) {
+        session.activeCatch = fisherPrepareCatchFromSpot(session.activeSpot, false);
+      } else {
+        session.activeCatch = null;
+        session.shiftState = 'SELECTING_SPOT';
+      }
       setFisherSession(playerId, session);
       return res.json(fisherStateView(session, view));
     }
@@ -3427,7 +3531,9 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
       rarityWeights.RARE += qualityScore >= 0.82 ? 0.08 : 0;
       rarityWeights.LEGENDARY += qualityScore >= 0.92 ? 0.05 : 0;
       const fishRarity = fisherPickRarity(rarityWeights);
+      const fishSize = fisherFishSizeRoll(active.castMeter);
       const fishName = fisherChooseFishName(fishRarity, active.spotTier);
+      const fishWeightKg = fisherFishWeightKg(active.spotTier, fishSize);
 
       const baseReward = Number(FISHER_CONFIG.fishRarityRewardBase[fishRarity] || 220);
       const baseXp = Number(FISHER_CONFIG.fishRarityXpBase[fishRarity] || 20);
@@ -3442,6 +3548,50 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
         0,
         Math.floor(baseReward * spotMultiplier * levelMultiplier * qualityMultiplier * streakMultiplier * integrityMultiplier) + bonusLootValue,
       );
+
+      const weightMultiplier = fishSize === 'GIANT' ? 1.32 : fishSize === 'BIG' ? 1.14 : 1;
+      const fishValue = Math.max(0, Math.floor(totalReward * weightMultiplier));
+
+      const nextCarryWeight = Number(session.carryWeightKg || 0) + fishWeightKg;
+      const carryLimit = Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
+      if (nextCarryWeight > carryLimit) {
+        session.streak = 0;
+        fisherSetRepair(session, 'Untangling overloaded line');
+        session.lastResult = {
+          caught: false,
+          failReason: 'Carry bag is full. Sell your fish first.',
+          fishName: null,
+          fishRarity: null,
+          fishSize: null,
+          fishWeightKg: null,
+          breakdown: {
+            baseReward: 0,
+            spotMultiplier: 1,
+            levelMultiplier: 1,
+            qualityMultiplier: 0,
+            streakMultiplier: 1,
+            integrityMultiplier: 0,
+            bonusLootValue: 0,
+            totalReward: 0,
+            xpGained: 0,
+            qualityScore: 0,
+          },
+          progression: {
+            levelBefore: progressBefore.level,
+            levelAfter: progressBefore.level,
+            xpBefore: progressBefore.xp,
+            xpAfter: progressBefore.xp,
+            unlockedTier: null,
+          },
+        };
+        session.activeCatch = session.activeSpot ? fisherPrepareCatchFromSpot(session.activeSpot, false) : null;
+        session.shiftState = session.activeSpot ? 'BAIT_STEP' : 'SELECTING_SPOT';
+        setFisherSession(playerId, session);
+        return {
+          state: fisherStateView(session, progressBefore),
+          result: session.lastResult,
+        };
+      }
 
       const qualityXpBonus = qualityScore >= 0.9 ? 12 : qualityScore >= 0.75 ? 7 : qualityScore >= 0.6 ? 3 : 0;
       const streakXpBonus = Math.min(10, Number(session.streak || 0) * 2);
@@ -3473,34 +3623,38 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
           nextXp,
           isPerfect ? 1 : 0,
           bestStreak,
-          totalReward,
+          fishValue,
           fishRarity === 'RARE' ? 1 : 0,
           fishRarity === 'LEGENDARY' ? 1 : 0,
         ],
       );
-
-      if (totalReward > 0) {
-        await db.query(
-          `UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`,
-          [playerId, totalReward],
-        );
-      }
 
       const updatedProgress = await ensureFisherProgress(db, playerId);
       const progressAfter = toFisherProgressView(updatedProgress);
 
       session.streak = nextStreak;
       session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
-      session.activeCatch = null;
-      session.activeSpot = null;
-      session.shiftState = 'SELECTING_SPOT';
-      session.spotOptions = [];
-      session.optionsGeneratedAt = 0;
+      session.carryWeightKg = Math.round(nextCarryWeight * 10) / 10;
+      session.carryEstimatedValue = Number(session.carryEstimatedValue || 0) + fishValue;
+      session.carriedFish = [
+        ...(session.carriedFish || []),
+        {
+          name: fishName,
+          rarity: fishRarity,
+          size: fishSize,
+          weightKg: fishWeightKg,
+          value: fishValue,
+        },
+      ].slice(-25);
+      session.activeCatch = session.activeSpot ? fisherPrepareCatchFromSpot(session.activeSpot, false) : null;
+      session.shiftState = session.activeSpot ? 'BAIT_STEP' : 'SELECTING_SPOT';
       session.lastResult = {
         caught: true,
         failReason: null,
         fishName,
         fishRarity,
+        fishSize,
+        fishWeightKg,
         breakdown: {
           baseReward,
           spotMultiplier,
@@ -3509,7 +3663,7 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
           streakMultiplier,
           integrityMultiplier,
           bonusLootValue,
-          totalReward,
+          totalReward: fishValue,
           xpGained,
           qualityScore,
         },
@@ -3532,6 +3686,44 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
     res.json(outcome);
   } catch (error) {
     res.status(400).json({ error: error.message || 'land catch failed' });
+  }
+});
+
+app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensureFisherProgress(db, playerId);
+      const progressView = toFisherProgressView(progressRow);
+      const session = getFisherSession(playerId);
+      enforceFisherActionCooldown(session);
+
+      const sellValue = Math.max(0, Math.floor(Number(session.carryEstimatedValue || 0)));
+      if (sellValue <= 0) {
+        throw new Error('no fish to sell');
+      }
+
+      await db.query(
+        `UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`,
+        [playerId, sellValue],
+      );
+
+      session.carryEstimatedValue = 0;
+      session.carryWeightKg = 0;
+      session.carriedFish = [];
+      setFisherSession(playerId, session);
+
+      return {
+        soldValue: sellValue,
+        state: fisherStateView(session, progressView),
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'sell fish failed' });
   }
 });
 

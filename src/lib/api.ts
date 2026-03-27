@@ -199,6 +199,9 @@ export const api = {
   fisherSpotSelect: (playerId: string, spotId: string) =>
     post<FisherStateResponse>('/api/fisher/spot/select', { playerId, spotId }),
 
+  fisherSpotChange: (playerId: string) =>
+    post<FisherStateResponse>('/api/fisher/spot/change', { playerId }),
+
   fisherStep: (playerId: string, stepKey: string) =>
     post<FisherStateResponse>('/api/fisher/step', { playerId, stepKey }),
 
@@ -216,4 +219,7 @@ export const api = {
 
   fisherLand: (playerId: string) =>
     post<{ state: FisherStateResponse; result: FisherCatchResult }>('/api/fisher/land', { playerId }),
+
+  fisherCatchSell: (playerId: string) =>
+    post<{ soldValue: number; state: FisherStateResponse }>('/api/fisher/catch/sell', { playerId }),
 };
