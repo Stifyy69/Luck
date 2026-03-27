@@ -124,7 +124,20 @@ export default function PilotPage() {
     if (busy) return;
     setBusy(true);
     try {
-      const next = await api.pilotRouteSelect(playerId, routeId);
+      let next: PilotStateResponse;
+      try {
+        next = await api.pilotRouteSelect(playerId, routeId);
+      } catch (innerError) {
+        const message = innerError instanceof Error ? innerError.message.toLowerCase() : '';
+        if (!message.includes('shift not active')) {
+          throw innerError;
+        }
+
+        const started = await api.pilotShiftStart(playerId);
+        setState(started);
+        next = await api.pilotRouteSelect(playerId, routeId);
+      }
+
       setState(next);
       pushPopup('Route selected. Flight starting...');
       await runFlightLifecycle(next);
@@ -248,18 +261,19 @@ export default function PilotPage() {
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {(state?.routes || []).map((route) => {
               const selected = route.id === state?.selectedRouteId;
+              const completed = route.completions > 0;
               return (
                 <button
                   key={route.id}
                   type="button"
                   onClick={() => selectRoute(route.id).catch(() => {})}
                   disabled={busy || route.locked || !!state?.activeFlight}
-                  className={`rounded-2xl border p-4 text-left transition ${selected ? 'border-sky-300/60 bg-sky-500/15' : 'border-white/15 bg-white/5 hover:bg-white/10'} disabled:cursor-not-allowed disabled:opacity-60`}
+                  className={`rounded-2xl border p-4 text-left transition ${completed ? 'border-emerald-300/70 bg-emerald-500/25' : selected ? 'border-sky-300/60 bg-sky-500/15' : 'border-white/15 bg-white/5 hover:bg-white/10'} disabled:cursor-not-allowed disabled:opacity-60`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-black text-white">{route.name}</p>
-                    <span className={`rounded border px-2 py-0.5 text-[10px] font-black ${route.locked ? 'border-orange-400/40 bg-orange-500/15 text-orange-200' : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'}`}>
-                      {route.locked ? 'Locked' : 'Available'}
+                    <span className={`rounded border px-2 py-0.5 text-[10px] font-black ${route.locked ? 'border-orange-400/40 bg-orange-500/15 text-orange-200' : completed ? 'border-emerald-300/70 bg-emerald-500/35 text-emerald-100' : 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'}`}>
+                      {route.locked ? 'Locked' : completed ? 'Completed' : 'Available'}
                     </span>
                   </div>
                   <p className="mt-1 text-xs uppercase tracking-[0.15em] text-sky-200/85">{route.theme}</p>
