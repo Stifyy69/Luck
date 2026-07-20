@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import SharedStatsPanel from './SharedStatsPanel';
 import PageDisclaimer from './PageDisclaimer';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
@@ -9,6 +8,12 @@ type PopupType = 'success' | 'danger' | 'info';
 
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
+
+const ACTION_ART: Record<ActionKey, string> = {
+  collect_leaves: '/jobs/cayo/leaves.svg',
+  process_pack: '/jobs/cayo/white-pack.svg',
+  refine_pack: '/jobs/cayo/blue-pack.svg',
+};
 
 function signPayload(payload: unknown) {
   const raw = JSON.stringify(payload) + GAME_SALT;
@@ -35,13 +40,14 @@ function saveGameState(data: unknown) {
   } catch {}
 }
 
-const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeSpentHours: number; run: string }> = {
+const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeSpentHours: number; run: string; stage: string }> = {
   collect_leaves: {
     title: 'Collect Leaves',
     duration: 5,
     risk: 10,
     timeSpentHours: 0.5,
     run: '+1200 leaves',
+    stage: 'Supply stage 01',
   },
   process_pack: {
     title: 'Process White Packs',
@@ -49,6 +55,7 @@ const actions: Record<ActionKey, { title: string; duration: number; risk: number
     risk: 10,
     timeSpentHours: 0.5,
     run: '1200 leaves + 900,000 dirty cash -> 400 white packs',
+    stage: 'Supply stage 02',
   },
   refine_pack: {
     title: 'Process Blue Packs',
@@ -56,8 +63,13 @@ const actions: Record<ActionKey, { title: string; duration: number; risk: number
     risk: 10,
     timeSpentHours: 1,
     run: '400 white packs + 100,000 dirty cash -> 800 blue packs',
+    stage: 'Supply stage 03',
   },
 };
+
+function fmt(value: number) {
+  return value.toLocaleString('en-US');
+}
 
 export default function FarmatPage() {
   const { player, playerId, refresh } = usePlayer();
@@ -163,12 +175,12 @@ export default function FarmatPage() {
     setActiveAction(key);
     setTimer(action.duration);
 
-    let t = action.duration;
+    let remaining = action.duration;
     const interval = window.setInterval(() => {
-      t -= 1;
-      setTimer(t);
+      remaining -= 1;
+      setTimer(remaining);
 
-      if (t <= 0) {
+      if (remaining <= 0) {
         window.clearInterval(interval);
 
         const caught = Math.random() < action.risk / 100;
@@ -177,15 +189,11 @@ export default function FarmatPage() {
         if (caught) {
           if (key === 'process_pack') {
             setLeaves((current) => Math.max(0, current - 1200));
-            if (dirtyDebit > 0) {
-              setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
-            }
+            if (dirtyDebit > 0) setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
           }
           if (key === 'refine_pack') {
             setPlicuriAlbe((current) => Math.max(0, current - 400));
-            if (dirtyDebit > 0) {
-              setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
-            }
+            if (dirtyDebit > 0) setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
           }
           pushPopup('danger', 'POLICE RAID!!!');
           setActiveAction(null);
@@ -201,9 +209,7 @@ export default function FarmatPage() {
         if (key === 'process_pack') {
           setLeaves((current) => current - 1200);
           setPlicuriAlbe((current) => current + 400);
-          if (dirtyDebit > 0) {
-            setBaniMurdari((current) => current - dirtyDebit);
-          }
+          if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
           setProcessedAlbe((current) => current + 400);
           pushPopup('success', 'Conversion complete: 1200 leaves -> 400 white packs.');
         }
@@ -211,9 +217,7 @@ export default function FarmatPage() {
         if (key === 'refine_pack') {
           setPlicuriAlbe((current) => current - 400);
           setPlicuriAlbastre((current) => current + 800);
-          if (dirtyDebit > 0) {
-            setBaniMurdari((current) => current - dirtyDebit);
-          }
+          if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
           setProcessedAlbastre((current) => current + 800);
           pushPopup('success', 'Conversion complete: 400 white packs -> 800 blue packs.');
         }
@@ -304,7 +308,7 @@ export default function FarmatPage() {
         baniCurati: Number(adjusted.cleanMoney),
       });
       refresh();
-      pushPopup('success', `Conversion successful: +${gainClean.toLocaleString('en-US')} clean money.`);
+      pushPopup('success', `Conversion successful: +${fmt(gainClean)} clean money.`);
     } catch {
       pushPopup('danger', 'Could not sync conversion with server.');
     }
@@ -320,7 +324,7 @@ export default function FarmatPage() {
     setBaniMurdari((current) => current + payout);
     setFarmEarned((current) => current + payout);
     setPlicuriAlbastre(0);
-    pushPopup('success', `Bulk sale: +${payout.toLocaleString('en-US')} dirty cash.`);
+    pushPopup('success', `Bulk sale: +${fmt(payout)} dirty cash.`);
   };
 
   const deliver100 = () => {
@@ -341,141 +345,134 @@ export default function FarmatPage() {
     setBaniMurdari((current) => current + payout);
     setFarmEarned((current) => current + payout);
     setTimeFarm((current) => current + 0.25);
-    pushPopup('success', `Delivery successful: +${payout.toLocaleString('en-US')} dirty cash.`);
+    pushPopup('success', `Delivery successful: +${fmt(payout)} dirty cash.`);
   };
 
   return (
-    <div className="min-h-screen bg-transparent px-4 pb-10 pt-20 text-white sm:px-6">
-      <div className="mx-auto grid max-w-[1460px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="hud-panel p-4 backdrop-blur-xl sm:p-6">
-          <h1 className="text-center text-4xl font-black uppercase tracking-tight text-white">Cayo</h1>
+    <div className="min-h-screen px-4 pb-10 pt-20 sm:px-6 md:px-8 md:pb-12 md:pt-8">
+      {popup && (
+        <div className={`animate-toast-in fixed left-1/2 top-4 z-[140] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-2xl border px-4 py-3 text-sm font-bold shadow-2xl backdrop-blur-xl md:top-6 ${popup.type === 'success' ? 'border-[rgba(114,227,154,0.25)] bg-[#0d1d14]/95 text-[#c8f9d8]' : popup.type === 'danger' ? 'border-red-400/25 bg-[#261113]/95 text-red-100' : 'border-[rgba(114,183,255,0.25)] bg-[#0d1724]/95 text-[#cbe3ff]'}`}>
+          {popup.text}
+        </div>
+      )}
 
-          <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-5">
-            <StatCard label="Leaves" value={frunze} />
-            <StatCard label="White Packs" value={plicuriAlbe} />
-            <StatCard label="Blue Packs" value={plicuriAlbastre} />
-            <StatCard label="Dirty Cash" value={baniMurdari} money />
-            <StatCard label="Clean Money" value={baniCurati} money />
+      <div className="mx-auto max-w-[1220px] space-y-5">
+        <section className="game-panel relative overflow-hidden px-5 py-10 text-center sm:px-8 sm:py-12">
+          <div className="pointer-events-none absolute left-1/2 top-[-190px] h-[380px] w-[560px] -translate-x-1/2 rounded-full bg-[var(--accent)] opacity-[0.055] blur-3xl" />
+          <div className="relative mx-auto max-w-3xl">
+            <p className="section-kicker">Cayo supply chain</p>
+            <h1 className="display-title mt-5">Build the full chain.</h1>
+            <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-white/45">Collect the raw supply, process it through every stage and choose how to move the final product.</p>
+
+            <div className="mt-7 grid grid-cols-2 gap-3 border-t border-white/[0.07] pt-6 sm:grid-cols-5">
+              <HeroStat label="Leaves" value={fmt(frunze)} />
+              <HeroStat label="White packs" value={fmt(plicuriAlbe)} />
+              <HeroStat label="Blue packs" value={fmt(plicuriAlbastre)} />
+              <HeroStat label="Dirty cash" value={`${fmt(baniMurdari)} $`} />
+              <HeroStat label="Clean money" value={`${fmt(baniCurati)} $`} money />
+            </div>
+          </div>
+        </section>
+
+        <section className="game-panel-soft p-5 sm:p-6">
+          <div>
+            <p className="section-kicker">Production line</p>
+            <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Three stages, one supply chain</h2>
+            <p className="mt-2 text-sm text-white/38">1200 leaves become 400 white packs. 400 white packs become 800 blue packs.</p>
           </div>
 
-          <div className="mt-4 rounded-xl border border-white/15 bg-black/25 p-3">
-            <p className="text-sm font-semibold text-white/75">1200 Leaves -&gt; 400 White Packs -&gt; 800 Blue Packs</p>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            {(Object.keys(actions) as ActionKey[]).map((key, index) => {
+          <div className="mt-6 grid gap-4 lg:grid-cols-3">
+            {(Object.keys(actions) as ActionKey[]).map((key) => {
               const action = actions[key];
-              const color = index === 0 ? 'from-emerald-500/25 to-emerald-700/10' : index === 1 ? 'from-sky-500/25 to-blue-700/10' : 'from-fuchsia-500/25 to-purple-700/10';
-              const canClickAction =
-                key === 'collect_leaves'
-                  ? canRun
-                  : key === 'process_pack'
-                    ? canRun && frunze >= 1200
-                    : canRun && plicuriAlbe >= 400;
-              const isStyledActive =
-                key === 'collect_leaves'
-                  ? canRun
-                  : key === 'process_pack'
-                    ? canRun && frunze >= 1200 && baniMurdari >= 900_000
-                    : canRun && plicuriAlbe >= 400 && baniMurdari >= 100_000;
-              const canConvertFromClean =
-                key === 'process_pack'
-                  ? canRun && frunze >= 1200 && baniMurdari < 900_000 && baniCurati >= Math.ceil((900_000 - baniMurdari) * 0.65)
-                  : key === 'refine_pack'
-                    ? canRun && plicuriAlbe >= 400 && baniMurdari < 100_000 && baniCurati >= Math.ceil((100_000 - baniMurdari) * 0.65)
-                    : false;
-              const buttonClasses =
-                key !== 'collect_leaves' && canConvertFromClean
-                  ? 'bg-gradient-to-br from-amber-300/35 to-yellow-600/20 border-amber-200/60 text-yellow-100 shadow-[0_0_18px_rgba(250,204,21,0.25)] hover:brightness-110'
-                  : isStyledActive
-                    ? `bg-gradient-to-br ${color} hover:brightness-110`
-                    : 'bg-[#1d1a34] text-white/50';
+              const canClickAction = key === 'collect_leaves' ? canRun : key === 'process_pack' ? canRun && frunze >= 1200 : canRun && plicuriAlbe >= 400;
+              const hasFullMaterials = key === 'collect_leaves' ? canRun : key === 'process_pack' ? canRun && frunze >= 1200 && baniMurdari >= 900_000 : canRun && plicuriAlbe >= 400 && baniMurdari >= 100_000;
+              const canConvertFromClean = key === 'process_pack'
+                ? canRun && frunze >= 1200 && baniMurdari < 900_000 && baniCurati >= Math.ceil((900_000 - baniMurdari) * 0.65)
+                : key === 'refine_pack'
+                  ? canRun && plicuriAlbe >= 400 && baniMurdari < 100_000 && baniCurati >= Math.ceil((100_000 - baniMurdari) * 0.65)
+                  : false;
+              const isActive = activeAction === key;
+
               return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => runAction(key)}
-                  disabled={!canClickAction}
-                  className={`rounded-xl border border-white/15 p-4 text-left transition ${buttonClasses}`}
-                >
-                  <p className="text-base font-black">{action.title}</p>
-                  <p className="mt-1 text-sm">Duration: {action.duration}s</p>
-                  <p className="text-sm">{action.run}</p>
-                  <p className="text-sm">Game time: {action.timeSpentHours}h</p>
-                </button>
+                <article key={key} className={`overflow-hidden rounded-[22px] border p-4 ${isActive ? 'border-[rgba(211,255,81,0.36)] bg-[rgba(211,255,81,0.07)]' : hasFullMaterials ? 'border-[rgba(211,255,81,0.18)] bg-[rgba(211,255,81,0.035)]' : 'border-white/[0.08] bg-black/20'}`}>
+                  <div className="relative flex h-[190px] items-center justify-center rounded-[18px] border border-white/[0.08] bg-[#090c09] p-3">
+                    <img src={ACTION_ART[key]} alt={action.title} className={`h-full w-full object-contain ${canClickAction ? '' : 'grayscale opacity-45'}`} />
+                    <span className="absolute right-3 top-3 rounded-full border border-white/[0.1] bg-black/60 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-white/48">{action.stage}</span>
+                  </div>
+
+                  <div className="mt-4 flex items-start justify-between gap-3">
+                    <div><p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/26">Cayo process</p><h3 className="mt-1 text-xl font-black text-white">{action.title}</h3></div>
+                    <p className="text-right text-sm font-black text-[var(--accent)]">{action.duration}s<span className="block text-xs text-white/35">{action.timeSpentHours}h city time</span></p>
+                  </div>
+
+                  <p className="mt-3 min-h-[42px] text-xs leading-relaxed text-white/42">{action.run}</p>
+                  <div className="mt-4 grid grid-cols-2 gap-2 border-y border-white/[0.065] py-4"><ProcessStat label="Risk" value={`${action.risk}%`} /><ProcessStat label="Status" value={isActive ? 'Running' : hasFullMaterials ? 'Ready' : canConvertFromClean ? 'Convertible' : 'Missing supply'} /></div>
+
+                  <button type="button" onClick={() => runAction(key)} disabled={!canClickAction} className={`mt-5 w-full rounded-2xl px-4 py-3 text-sm font-black disabled:cursor-not-allowed ${hasFullMaterials || key === 'collect_leaves' ? 'btn-secondary' : canConvertFromClean ? 'border border-[rgba(240,196,106,0.3)] bg-[rgba(240,196,106,0.08)] text-[var(--warning)]' : 'btn-ghost opacity-40'}`}>
+                    {isActive ? `Processing ${timer}s` : canConvertFromClean ? 'Convert cash and run' : key === 'collect_leaves' ? 'Collect supply' : hasFullMaterials ? 'Start process' : 'Missing materials'}
+                  </button>
+                </article>
               );
             })}
           </div>
+        </section>
 
-          <div className="mt-6 rounded-xl border border-white/15 bg-black/25 p-4">
-            <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Sales</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button type="button" onClick={sellBulk} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre ? 'bg-emerald-500/80' : 'bg-[#2a2744] text-white/50'}`}>
-                Sell all in bulk (2300/unit)
-              </button>
-              <button type="button" onClick={deliver100} className={`rounded-lg px-4 py-2 text-sm font-bold ${plicuriAlbastre >= 100 ? 'bg-sky-500/80' : 'bg-[#2a2744] text-white/50'}`}>
-                Deliver 100 units (3179/unit)
-              </button>
-              <button
-                type="button"
-                onClick={convertDirtyToClean}
-                disabled={baniMurdari <= 0 || Boolean(activeAction)}
-                className={`rounded-lg px-4 py-2 text-sm font-bold ${baniMurdari > 0 && !activeAction ? 'bg-amber-500/80 text-white' : 'bg-[#2a2744] text-white/50'}`}
-              >
-                Convert dirty to clean
-              </button>
-            </div>
+        {activeAction && (
+          <section className="game-panel-soft grid gap-5 p-5 sm:p-6 md:grid-cols-[0.75fr_1.25fr] md:items-center">
+            <div className="flex h-[180px] items-center justify-center rounded-[20px] border border-white/[0.08] bg-[#090c09] p-3"><img src={ACTION_ART[activeAction]} alt={actions[activeAction].title} className="h-full w-full object-contain" /></div>
+            <div><p className="section-kicker">Process active</p><h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">{actions[activeAction].title}</h2><p className="mt-2 text-sm text-white/38">The current stage resolves automatically when the timer reaches zero.</p><div className="mt-5"><div className="mb-2 flex items-center justify-between text-xs"><span className="font-bold text-white/40">Stage progress</span><span className="font-black text-[var(--accent)]">{timer}s</span></div><div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(0, Math.min(100, ((actions[activeAction].duration - timer) / actions[activeAction].duration) * 100))}%` }} /></div></div></div>
+          </section>
+        )}
+
+        <section className="game-panel-soft p-5 sm:p-6">
+          <div><p className="section-kicker">Exit routes</p><h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Move the finished product</h2><p className="mt-2 text-sm text-white/38">Choose volume, higher per-unit payout or convert the full dirty balance into clean money.</p></div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <SaleCard title="Bulk Sale" subtitle="Move the full blue inventory" value="2,300 $ / unit" status={`${fmt(plicuriAlbastre)} units ready`} disabled={!plicuriAlbastre || Boolean(activeAction)} onClick={sellBulk} />
+            <SaleCard title="100 Unit Delivery" subtitle="Higher payout with 10% raid risk" value="3,179 $ / unit" status={`${Math.floor(plicuriAlbastre / 100)} runs ready`} disabled={plicuriAlbastre < 100 || Boolean(activeAction)} onClick={deliver100} warning />
+            <SaleCard title="Cash Conversion" subtitle="Convert the full dirty balance" value="65% clean return" status={`${fmt(baniMurdari)} $ available`} disabled={baniMurdari <= 0 || Boolean(activeAction)} onClick={() => { convertDirtyToClean().catch(() => {}); }} money />
           </div>
+        </section>
 
-          {activeAction ? (
-            <div className="mt-4 rounded-xl border border-violet-300/30 bg-violet-500/15 p-4 text-center">
-              <p className="text-sm text-white/75">Action in progress...</p>
-              <p className="mt-1 text-2xl font-black text-violet-200">{timer}s</p>
-            </div>
-          ) : null}
-        </div>
-
-        <SharedStatsPanel />
+        <PageDisclaimer />
       </div>
-      <div className="mx-auto mt-5 max-w-[1460px]"><PageDisclaimer /></div>
 
-      {popup ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onClick={() => setPopup(null)}>
-          <div
-            onClick={(event) => event.stopPropagation()}
-            className={`w-full max-w-md rounded-2xl border px-5 py-5 text-center text-base font-semibold shadow-xl ${popup.type === 'success' ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-100' : popup.type === 'danger' ? 'border-rose-300/40 bg-rose-500/20 text-rose-100' : 'border-sky-300/40 bg-sky-500/20 text-sky-100'}`}
-          >
-            {popup.text}
+      {confirmConvert && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md" onClick={() => !isConverting && setConfirmConvert(null)}>
+          <div className="game-panel w-full max-w-md p-6" onClick={(event) => event.stopPropagation()}>
+            <p className="section-kicker">Material conversion</p>
+            <h3 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">Use clean money for missing materials?</h3>
+            <div className="mt-5 grid grid-cols-2 gap-3"><ModalStat label="Dirty required" value={`${fmt(confirmConvert.needed)} $`} /><ModalStat label="Clean cost" value={`${fmt(confirmConvert.cleanCost)} $`} money /></div>
+            <p className="mt-4 text-xs leading-relaxed text-white/42">The clean cost is deducted from the server balance before the production stage starts.</p>
+            <div className="mt-6 flex gap-3"><button className="btn-ghost flex-1 rounded-2xl px-4 py-3 text-sm disabled:opacity-40" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>Cancel</button><button className="btn-primary flex-1 rounded-2xl px-4 py-3 text-sm disabled:opacity-40" onClick={() => { confirmConvertAndRun().catch(() => {}); }} type="button" disabled={isConverting}>{isConverting ? 'Converting...' : 'Confirm'}</button></div>
           </div>
         </div>
-      ) : null}
-
-      {confirmConvert ? (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !isConverting && setConfirmConvert(null)}>
-          <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white" onClick={(event) => event.stopPropagation()}>
-            <p className="text-lg font-black">Convert clean money into dirty money for materials?</p>
-            <p className="mt-2 text-sm text-white/70">
-              Required dirty: {confirmConvert.needed.toLocaleString('en-US')} · Clean cost: {confirmConvert.cleanCost.toLocaleString('en-US')}
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 font-bold disabled:opacity-60" onClick={confirmConvertAndRun} type="button" disabled={isConverting}>Yes</button>
-              <button className="flex-1 rounded-lg bg-white/10 px-4 py-2 font-bold disabled:opacity-60" onClick={() => setConfirmConvert(null)} type="button" disabled={isConverting}>No</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      )}
     </div>
   );
 }
 
-function StatCard({ label, value, money = false }: { label: string; value: number; money?: boolean }) {
+function HeroStat({ label, value, money = false }: { label: string; value: string; money?: boolean }) {
+  return <div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-[0.15em] text-white/25">{label}</p><p className={`mt-1 truncate text-sm font-black ${money ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p></div>;
+}
+
+function ProcessStat({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 text-center"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-white/24">{label}</p><p className="mt-1 truncate text-xs font-black text-white">{value}</p></div>;
+}
+
+function SaleCard({ title, subtitle, value, status, disabled, onClick, warning = false, money = false }: { title: string; subtitle: string; value: string; status: string; disabled: boolean; onClick: () => void; warning?: boolean; money?: boolean }) {
   return (
-    <div className="rounded-xl border border-white/15 bg-black/25 p-3 text-center">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-white/45">{label}</p>
-      <p className="mt-1 text-xl font-black text-white">
-        {value.toLocaleString('en-US')}
-        {money ? ' $' : ''}
-      </p>
-    </div>
+    <article className="game-card p-5">
+      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/27">Sales route</p>
+      <h3 className="mt-1 text-xl font-black text-white">{title}</h3>
+      <p className="mt-2 min-h-[36px] text-xs leading-relaxed text-white/42">{subtitle}</p>
+      <p className={`mt-4 text-lg font-black ${money ? 'text-[var(--money)]' : warning ? 'text-[var(--warning)]' : 'text-[var(--accent)]'}`}>{value}</p>
+      <p className="mt-1 text-xs text-white/35">{status}</p>
+      <button type="button" onClick={onClick} disabled={disabled} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-35">Run route</button>
+    </article>
   );
+}
+
+function ModalStat({ label, value, money = false }: { label: string; value: string; money?: boolean }) {
+  return <div className="rounded-[17px] border border-white/[0.07] bg-black/20 p-4"><p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/25">{label}</p><p className={`mt-1 text-base font-black ${money ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p></div>;
 }
