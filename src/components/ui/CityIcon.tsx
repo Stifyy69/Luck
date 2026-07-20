@@ -1,4 +1,5 @@
 export type CityIconName =
+  | 'home'
   | 'profile'
   | 'leaf'
   | 'moon'
@@ -46,6 +47,8 @@ export default function CityIcon({ name, className = 'h-5 w-5', strokeWidth = 1.
 
   const shape = (() => {
     switch (name) {
+      case 'home':
+        return <><path d="m3.5 10 8.5-7 8.5 7" {...common} /><path d="M5.5 9v11h13V9M9.5 20v-6h5v6" {...common} /></>;
       case 'profile':
         return <><circle cx="12" cy="8" r="3.25" {...common} /><path d="M5.75 19c.7-3.2 2.8-5 6.25-5s5.55 1.8 6.25 5" {...common} /></>;
       case 'leaf':
