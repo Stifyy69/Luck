@@ -40,6 +40,7 @@ export default function AccountHud() {
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [status, setStatus] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const loadMe = async () => {
     const response = await fetch('/api/auth/me', { credentials: 'include' });
@@ -101,25 +102,34 @@ export default function AccountHud() {
   }, [user]);
 
   const submit = async () => {
+    if (submitting) return;
+    setSubmitting(true);
     setStatus('');
-    const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-    const body = mode === 'login'
-      ? { username, password }
-      : { username, email, password, passwordConfirm };
+    try {
+      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const body = mode === 'login'
+        ? { username, password }
+        : { username, email, password, passwordConfirm };
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      setStatus('Authentication failed.');
-      return;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        setStatus(String(payload?.error || 'Authentication failed.'));
+        return;
+      }
+      await loadMe();
+      setOpen(false);
+      setStatus('');
+      setPassword('');
+      setPasswordConfirm('');
+    } finally {
+      setSubmitting(false);
     }
-    await loadMe();
-    setOpen(false);
-    setStatus('');
   };
 
   const logout = async () => {
@@ -129,33 +139,104 @@ export default function AccountHud() {
 
   return (
     <>
-      <div className="fixed right-4 top-4 z-[80] flex items-center gap-2">
+      <div className="fixed right-4 top-[82px] z-[80] md:top-4">
         {user ? (
-          <>
-            <div className="hud-card px-3 py-2 text-xs font-bold text-white">{user.username}</div>
-            <button type="button" className="btn-ghost rounded-lg px-3 py-2 text-xs font-bold" onClick={logout}>Logout</button>
-          </>
+          <div className="flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-[#0b0e0c]/90 p-1.5 shadow-2xl backdrop-blur-xl">
+            <div className="flex items-center gap-2 px-2.5 py-1.5">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-[var(--accent)] text-[10px] font-black uppercase text-[#10140b]">
+                {user.username.slice(0, 2)}
+              </span>
+              <div className="hidden sm:block">
+                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/30">Connected</p>
+                <p className="max-w-[120px] truncate text-xs font-extrabold text-white">{user.username}</p>
+              </div>
+            </div>
+            <button type="button" className="btn-ghost rounded-xl px-3 py-2 text-[11px]" onClick={logout}>Log out</button>
+          </div>
         ) : (
-          <button type="button" className="btn-primary rounded-lg px-3 py-2 text-xs font-bold" onClick={() => setOpen(true)}>Create account</button>
+          <button type="button" className="btn-primary rounded-2xl px-4 py-3 text-xs" onClick={() => setOpen(true)}>
+            Save your city
+          </button>
         )}
       </div>
 
       {open ? (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4" onClick={() => setOpen(false)}>
-          <div className="hud-panel w-full max-w-md p-5" onClick={(event) => event.stopPropagation()}>
-            <div className="mb-3 flex gap-2">
-              <button type="button" className={`rounded-lg px-3 py-2 text-sm font-bold ${mode === 'login' ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => setMode('login')}>Login</button>
-              <button type="button" className={`rounded-lg px-3 py-2 text-sm font-bold ${mode === 'register' ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => setMode('register')}>Create account</button>
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md" onClick={() => setOpen(false)}>
+          <div className="game-panel w-full max-w-[440px] overflow-hidden" onClick={(event) => event.stopPropagation()}>
+            <div className="border-b border-white/[0.07] p-6">
+              <p className="section-kicker">City account</p>
+              <h2 className="mt-3 text-3xl font-black tracking-[-0.04em] text-white">
+                {mode === 'login' ? 'Welcome back.' : 'Claim your identity.'}
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-white/45">
+                Sync your progress, garage and career history across devices.
+              </p>
             </div>
-            <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-            {mode === 'register' ? <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} /> : null}
-            <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            {mode === 'register' ? <input className="input-dark mb-2 w-full rounded-lg px-3 py-2 text-sm" type="password" placeholder="Confirm password" value={passwordConfirm} onChange={(e) => setPasswordConfirm(e.target.value)} /> : null}
-            {status ? <p className="mb-2 text-sm text-rose-300">{status}</p> : null}
-            <button type="button" onClick={submit} className="btn-primary w-full rounded-lg px-3 py-2 text-sm font-bold">{mode === 'login' ? 'Login' : 'Create account'}</button>
+
+            <div className="p-6">
+              <div className="mb-5 grid grid-cols-2 gap-2 rounded-2xl border border-white/[0.07] bg-black/25 p-1.5">
+                <button
+                  type="button"
+                  className={`rounded-xl px-3 py-2.5 text-sm font-extrabold transition ${mode === 'login' ? 'bg-white/[0.09] text-white' : 'text-white/40 hover:text-white/70'}`}
+                  onClick={() => {
+                    setMode('login');
+                    setStatus('');
+                  }}
+                >
+                  Log in
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-xl px-3 py-2.5 text-sm font-extrabold transition ${mode === 'register' ? 'bg-white/[0.09] text-white' : 'text-white/40 hover:text-white/70'}`}
+                  onClick={() => {
+                    setMode('register');
+                    setStatus('');
+                  }}
+                >
+                  Create account
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <Field label="Username">
+                  <input className="input-dark w-full rounded-2xl px-4 py-3 text-sm outline-none" placeholder="Your city name" value={username} onChange={(event) => setUsername(event.target.value)} />
+                </Field>
+                {mode === 'register' ? (
+                  <Field label="Email">
+                    <input className="input-dark w-full rounded-2xl px-4 py-3 text-sm outline-none" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
+                  </Field>
+                ) : null}
+                <Field label="Password">
+                  <input className="input-dark w-full rounded-2xl px-4 py-3 text-sm outline-none" type="password" placeholder="••••••••" value={password} onChange={(event) => setPassword(event.target.value)} />
+                </Field>
+                {mode === 'register' ? (
+                  <Field label="Confirm password">
+                    <input className="input-dark w-full rounded-2xl px-4 py-3 text-sm outline-none" type="password" placeholder="••••••••" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} />
+                  </Field>
+                ) : null}
+              </div>
+
+              {status ? <p className="mt-3 rounded-xl border border-red-400/20 bg-red-500/[0.07] px-3 py-2 text-sm font-semibold text-red-200">{status}</p> : null}
+
+              <div className="mt-6 flex gap-3">
+                <button type="button" onClick={() => setOpen(false)} className="btn-ghost flex-1 rounded-2xl px-4 py-3 text-sm">Cancel</button>
+                <button type="button" onClick={() => submit().catch(() => {})} disabled={submitting} className="btn-primary flex-[1.4] rounded-2xl px-4 py-3 text-sm disabled:opacity-50">
+                  {submitting ? 'Connecting...' : mode === 'login' ? 'Enter the city' : 'Create identity'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
     </>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.16em] text-white/32">{label}</span>
+      {children}
+    </label>
   );
 }
