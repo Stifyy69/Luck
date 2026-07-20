@@ -6,10 +6,16 @@ import type { FisherSpotOption, FisherStateResponse } from '../types/game';
 type Popup = { text: string; isError?: boolean } | null;
 
 const STATE_LABELS: Record<string, string> = {
-  IDLE: 'Idle',
-  STARTING_SHIFT: 'Starting Shift',
-  SELECTING_DOCK: 'Go To Spot Marker',
-  SELECTING_SPOT: 'Selecting Spot',
+  IDLE: 'Off duty',
+  STARTING_SHIFT: 'Starting shift',
+  SELECTING_DOCK: 'Move to marker',
+  SELECTING_SPOT: 'Choosing waters',
+};
+
+const SPOT_ART: Record<string, string> = {
+  COMMON: '/jobs/fisher/common-dock.svg',
+  BETTER: '/jobs/fisher/better-waters.svg',
+  PREMIUM: '/jobs/fisher/premium-deep-water.svg',
 };
 
 const ROD_SHOP = [
@@ -30,10 +36,14 @@ function wait(ms: number) {
   });
 }
 
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
+}
+
 function tierBadge(tier: string) {
-  if (tier === 'PREMIUM') return 'border-yellow-400/40 bg-yellow-500/15 text-yellow-200';
-  if (tier === 'BETTER') return 'border-cyan-400/40 bg-cyan-500/15 text-cyan-200';
-  return 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200';
+  if (tier === 'PREMIUM') return 'border-[rgba(240,196,106,0.3)] bg-[rgba(240,196,106,0.08)] text-[var(--warning)]';
+  if (tier === 'BETTER') return 'border-[rgba(114,183,255,0.28)] bg-[rgba(114,183,255,0.07)] text-[var(--info)]';
+  return 'border-[rgba(114,227,154,0.25)] bg-[rgba(114,227,154,0.07)] text-[var(--money)]';
 }
 
 export default function FisherPage() {
@@ -44,13 +54,12 @@ export default function FisherPage() {
   const [busy, setBusy] = useState(false);
   const lastOptionsFetchRef = useRef(0);
   const popupTimerRef = useRef<number | null>(null);
+  const spotsRef = useRef<HTMLElement | null>(null);
 
   const pushPopup = useCallback((text: string, isError = false) => {
-    if (popupTimerRef.current) {
-      window.clearTimeout(popupTimerRef.current);
-    }
+    if (popupTimerRef.current) window.clearTimeout(popupTimerRef.current);
     setPopup({ text, isError });
-    popupTimerRef.current = window.setTimeout(() => setPopup(null), 2000);
+    popupTimerRef.current = window.setTimeout(() => setPopup(null), 2200);
   }, []);
 
   const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
@@ -81,12 +90,20 @@ export default function FisherPage() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (!state) return;
-      if (state.shiftState !== 'IDLE') {
-        loadState().catch(() => {});
-      }
+      if (state.shiftState !== 'IDLE') loadState().catch(() => {});
     }, 500);
     return () => window.clearInterval(timer);
   }, [state, loadState]);
+
+  const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
+  const readableState = STATE_LABELS[String(state?.shiftState || 'IDLE')] || String(state?.shiftState || 'Idle').replace(/_/g, ' ');
+  const nextCarryCapacity = Math.min(100, Number(state?.carryCapacityKg ?? 20) + 5);
+  const canUpgradeCarry = state?.shiftState === 'IDLE' && Number(state?.carryCapacityKg ?? 20) < 100;
+  const carryPercent = clampPercent((Number(state?.carryWeightKg || 0) / Math.max(1, Number(state?.carryCapacityKg || 20))) * 100);
+
+  const scrollToSpots = useCallback(() => {
+    window.setTimeout(() => spotsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  }, []);
 
   const startShift = async () => {
     if (busy) return;
@@ -97,12 +114,21 @@ export default function FisherPage() {
       await wait(550);
       const data = await api.fisherSpotOptions(playerId);
       setOptions(data.options || []);
-      pushPopup('Fishing shift started. Pick a spot.');
+      pushPopup('Fishing shift started. Pick your waters.');
+      scrollToSpots();
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Could not start fisher shift', true);
     } finally {
       setBusy(false);
     }
+  };
+
+  const chooseWaters = async () => {
+    if (state?.shiftState === 'IDLE') {
+      await startShift();
+      return;
+    }
+    scrollToSpots();
   };
 
   const endShift = async () => {
@@ -141,7 +167,7 @@ export default function FisherPage() {
       const next = await api.fisherSpotSelect(playerId, spotId);
       setState(next);
       setOptions([]);
-      pushPopup('Spot selected. Follow the GO square.');
+      pushPopup('Waters selected. Follow the highlighted dock marker.');
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Spot select failed', true);
     } finally {
@@ -156,16 +182,16 @@ export default function FisherPage() {
       const isTarget = Number(state?.targetDockCell || 0) === Number(cellId);
       if (isTarget) {
         pushPopup('Applying bait...');
-        await wait(2000);
+        await wait(1200);
         pushPopup('Fish bite detected...');
-        await wait(2000);
-        pushPopup('Auto reeling and landing...');
-        await wait(2000);
+        await wait(1200);
+        pushPopup('Reeling and landing...');
+        await wait(1200);
       }
       const next = await api.fisherDockSelect(playerId, cellId);
       setState(next);
       if (next?.lastResult?.caught) {
-        await wait(500);
+        await wait(350);
         const fish = next.lastResult.fishName || 'Fish';
         const reward = Number(next.lastResult.breakdown?.totalReward || 0);
         pushPopup(`Caught ${fish} (+${fmt(reward)} $)`);
@@ -222,245 +248,157 @@ export default function FisherPage() {
     }
   };
 
-  const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
-  const readableState = STATE_LABELS[String(state?.shiftState || 'IDLE')] || String(state?.shiftState || 'Idle').replace(/_/g, ' ');
-  const nextCarryCapacity = Math.min(100, Number(state?.carryCapacityKg ?? 20) + 5);
-  const canUpgradeCarry = state?.shiftState === 'IDLE' && Number(state?.carryCapacityKg ?? 20) < 100;
-
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(33,179,210,0.18),_transparent_55%),linear-gradient(180deg,rgba(6,14,23,0.94),rgba(2,8,14,0.98))] px-4 py-6 md:py-8">
+    <div className="min-h-screen px-4 pb-10 pt-20 sm:px-6 md:px-8 md:pb-12 md:pt-8">
       {popup && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 px-4">
-          <div className={`w-full max-w-2xl rounded-2xl border px-6 py-5 text-center text-base font-black shadow-2xl backdrop-blur ${popup.isError ? 'border-red-500/50 bg-red-950/90 text-red-100' : 'border-cyan-400/50 bg-cyan-950/90 text-cyan-100'}`}>
-            {popup.text}
-          </div>
+        <div className={`animate-toast-in fixed left-1/2 top-4 z-[140] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-2xl border px-4 py-3 text-sm font-bold shadow-2xl backdrop-blur-xl md:top-6 ${popup.isError ? 'border-red-400/25 bg-[#261113]/95 text-red-100' : 'border-[rgba(211,255,81,0.24)] bg-[#11170d]/95 text-[#edffc0]'}`}>
+          {popup.text}
         </div>
       )}
 
-      <div className="mx-auto max-w-[1100px] space-y-4">
-        <div className="hud-panel p-5">
-          <p className="text-xs uppercase tracking-[0.2em] text-white/45">Work</p>
-          <h1 className="text-3xl font-black text-white">Fisher</h1>
-          <p className="mt-1 text-sm text-white/60">{displayName} · Fisher Lv. {state?.progress.level ?? 1}</p>
-
-          {underRepair && (
-            <p className="mt-2 rounded-lg border border-orange-400/50 bg-orange-900/25 px-3 py-2 text-xs font-black uppercase tracking-wide text-orange-200">
-              {state?.repairLabel || 'Repairing line'} · {state?.repairSecondsLeft}s
-            </p>
-          )}
-
-          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-6">
-            <Stat label="Level" value={String(state?.progress.level ?? 1)} />
-            <Stat label="XP" value={state?.progress ? `${fmt(state.progress.xp)} / ${state.progress.nextLevelXp ? fmt(state.progress.nextLevelXp) : 'MAX'}` : '0'} />
-            <Stat label="Rod" value={state?.progress.rodTierLabel || 'Basic Rod'} />
-            <Stat label="Spot Tier" value={state?.progress.unlockedSpotTier || 'COMMON'} />
-            <Stat label="Streak" value={String(state?.streak ?? 0)} />
-            <Stat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} / ${(state?.carryCapacityKg ?? 20).toFixed(0)} kg`} />
-          </div>
-
-          <div className="mt-3 rounded-xl border border-cyan-500/25 bg-cyan-900/10 p-3">
-            <p className="text-xs uppercase tracking-[0.16em] text-cyan-200/85">Carry Hold</p>
-            <p className="mt-1 text-sm font-bold text-cyan-100">Estimated sell value: {fmt(state?.carryEstimatedValue ?? 0)} $</p>
-            <p className="text-xs text-cyan-100/70">Carry capacity: {(state?.carryCapacityKg ?? 20).toFixed(0)}kg (max 100kg).</p>
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={startShift}
-              disabled={busy || underRepair || state?.shiftState !== 'IDLE'}
-              className="btn-primary rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-50"
-            >
-              Start Shift
+      <div className="mx-auto max-w-[1220px] space-y-5">
+        <section className="game-panel relative overflow-hidden px-5 py-10 text-center sm:px-8 sm:py-12">
+          <div className="pointer-events-none absolute left-1/2 top-[-190px] h-[380px] w-[560px] -translate-x-1/2 rounded-full bg-[var(--info)] opacity-[0.055] blur-3xl" />
+          <div className="relative mx-auto max-w-3xl">
+            <p className="section-kicker">Fishing career</p>
+            <h1 className="display-title mt-5">Choose your waters.</h1>
+            <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-white/45">Pick a fishing tier, follow the dock marker and build a valuable carry before returning to sell.</p>
+            <button type="button" onClick={() => chooseWaters().catch(() => {})} disabled={busy || underRepair || canSelectDock} className="btn-primary mt-7 min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:opacity-35">
+              {state?.shiftState === 'IDLE' ? 'Start fishing shift' : 'View fishing waters'}
             </button>
-            <button
-              type="button"
-              onClick={endShift}
-              disabled={busy || state?.shiftState === 'IDLE'}
-              className="rounded-xl border border-red-500/35 bg-red-900/20 px-4 py-2 text-sm font-bold text-red-200 disabled:opacity-50"
-            >
-              End Shift
-            </button>
-            {canSelectSpot && (
-              <button
-                type="button"
-                onClick={() => refreshOptions().catch(() => {})}
-                disabled={busy || underRepair}
-                className="rounded-xl border border-white/20 px-4 py-2 text-sm font-bold text-white/75 disabled:opacity-50"
-              >
-                Refresh Spots
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => sellCatch().catch(() => {})}
-              disabled={busy || (state?.carryEstimatedValue ?? 0) <= 0}
-              className="rounded-xl border border-emerald-500/40 bg-emerald-900/20 px-4 py-2 text-sm font-bold text-emerald-100 disabled:opacity-50"
-            >
-              Sell Catch
-            </button>
-          </div>
-        </div>
 
-        {canSelectDock && (
-          <div className="hud-panel p-5">
-            <h2 className="text-lg font-black text-white">Go To The Spot (4x4)</h2>
-            <p className="mt-1 text-sm text-white/70">{state?.dockPrompt || 'Click the green square to auto fish this spot.'}</p>
-            <div className="mt-4 grid grid-cols-4 gap-2">
-              {Array.from({ length: 16 }).map((_, idx) => {
-                const cell = idx + 1;
-                const selected = state?.currentDockCell === cell;
-                const target = state?.targetDockCell === cell;
-                return (
-                  <button
-                    key={`dock-${cell}`}
-                    type="button"
-                    onClick={() => selectDock(cell).catch(() => {})}
-                    disabled={busy}
-                    className={`h-14 rounded-lg border text-sm font-black transition ${target ? 'border-emerald-300 bg-emerald-500/35 text-emerald-100 shadow-[0_0_0_1px_rgba(16,185,129,0.45)]' : selected ? 'border-cyan-300 bg-cyan-500/25 text-cyan-100' : 'border-slate-700 bg-slate-900/70 text-slate-400 hover:border-slate-500 hover:bg-slate-800/75'} disabled:opacity-60`}
-                  >
-                    {target ? 'GO' : cell}
-                  </button>
-                );
-              })}
+            <div className="mt-7 grid grid-cols-2 gap-3 border-t border-white/[0.07] pt-6 sm:grid-cols-5">
+              <HeroStat label="Fisher" value={displayName} />
+              <HeroStat label="Level" value={String(state?.progress.level ?? 1)} />
+              <HeroStat label="Rod" value={state?.progress.rodTierLabel || 'Street Rod'} />
+              <HeroStat label="Streak" value={String(state?.streak ?? 0)} />
+              <HeroStat label="Carry value" value={`${fmt(state?.carryEstimatedValue ?? 0)} $`} money />
+            </div>
+
+            <div className="mx-auto mt-5 max-w-xl">
+              <div className="mb-2 flex items-center justify-between text-xs"><span className="font-bold text-white/38">Carry hold</span><span className="font-black text-white">{(state?.carryWeightKg ?? 0).toFixed(1)} / {(state?.carryCapacityKg ?? 20).toFixed(0)} kg</span></div>
+              <div className="progress-track"><div className="progress-fill" style={{ width: `${carryPercent}%` }} /></div>
             </div>
           </div>
+        </section>
+
+        {underRepair && (
+          <section className="rounded-[20px] border border-[rgba(240,196,106,0.24)] bg-[rgba(240,196,106,0.065)] p-4">
+            <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[0.14em] text-[var(--warning)]">Equipment unavailable</p><p className="mt-1 text-sm font-semibold text-white/68">{state?.repairLabel || 'Repairing line'}</p></div><p className="text-2xl font-black text-white">{state?.repairSecondsLeft}s</p></div>
+          </section>
         )}
 
         {canSelectSpot && (
-          <div className="hud-panel p-5">
-            <h2 className="text-lg font-black text-white">Fishing Spot Options</h2>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <section ref={spotsRef} className="game-panel-soft scroll-mt-24 p-5 sm:p-6">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div><p className="section-kicker">Fishing board</p><h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Available waters</h2><p className="mt-2 text-sm text-white/38">Higher tiers improve payout and rarity, but require better equipment and level.</p></div>
+              <div className="flex gap-2"><button type="button" onClick={() => refreshOptions().catch(() => {})} disabled={busy} className="btn-ghost rounded-2xl px-4 py-2.5 text-xs disabled:opacity-35">Refresh waters</button><button type="button" onClick={() => endShift().catch(() => {})} disabled={busy} className="btn-danger rounded-2xl px-4 py-2.5 text-xs disabled:opacity-35">End shift</button></div>
+            </div>
+
+            <div className="mt-6 grid gap-4 lg:grid-cols-3">
               {options.map((spot) => (
-                <button
-                  key={spot.spotId}
-                  type="button"
-                  onClick={() => selectSpot(spot.spotId)}
-                  disabled={busy || underRepair || !!spot.locked}
-                  className="rounded-xl border border-white/15 bg-white/5 p-4 text-left transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <span className={`inline-block rounded border px-2 py-0.5 text-[10px] font-black ${tierBadge(spot.tier)}`}>
-                    {spot.tier}
-                  </span>
-                  <p className="mt-2 text-sm font-black text-white">{spot.name}</p>
-                  <p className="text-xs text-white/70">Difficulty: {spot.difficulty}</p>
-                  <p className="text-xs text-white/70">Fish Pool: {spot.fishPool.join(', ')}</p>
-                  <p className="text-xs text-white/70">Cast: {spot.castDifficulty} · Reel: {spot.reelDifficulty}</p>
-                  <p className="text-xs text-white/70">Bite: ~{spot.waitBiteEstimateSec}s · Travel: {spot.travelSec}s</p>
-                  <p className="text-xs text-white/70">Risk: {spot.failRisk}</p>
-                  <p className="text-xs text-white/70">Size drop: Normal 75% · Big 20% · Giant 5%</p>
-                  <p className="text-xs text-white/70">Approx payout: ~{fmt(spot.estimatedReward)} $ / catch</p>
-                  {spot.locked ? (
-                    <p className="mt-2 text-xs font-black text-orange-300">Locked until Lv. {spot.unlockLevel}</p>
-                  ) : (
-                    <>
-                      <p className="mt-2 font-black text-[#ffd95a]">~{fmt(spot.estimatedReward)} $</p>
-                      <p className="text-sm font-bold text-[#45d483]">~{spot.estimatedXp} XP</p>
-                    </>
-                  )}
-                </button>
+                <article key={spot.spotId} className={`overflow-hidden rounded-[22px] border p-4 ${spot.locked ? 'border-white/[0.07] bg-black/20' : 'border-[rgba(211,255,81,0.18)] bg-[rgba(211,255,81,0.035)]'}`}>
+                  <div className="relative flex h-[190px] items-center justify-center rounded-[18px] border border-white/[0.08] bg-[#090c09] p-3">
+                    <img src={SPOT_ART[spot.tier]} alt={spot.name} className={`h-full w-full object-contain ${spot.locked ? 'grayscale opacity-35' : ''}`} />
+                    <span className={`absolute right-3 top-3 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] ${tierBadge(spot.tier)}`}>{spot.tier}</span>
+                  </div>
+
+                  <div className="mt-4 flex items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/26">Fishing spot</p><h3 className="mt-1 text-xl font-black text-white">{spot.name}</h3></div><p className="text-right text-sm font-black text-[var(--money)]">~{fmt(spot.estimatedReward)} $<span className="block text-xs text-[var(--accent)]">+{spot.estimatedXp} XP</span></p></div>
+                  <p className="mt-3 min-h-[36px] text-xs leading-relaxed text-white/42">Fish pool: {spot.fishPool.join(', ')}</p>
+                  <div className="mt-4 grid grid-cols-3 gap-2 border-y border-white/[0.065] py-4"><SpotStat label="Cast" value={spot.castDifficulty} /><SpotStat label="Reel" value={spot.reelDifficulty} /><SpotStat label="Risk" value={spot.failRisk} /></div>
+                  <p className="mt-3 text-xs text-white/38">Bite ~{spot.waitBiteEstimateSec}s · Travel {spot.travelSec}s</p>
+                  {spot.locked && <p className="mt-2 text-xs font-black text-[var(--warning)]">Unlock at level {spot.unlockLevel}</p>}
+                  <button type="button" onClick={() => selectSpot(spot.spotId).catch(() => {})} disabled={busy || underRepair || !!spot.locked} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-35">{spot.locked ? `Locked until level ${spot.unlockLevel}` : 'Fish this spot'}</button>
+                </article>
               ))}
             </div>
-          </div>
+          </section>
         )}
 
-        {state?.shiftState !== 'IDLE' && (
-          <div className="hud-panel p-5">
-            <h2 className="text-lg font-black text-white">Fishing Flow</h2>
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="State" value={readableState} />
-              <Stat label="Current Spot" value={state?.activeSpotName || state?.activeCatch?.spotName || 'Not selected'} />
-              <Stat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} kg`} />
-              <Stat label="Sell Value" value={`${fmt(state?.carryEstimatedValue ?? 0)} $`} />
+        {canSelectDock && (
+          <section className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
+            <div className="game-panel-soft p-5 sm:p-6">
+              <p className="section-kicker">Active waters</p>
+              <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">{state?.activeSpotName || state?.activeCatch?.spotName || 'Fishing route'}</h2>
+              <p className="mt-2 text-sm text-white/38">Find the highlighted dock square to start the automatic bait, bite and reel sequence.</p>
+              <div className="mt-5 flex h-[210px] items-center justify-center rounded-[20px] border border-white/[0.08] bg-[#090c09] p-3"><img src={SPOT_ART[state?.activeCatch?.spotTier || 'COMMON']} alt="Fishing waters" className="h-full w-full object-contain" /></div>
+              <div className="mt-5 grid grid-cols-2 gap-3"><MissionStat label="State" value={readableState} /><MissionStat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} kg`} /><MissionStat label="Sell value" value={`${fmt(state?.carryEstimatedValue ?? 0)} $`} good /><MissionStat label="Streak" value={String(state?.streak ?? 0)} /></div>
             </div>
-            <p className="mt-3 text-sm text-white/70">Choose spot {'->'} click green square (Go to spot) {'->'} catch runs automatic (bait/cast/bite/reel) {'->'} choose next spot.</p>
-          </div>
-        )}
 
-        {state?.shiftState !== 'IDLE' && state?.lastResult && (
-          <div className="hud-panel p-5">
-            <h2 className="text-lg font-black text-white">Last Catch Result</h2>
-            {state.lastResult.caught ? (
-              <p className="mt-2 text-sm text-white/80">
-                {state.lastResult.fishName} · {state.lastResult.fishRarity} · {state.lastResult.fishSize === 'GIANT' ? 'Best Size' : state.lastResult.fishSize === 'BIG' ? 'Medium Size' : 'Normal Size'} · {state.lastResult.fishWeightKg} kg
-              </p>
-            ) : (
-              <p className="mt-2 text-sm text-red-200">{state.lastResult.failReason}</p>
-            )}
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <Summary label="Total Reward" value={`${fmt(state.lastResult.breakdown.totalReward)} $`} />
-              <Summary label="XP Gained" value={`${state.lastResult.breakdown.xpGained}`} />
-              <Summary label="Base Reward" value={`${fmt(state.lastResult.breakdown.baseReward)} $`} />
-              <Summary label="Spot Multiplier" value={`${state.lastResult.breakdown.spotMultiplier.toFixed(2)}x`} />
-              <Summary label="Level Multiplier" value={`${state.lastResult.breakdown.levelMultiplier.toFixed(2)}x`} />
-              <Summary label="Quality Multiplier" value={`${state.lastResult.breakdown.qualityMultiplier.toFixed(2)}x`} />
-              <Summary label="Streak Multiplier" value={`${state.lastResult.breakdown.streakMultiplier.toFixed(2)}x`} />
-              <Summary label="Integrity Multiplier" value={`${state.lastResult.breakdown.integrityMultiplier.toFixed(2)}x`} />
+            <div className="game-panel-soft p-5 sm:p-6">
+              <p className="section-kicker">Dock map</p>
+              <h3 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">Go to the marked square</h3>
+              <p className="mt-2 text-sm text-white/38">The green square is the current fishing position.</p>
+              <div className="mt-5 grid grid-cols-4 gap-2">
+                {Array.from({ length: 16 }).map((_, index) => {
+                  const cell = index + 1;
+                  const selected = state?.currentDockCell === cell;
+                  const target = state?.targetDockCell === cell;
+                  return (
+                    <button key={`dock-${cell}`} type="button" onClick={() => selectDock(cell).catch(() => {})} disabled={busy} className={`h-16 rounded-[15px] border text-sm font-black transition ${target ? 'border-[rgba(211,255,81,0.5)] bg-[var(--accent)] text-[#10140b] shadow-[0_0_28px_rgba(211,255,81,0.16)]' : selected ? 'border-[rgba(114,183,255,0.35)] bg-[rgba(114,183,255,0.1)] text-[var(--info)]' : 'border-white/[0.07] bg-black/20 text-white/35 hover:border-white/[0.16]'} disabled:opacity-50`}>{target ? 'GO' : cell}</button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          </section>
         )}
 
         {state?.shiftState === 'IDLE' && (
-          <div className="hud-panel p-5">
-            <h2 className="text-lg font-black text-white">Rod Shop</h2>
-            <p className="mt-1 text-sm text-white/70">Upgrade rods for better fish size chance and higher catch payouts.</p>
-            <div className="mt-4 rounded-xl border border-emerald-500/35 bg-emerald-900/20 p-3">
-              <p className="text-sm font-black text-emerald-100">Carry Upgrade</p>
-              <p className="text-xs text-emerald-200/80">+5kg for 50,000 $ (max 100kg)</p>
-              <p className="mt-1 text-xs text-emerald-100/80">Current: {(state?.carryCapacityKg ?? 20).toFixed(0)}kg</p>
-              <button
-                type="button"
-                onClick={() => buyCarry().catch(() => {})}
-                disabled={busy || !canUpgradeCarry}
-                className="mt-2 rounded-lg border border-emerald-400/45 bg-emerald-950/30 px-3 py-2 text-xs font-bold text-emerald-100 disabled:opacity-50"
-              >
-                {canUpgradeCarry ? `Upgrade to ${nextCarryCapacity}kg` : 'Carry Maxed'}
-              </button>
+          <section className="game-panel-soft p-5 sm:p-6">
+            <div><p className="section-kicker">Equipment progression</p><h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Rod shop and carry upgrades</h2><p className="mt-2 text-sm text-white/38">Upgrade equipment before starting a shift to reach better waters and improve catch value.</p></div>
+
+            <div className="mt-6 rounded-[20px] border border-[rgba(114,227,154,0.2)] bg-[rgba(114,227,154,0.05)] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-[10px] font-black uppercase tracking-[0.14em] text-[var(--money)]">Carry upgrade</p><p className="mt-1 text-xl font-black text-white">{(state?.carryCapacityKg ?? 20).toFixed(0)} kg capacity</p><p className="mt-1 text-xs text-white/42">+5 kg for 50,000 $ · maximum 100 kg</p></div><button type="button" onClick={() => buyCarry().catch(() => {})} disabled={busy || !canUpgradeCarry} className="btn-secondary rounded-2xl px-4 py-3 text-sm disabled:opacity-35">{canUpgradeCarry ? `Upgrade to ${nextCarryCapacity} kg` : 'Carry maxed'}</button></div>
             </div>
-            <div className="mt-4 grid gap-2 md:grid-cols-2">
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {ROD_SHOP.map((rod) => {
                 const currentTier = Number(state?.progress.rodTier || 1);
                 const isCurrentTier = currentTier === rod.tier;
                 const isLowerIncluded = currentTier > rod.tier;
                 const disabled = busy || isCurrentTier || isLowerIncluded;
                 return (
-                  <div key={`rod-shop-${rod.tier}`} className="rounded-xl border border-white/15 bg-black/20 p-3">
-                    <p className="text-sm font-black text-white">Tier {rod.tier} · {rod.name}</p>
-                    <p className="text-xs text-white/70">{rod.bonus}</p>
-                    <p className="mt-1 text-sm font-black text-[#ffd95a]">{fmt(rod.price)} $</p>
-                    <button
-                      type="button"
-                      onClick={() => buyRod(rod.tier).catch(() => {})}
-                      disabled={disabled}
-                      className="mt-2 rounded-lg border border-cyan-500/40 bg-cyan-900/20 px-3 py-2 text-xs font-bold text-cyan-100 disabled:opacity-50"
-                    >
-                      {isCurrentTier ? 'Owned' : isLowerIncluded ? 'Included' : 'Buy Rod'}
-                    </button>
-                  </div>
+                  <article key={`rod-shop-${rod.tier}`} className={`rounded-[22px] border p-4 ${isCurrentTier ? 'border-[rgba(211,255,81,0.28)] bg-[rgba(211,255,81,0.055)]' : 'border-white/[0.08] bg-black/20'}`}>
+                    <div className="flex h-[120px] items-center justify-center rounded-[18px] border border-white/[0.08] bg-[#090c09]"><div className="relative h-[92px] w-[150px]"><span className="absolute left-5 top-7 h-[8px] w-[118px] -rotate-[22deg] rounded-full bg-gradient-to-r from-[#e6ece7] via-[#7f8c84] to-[#202722]" /><span className="absolute right-2 top-1 h-[55px] w-[4px] rotate-[18deg] rounded-full bg-[var(--accent)]" /><span className="absolute left-[54px] top-[48px] h-8 w-8 rounded-full border-[5px] border-[#59645d] bg-[#171d19]" /></div></div>
+                    <div className="mt-4 flex items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/26">Tier {rod.tier}</p><h3 className="mt-1 text-lg font-black text-white">{rod.name}</h3></div><p className="text-sm font-black text-[var(--money)]">{fmt(rod.price)} $</p></div>
+                    <p className="mt-2 min-h-[36px] text-xs leading-relaxed text-white/42">{rod.bonus}</p>
+                    <button type="button" onClick={() => buyRod(rod.tier).catch(() => {})} disabled={disabled} className="btn-secondary mt-4 w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-35">{isCurrentTier ? 'Equipped' : isLowerIncluded ? 'Owned' : 'Buy rod'}</button>
+                  </article>
                 );
               })}
             </div>
-          </div>
+          </section>
+        )}
+
+        {(state?.carryEstimatedValue ?? 0) > 0 && (
+          <section className="game-panel-soft flex flex-wrap items-center justify-between gap-4 p-5"><div><p className="section-kicker">Catch hold</p><p className="mt-1 text-2xl font-black text-white">Estimated value {fmt(state?.carryEstimatedValue ?? 0)} $</p></div><button type="button" onClick={() => sellCatch().catch(() => {})} disabled={busy} className="btn-primary rounded-2xl px-5 py-3 text-sm disabled:opacity-35">Sell full catch</button></section>
+        )}
+
+        {state?.lastResult && (
+          <section className="game-panel overflow-hidden">
+            <div className="grid lg:grid-cols-[0.72fr_1.28fr]">
+              <div className="border-b border-white/[0.07] bg-black/20 p-6 sm:p-7 lg:border-b-0 lg:border-r"><p className="section-kicker">Catch report</p><p className={`mt-4 text-sm font-black uppercase tracking-[0.14em] ${state.lastResult.caught ? 'text-[var(--money)]' : 'text-[var(--danger)]'}`}>{state.lastResult.caught ? `${state.lastResult.fishName} · ${state.lastResult.fishRarity}` : state.lastResult.failReason}</p><p className="mt-4 text-5xl font-black tracking-[-0.055em] text-[var(--money)]">+{fmt(state.lastResult.breakdown.totalReward)} $</p><p className="mt-2 text-lg font-black text-[var(--accent)]">+{state.lastResult.breakdown.xpGained} XP</p>{state.lastResult.fishWeightKg && <p className="mt-4 text-sm font-black text-white">{state.lastResult.fishSize} · {state.lastResult.fishWeightKg} kg</p>}</div>
+              <div className="p-6 sm:p-7"><p className="text-[10px] font-black uppercase tracking-[0.15em] text-white/27">Catch factors</p><h3 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">Why this catch paid</h3><div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3"><Summary label="Base reward" value={`${fmt(state.lastResult.breakdown.baseReward)} $`} /><Summary label="Spot factor" value={`${state.lastResult.breakdown.spotMultiplier.toFixed(2)}x`} /><Summary label="Level factor" value={`${state.lastResult.breakdown.levelMultiplier.toFixed(2)}x`} /><Summary label="Quality factor" value={`${state.lastResult.breakdown.qualityMultiplier.toFixed(2)}x`} /><Summary label="Streak factor" value={`${state.lastResult.breakdown.streakMultiplier.toFixed(2)}x`} /><Summary label="Integrity" value={`${state.lastResult.breakdown.integrityMultiplier.toFixed(2)}x`} /></div></div>
+            </div>
+          </section>
         )}
       </div>
     </div>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-      <p className="text-[10px] uppercase tracking-widest text-white/45">{label}</p>
-      <p className="mt-1 truncate text-sm font-black text-white">{value}</p>
-    </div>
-  );
+function HeroStat({ label, value, money = false }: { label: string; value: string; money?: boolean }) {
+  return <div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-[0.15em] text-white/25">{label}</p><p className={`mt-1 truncate text-sm font-black ${money ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p></div>;
+}
+
+function SpotStat({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 text-center"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-white/24">{label}</p><p className="mt-1 truncate text-xs font-black text-white">{value}</p></div>;
+}
+
+function MissionStat({ label, value, good = false }: { label: string; value: string; good?: boolean }) {
+  return <div className="rounded-[17px] border border-white/[0.07] bg-black/20 p-3"><p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/25">{label}</p><p className={`mt-1 text-base font-black ${good ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p></div>;
 }
 
 function Summary({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-      <p className="text-xs text-white/55">{label}</p>
-      <p className="text-sm font-black text-white">{value}</p>
-    </div>
-  );
+  return <div className="rounded-[17px] border border-white/[0.07] bg-black/20 p-4"><p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/25">{label}</p><p className="mt-1 text-base font-black text-white">{value}</p></div>;
 }

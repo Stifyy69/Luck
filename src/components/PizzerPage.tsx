@@ -1,14 +1,58 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
 import type { PizzerOrderOption, PizzerStateResponse } from '../types/game';
 
 type Popup = { text: string; isError?: boolean } | null;
 
+type FleetVehicle = {
+  id: 'bicycle' | 'scooter' | 'delivery-car';
+  label: string;
+  role: string;
+  unlockLevel: number;
+  image: string;
+  speed: string;
+  contractAccess: string;
+  bonus: string;
+};
+
 const PACKING_STEPS = [
-  { key: 'PICK_BOXES', label: 'Load pizzas', detail: 'Match every pizza box to the manifest.' },
-  { key: 'ADD_DRINKS', label: 'Add drinks', detail: 'Secure the drinks before leaving the store.' },
-  { key: 'CONFIRM_ORDER', label: 'Seal order', detail: 'Confirm the full order and release the route.' },
+  { key: 'PICK_BOXES', label: 'Packing pizzas' },
+  { key: 'ADD_DRINKS', label: 'Securing drinks' },
+  { key: 'CONFIRM_ORDER', label: 'Checking receipt' },
+];
+
+const FLEET: FleetVehicle[] = [
+  {
+    id: 'bicycle',
+    label: 'Bicycle Courier',
+    role: 'Starter vehicle',
+    unlockLevel: 1,
+    image: '/jobs/pizzer/bicycle.svg',
+    speed: 'Urban short runs',
+    contractAccess: 'Standard contracts',
+    bonus: 'Low repair risk',
+  },
+  {
+    id: 'scooter',
+    label: 'Scooter Courier',
+    role: 'Mid-tier vehicle',
+    unlockLevel: 17,
+    image: '/jobs/pizzer/scooter.svg',
+    speed: 'Faster city routes',
+    contractAccess: 'Urgent contracts',
+    bonus: 'Better freshness window',
+  },
+  {
+    id: 'delivery-car',
+    label: 'Delivery Car',
+    role: 'Top-tier vehicle',
+    unlockLevel: 34,
+    image: '/jobs/pizzer/delivery-car.svg',
+    speed: 'Long premium routes',
+    contractAccess: 'VIP contracts',
+    bonus: 'Highest route capacity',
+  },
 ];
 
 function fmt(n: number) {
@@ -46,18 +90,30 @@ function ratingTone(rating: string) {
 
 function shiftLabel(shiftState?: string) {
   if (shiftState === 'SELECTING_ORDER') return 'Dispatch board';
-  if (shiftState === 'PACKING_ORDER') return 'Packing order';
+  if (shiftState === 'PACKING_ORDER') return 'Preparing order';
   if (shiftState === 'DELIVERY_ACTIVE') return 'Delivery live';
   if (shiftState === 'DELIVERY_RESULT') return 'Run complete';
   return 'Off duty';
+}
+
+function fleetVehicleForLevel(level: number) {
+  if (level >= 34) return FLEET[2];
+  if (level >= 17) return FLEET[1];
+  return FLEET[0];
 }
 
 export default function PizzerPage() {
   const { player, playerId, refresh } = usePlayer();
   const [state, setState] = useState<PizzerStateResponse | null>(null);
   const [options, setOptions] = useState<PizzerOrderOption[]>([]);
+  const [acceptedOption, setAcceptedOption] = useState<PizzerOrderOption | null>(null);
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState<Popup>(null);
+  const [autoPreparing, setAutoPreparing] = useState(false);
+  const [preparationStep, setPreparationStep] = useState(0);
+  const [fleetPreviewId, setFleetPreviewId] = useState<FleetVehicle['id']>('bicycle');
+  const dispatchRef = useRef<HTMLElement | null>(null);
+  const activeRef = useRef<HTMLElement | null>(null);
 
   const pushPopup = useCallback((text: string, isError = false) => {
     setPopup({ text, isError });
@@ -91,6 +147,45 @@ export default function PizzerPage() {
     return () => window.clearInterval(timer);
   }, [state, loadState]);
 
+  const progress = state?.progress;
+  const active = state?.activeOrder;
+  const canStart = state?.shiftState === 'IDLE';
+  const canShowOptions = state?.shiftState === 'SELECTING_ORDER';
+  const canPack = state?.shiftState === 'PACKING_ORDER';
+  const canDeliver = state?.shiftState === 'DELIVERY_ACTIVE';
+  const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
+  const displayName = useMemo(() => String(player?.displayName || 'Player'), [player]);
+  const currentVehicle = useMemo(() => fleetVehicleForLevel(progress?.level ?? 1), [progress?.level]);
+  const fleetPreview = useMemo(
+    () => FLEET.find((vehicle) => vehicle.id === fleetPreviewId) || currentVehicle,
+    [fleetPreviewId, currentVehicle],
+  );
+
+  useEffect(() => {
+    setFleetPreviewId(currentVehicle.id);
+  }, [currentVehicle.id]);
+
+  const xpPercent = useMemo(() => {
+    if (!progress) return 0;
+    if (!progress.nextLevelXp) return 100;
+    const levelStart = Number(progress.currentLevelXp || 0);
+    const levelEnd = Number(progress.nextLevelXp || levelStart + 1);
+    const current = Number(progress.xp || 0);
+    return clampPercent(((current - levelStart) / Math.max(1, levelEnd - levelStart)) * 100);
+  }, [progress]);
+
+  const scrollToDispatch = useCallback(() => {
+    window.setTimeout(() => {
+      dispatchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  }, []);
+
+  const scrollToActive = useCallback(() => {
+    window.setTimeout(() => {
+      activeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  }, []);
+
   const startShift = async () => {
     if (busy) return;
     setBusy(true);
@@ -99,12 +194,33 @@ export default function PizzerPage() {
       setState(next);
       const data = await api.pizzerOrderOptions(playerId);
       setOptions(data.options || []);
-      pushPopup('You are on duty. Dispatch sent the first contracts.');
+      pushPopup('Dispatch sent the next available runs.');
+      scrollToDispatch();
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Could not start courier shift', true);
     } finally {
       setBusy(false);
     }
+  };
+
+  const chooseNextRun = async () => {
+    if (busy || underRepair) return;
+    if (canStart) {
+      await startShift();
+      return;
+    }
+    if (canShowOptions && options.length === 0) {
+      setBusy(true);
+      try {
+        const data = await api.pizzerOrderOptions(playerId);
+        setOptions(data.options || []);
+      } catch (e) {
+        pushPopup(e instanceof Error ? e.message : 'Could not load contracts', true);
+      } finally {
+        setBusy(false);
+      }
+    }
+    scrollToDispatch();
   };
 
   const endShift = async () => {
@@ -114,6 +230,9 @@ export default function PizzerPage() {
       const next = await api.pizzerShiftEnd(playerId);
       setState(next);
       setOptions([]);
+      setAcceptedOption(null);
+      setAutoPreparing(false);
+      setPreparationStep(0);
       pushPopup('Shift closed. Earnings were saved.');
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Could not end courier shift', true);
@@ -136,37 +255,32 @@ export default function PizzerPage() {
     }
   };
 
-  const selectOrder = async (orderId: string) => {
+  const selectOrder = async (option: PizzerOrderOption) => {
     if (busy) return;
     setBusy(true);
+    setAcceptedOption(option);
+    setAutoPreparing(true);
+    setPreparationStep(0);
     try {
-      const next = await api.pizzerOrderSelect(playerId, orderId);
+      let next = await api.pizzerOrderSelect(playerId, option.orderId);
       setState(next);
       setOptions([]);
-      pushPopup('Contract accepted. Prepare the order.');
-    } catch (e) {
-      pushPopup(e instanceof Error ? e.message : 'Contract selection failed', true);
-    } finally {
-      setBusy(false);
-    }
-  };
+      scrollToActive();
 
-  const doPackingStep = async (stepKey: string) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const stepPopup = stepKey === 'PICK_BOXES'
-        ? 'Loading pizza boxes...'
-        : stepKey === 'ADD_DRINKS'
-          ? 'Securing drinks...'
-          : 'Sealing order...';
-      pushPopup(stepPopup);
-      await wait(800);
-      const next = await api.pizzerPackingStep(playerId, stepKey);
-      setState(next);
+      for (let index = 0; index < PACKING_STEPS.length; index += 1) {
+        setPreparationStep(index);
+        await wait(700);
+        next = await api.pizzerPackingStep(playerId, PACKING_STEPS[index].key);
+        setState(next);
+      }
+
+      setPreparationStep(PACKING_STEPS.length);
+      pushPopup('Order prepared automatically. Route is ready.');
     } catch (e) {
-      pushPopup(e instanceof Error ? e.message : 'Packing step failed', true);
+      setAcceptedOption(null);
+      pushPopup(e instanceof Error ? e.message : 'Contract preparation failed', true);
     } finally {
+      setAutoPreparing(false);
       setBusy(false);
     }
   };
@@ -179,6 +293,7 @@ export default function PizzerPage() {
       await wait(800);
       const payload = await api.pizzerHandover(playerId, 'DOOR');
       setState(payload.state);
+      setAcceptedOption(null);
       refresh();
       if (payload.result.accident) {
         const repairLabel = payload.state.repairLabel || 'Repairing vehicle';
@@ -197,7 +312,7 @@ export default function PizzerPage() {
       window.setTimeout(() => {
         api
           .pizzerOrderOptions(playerId)
-          .then((data) => setOptions(data.options || []))
+          .then((data: { options: PizzerOrderOption[] }) => setOptions(data.options || []))
           .catch(() => {});
       }, 550);
     } catch (e) {
@@ -206,24 +321,6 @@ export default function PizzerPage() {
       setBusy(false);
     }
   };
-
-  const progress = state?.progress;
-  const active = state?.activeOrder;
-  const canStart = state?.shiftState === 'IDLE';
-  const canShowOptions = state?.shiftState === 'SELECTING_ORDER';
-  const canPack = state?.shiftState === 'PACKING_ORDER';
-  const canDeliver = state?.shiftState === 'DELIVERY_ACTIVE';
-  const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
-  const displayName = useMemo(() => String(player?.displayName || 'Player'), [player]);
-
-  const xpPercent = useMemo(() => {
-    if (!progress) return 0;
-    if (!progress.nextLevelXp) return 100;
-    const levelStart = Number(progress.currentLevelXp || 0);
-    const levelEnd = Number(progress.nextLevelXp || levelStart + 1);
-    const current = Number(progress.xp || 0);
-    return clampPercent(((current - levelStart) / Math.max(1, levelEnd - levelStart)) * 100);
-  }, [progress]);
 
   return (
     <div className="min-h-screen px-4 pb-10 pt-20 sm:px-6 md:px-8 md:pb-12 md:pt-8">
@@ -241,61 +338,44 @@ export default function PizzerPage() {
       )}
 
       <div className="mx-auto max-w-[1220px] space-y-5">
-        <section className="game-panel relative overflow-hidden p-5 sm:p-7 lg:p-8">
-          <div className="pointer-events-none absolute -right-12 -top-24 h-72 w-72 rounded-full bg-[var(--accent)] opacity-[0.065] blur-3xl" />
-          <div className="relative grid gap-7 xl:grid-cols-[1.2fr_0.8fr] xl:items-end">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="section-kicker">Courier division</p>
-                <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.13em] ${canStart ? 'border-white/[0.1] bg-white/[0.035] text-white/48' : 'border-[rgba(211,255,81,0.25)] bg-[rgba(211,255,81,0.07)] text-[var(--accent)]'}`}>
-                  {shiftLabel(state?.shiftState)}
-                </span>
-              </div>
-
-              <h1 className="display-title mt-5">Move fast.<br /><span className="text-white/32">Deliver clean.</span></h1>
-              <p className="mt-4 max-w-xl text-sm leading-relaxed text-white/44">
-                Choose the contract, pack it correctly and protect the order quality until the customer handoff.
-              </p>
-
-              <div className="mt-7 flex flex-wrap gap-3">
-                <button type="button" onClick={() => startShift().catch(() => {})} disabled={!canStart || busy || underRepair} className="btn-primary rounded-2xl px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-40">
-                  Clock in
-                </button>
-                <button type="button" onClick={() => endShift().catch(() => {})} disabled={canStart || busy} className="btn-danger rounded-2xl px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-35">
-                  Clock out
-                </button>
-                {canShowOptions && (
-                  <button type="button" onClick={() => refreshOptions().catch(() => {})} disabled={busy || underRepair} className="btn-ghost rounded-2xl px-5 py-3 text-sm disabled:opacity-40">
-                    Refresh board
-                  </button>
-                )}
-              </div>
+        <section className="game-panel relative overflow-hidden px-5 py-10 text-center sm:px-8 sm:py-12">
+          <div className="pointer-events-none absolute left-1/2 top-[-180px] h-[360px] w-[520px] -translate-x-1/2 rounded-full bg-[var(--accent)] opacity-[0.06] blur-3xl" />
+          <div className="relative mx-auto max-w-3xl">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <p className="section-kicker">Pizza courier</p>
+              <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.13em] ${canStart ? 'border-white/[0.1] bg-white/[0.035] text-white/48' : 'border-[rgba(211,255,81,0.25)] bg-[rgba(211,255,81,0.07)] text-[var(--accent)]'}`}>
+                {shiftLabel(state?.shiftState)}
+              </span>
             </div>
 
-            <div className="rounded-[22px] border border-white/[0.08] bg-black/25 p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-white/28">Courier profile</p>
-                  <p className="mt-1 text-xl font-black text-white">{displayName}</p>
-                  <p className="mt-1 text-xs text-white/38">{state?.vehicleLabel || 'Bicycle'} · Level {progress?.level ?? 1}</p>
-                </div>
-                <span className="inline-flex h-11 w-11 items-center justify-center rounded-[15px] border border-[rgba(211,255,81,0.25)] bg-[rgba(211,255,81,0.07)] text-xs font-black text-[var(--accent)]">PZ</span>
-              </div>
+            <h1 className="display-title mt-5">Choose the next run.</h1>
+            <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-white/45">
+              Pick a contract, let the kitchen prepare it automatically and protect the order until the final handoff.
+            </p>
 
-              <div className="mt-5">
-                <div className="mb-2 flex items-center justify-between gap-3 text-xs">
-                  <span className="font-bold text-white/38">Level progress</span>
-                  <span className="font-black text-white">{progress ? `${fmt(progress.xp)} XP` : '0 XP'}</span>
-                </div>
-                <div className="progress-track">
-                  <div className="progress-fill" style={{ width: `${xpPercent}%` }} />
-                </div>
-              </div>
+            <button
+              type="button"
+              onClick={() => chooseNextRun().catch(() => {})}
+              disabled={busy || underRepair || canPack || canDeliver}
+              className="btn-primary mt-7 min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              {busy && canStart ? 'Loading dispatch...' : canShowOptions ? 'View available runs' : 'Choose next run'}
+            </button>
 
-              <div className="mt-5 grid grid-cols-3 gap-3 border-t border-white/[0.07] pt-4">
-                <HeroStat label="Streak" value={String(state?.streak ?? 0)} />
-                <HeroStat label="Runs" value={fmt(progress?.totalDeliveries ?? 0)} />
-                <HeroStat label="Earnings" value={`${fmt(progress?.totalEarnings ?? 0)} $`} money />
+            <div className="mt-7 grid grid-cols-2 gap-3 border-t border-white/[0.07] pt-6 sm:grid-cols-4">
+              <HeroStat label="Courier" value={displayName} />
+              <HeroStat label="Level" value={String(progress?.level ?? 1)} />
+              <HeroStat label="Streak" value={String(state?.streak ?? 0)} />
+              <HeroStat label="Earnings" value={`${fmt(progress?.totalEarnings ?? 0)} $`} money />
+            </div>
+
+            <div className="mx-auto mt-5 max-w-xl">
+              <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+                <span className="font-bold text-white/38">Courier level progress</span>
+                <span className="font-black text-white">{progress ? `${fmt(progress.xp)} XP` : '0 XP'}</span>
+              </div>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${xpPercent}%` }} />
               </div>
             </div>
           </div>
@@ -313,15 +393,68 @@ export default function PizzerPage() {
           </section>
         )}
 
+        <section className="game-panel-soft p-5 sm:p-6">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="section-kicker">Delivery fleet</p>
+              <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Your next vehicle unlock</h2>
+              <p className="mt-2 text-sm text-white/38">Vehicles unlock automatically with courier level. Select a card to inspect its route benefits.</p>
+            </div>
+            {!canStart && (
+              <button type="button" onClick={() => endShift().catch(() => {})} disabled={busy} className="btn-danger rounded-2xl px-4 py-2.5 text-xs disabled:opacity-35">
+                Clock out
+              </button>
+            )}
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            {FLEET.map((vehicle) => {
+              const level = progress?.level ?? 1;
+              const unlocked = level >= vehicle.unlockLevel;
+              const inUse = currentVehicle.id === vehicle.id;
+              const selected = fleetPreview.id === vehicle.id;
+              return (
+                <button
+                  key={vehicle.id}
+                  type="button"
+                  onClick={() => setFleetPreviewId(vehicle.id)}
+                  className={`overflow-hidden rounded-[22px] border p-4 text-left transition ${selected ? 'border-[rgba(211,255,81,0.32)] bg-[rgba(211,255,81,0.055)]' : 'border-white/[0.08] bg-black/20 hover:border-white/[0.16]'}`}
+                >
+                  <div className="flex h-[170px] items-center justify-center rounded-[18px] border border-white/[0.08] bg-[#090c09] p-3">
+                    <img src={vehicle.image} alt={vehicle.label} className={`h-full w-full object-contain ${unlocked ? '' : 'grayscale opacity-40'}`} />
+                  </div>
+                  <div className="mt-4 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/28">{vehicle.role}</p>
+                      <p className="mt-1 text-lg font-black text-white">{vehicle.label}</p>
+                    </div>
+                    <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] ${inUse ? 'border-[rgba(211,255,81,0.3)] bg-[rgba(211,255,81,0.08)] text-[var(--accent)]' : unlocked ? 'border-[rgba(114,227,154,0.25)] bg-[rgba(114,227,154,0.07)] text-[var(--money)]' : 'border-white/[0.1] bg-white/[0.035] text-white/38'}`}>
+                      {inUse ? 'In use' : unlocked ? 'Unlocked' : `Level ${vehicle.unlockLevel}`}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 grid gap-3 rounded-[20px] border border-white/[0.07] bg-black/20 p-4 sm:grid-cols-3">
+            <FleetDetail label="Route class" value={fleetPreview.speed} />
+            <FleetDetail label="Contract access" value={fleetPreview.contractAccess} />
+            <FleetDetail label="Vehicle benefit" value={fleetPreview.bonus} />
+          </div>
+        </section>
+
         {canShowOptions && (
-          <section className="game-panel-soft p-5 sm:p-6">
-            <div className="flex flex-wrap items-end justify-between gap-4">
-              <div>
+          <section ref={dispatchRef} className="game-panel-soft scroll-mt-24 p-5 sm:p-6">
+            <div className="flex flex-wrap items-end justify-between gap-4 text-center sm:text-left">
+              <div className="w-full sm:w-auto">
                 <p className="section-kicker">Dispatch board</p>
                 <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Choose the next run</h2>
                 <p className="mt-2 text-sm text-white/38">Higher pressure contracts pay more, but give you less room for mistakes.</p>
               </div>
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-white/28">{options.length} contracts live</p>
+              <button type="button" onClick={() => refreshOptions().catch(() => {})} disabled={busy || underRepair} className="btn-ghost mx-auto rounded-2xl px-4 py-2.5 text-xs disabled:opacity-40 sm:mx-0">
+                Refresh board
+              </button>
             </div>
 
             <div className="mt-6 grid gap-4 lg:grid-cols-3">
@@ -359,8 +492,8 @@ export default function PizzerPage() {
                     </div>
                   </div>
 
-                  <button type="button" onClick={() => selectOrder(option.orderId).catch(() => {})} disabled={busy} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-40">
-                    Accept this run
+                  <button type="button" onClick={() => selectOrder(option).catch(() => {})} disabled={busy} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-40">
+                    Accept and prepare
                   </button>
                 </article>
               ))}
@@ -369,100 +502,85 @@ export default function PizzerPage() {
         )}
 
         {(canPack || canDeliver) && active && (
-          <section className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
+          <section ref={activeRef} className="grid scroll-mt-24 gap-5 xl:grid-cols-[1.15fr_0.85fr]">
             <div className="game-panel-soft p-5 sm:p-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="section-kicker">Active contract</p>
                   <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">{active.targetLabel}</h2>
-                  <p className="mt-2 text-sm text-white/38">{canPack ? 'Finish the manifest before dispatch releases the route.' : 'The order is packed. Complete the customer handoff.'}</p>
+                  <p className="mt-2 text-sm text-white/38">{autoPreparing ? 'The kitchen is preparing the full order automatically.' : 'The route is active. Protect freshness and vehicle condition.'}</p>
                 </div>
                 <span className={`rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.13em] ${orderTypeTone(active.orderType)}`}>{active.orderType}</span>
               </div>
 
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <MissionStat label="Time left" value={`${active.timeLeftSec}s`} alert={active.timeLeftSec <= 20} />
-                <MissionStat label="Freshness" value={`${active.freshness}%`} good={active.freshness >= 75} />
-                <MissionStat label="Damage" value={`${active.damagePercent}%`} alert={active.damagePercent >= 30} />
-                <MissionStat label="Current streak" value={String(state?.streak ?? 0)} />
-              </div>
-
-              <div className="mt-6 grid gap-5 lg:grid-cols-2">
-                <div className="rounded-[20px] border border-white/[0.07] bg-black/20 p-4">
+              <div className="mt-6 rounded-[20px] border border-white/[0.07] bg-black/20 p-4">
+                <div className="flex items-center justify-between gap-4">
                   <p className="text-[10px] font-black uppercase tracking-[0.15em] text-white/27">Order manifest</p>
-                  <div className="mt-4 space-y-2.5">
+                  {acceptedOption && (
+                    <p className="text-sm font-black text-[var(--money)]">~{fmt(acceptedOption.estimatedReward)} $ · +{acceptedOption.estimatedXp} XP</p>
+                  )}
+                </div>
+                <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+                  <div className="space-y-2.5">
                     {active.pizzas.map((item) => (
                       <ManifestRow key={`active-pizza-${item.name}`} quantity={item.quantity} name={item.name} />
                     ))}
+                  </div>
+                  <div className="space-y-2.5">
                     {active.drinks.map((item) => (
                       <ManifestRow key={`active-drink-${item.name}`} quantity={item.quantity} name={item.name} muted />
                     ))}
                   </div>
                 </div>
+              </div>
 
-                <div className="rounded-[20px] border border-white/[0.07] bg-black/20 p-4">
-                  <QualityBar label="Freshness" value={active.freshness} tone="good" />
-                  <div className="mt-5">
-                    <QualityBar label="Vehicle condition" value={100 - active.damagePercent} tone={active.damagePercent >= 30 ? 'danger' : 'good'} />
-                  </div>
-                  <p className="mt-5 text-xs leading-relaxed text-white/32">Final payout is affected by order freshness, damage, level and your active streak.</p>
-                </div>
+              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <MissionStat label="Distance" value={`${fmt(active.distanceMeters)}m`} />
+                <MissionStat label="Time left" value={`${active.timeLeftSec}s`} alert={active.timeLeftSec <= 20} />
+                <MissionStat label="Freshness" value={`${active.freshness}%`} good={active.freshness >= 75} />
+                <MissionStat label="Damage" value={`${active.damagePercent}%`} alert={active.damagePercent >= 30} />
               </div>
             </div>
 
             <div className="game-panel-soft p-5 sm:p-6">
-              <p className="section-kicker">Run flow</p>
-              <h3 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">{canPack ? 'Prepare the order' : 'Customer handoff'}</h3>
+              <p className="section-kicker">Delivery status</p>
+              <h3 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">{autoPreparing ? 'Preparing order' : 'Ready for delivery'}</h3>
 
-              {canPack && (
+              <div className="mt-5 flex h-[155px] items-center justify-center rounded-[20px] border border-white/[0.08] bg-[#090c09] p-3">
+                <img src={currentVehicle.image} alt={currentVehicle.label} className="h-full w-full object-contain" />
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/28">Current vehicle</p>
+                  <p className="mt-1 text-lg font-black text-white">{state?.vehicleLabel || currentVehicle.label}</p>
+                </div>
+                <p className="text-sm font-black text-[var(--accent)]">Streak {state?.streak ?? 0}</p>
+              </div>
+
+              {autoPreparing ? (
                 <div className="mt-5 space-y-3">
                   {PACKING_STEPS.map((step, index) => {
-                    const done = active.packingStepsDone.includes(step.key);
-                    const isNext = !done && active.nextPackingStep === step.key;
+                    const done = preparationStep > index;
+                    const activeStep = preparationStep === index;
                     return (
-                      <button
-                        key={step.key}
-                        type="button"
-                        onClick={() => doPackingStep(step.key).catch(() => {})}
-                        disabled={busy || done || !isNext || underRepair}
-                        className={`flex w-full items-center gap-3 rounded-[18px] border p-3.5 text-left transition disabled:cursor-default ${
-                          done
-                            ? 'border-[rgba(114,227,154,0.2)] bg-[rgba(114,227,154,0.055)]'
-                            : isNext
-                              ? 'border-[rgba(211,255,81,0.3)] bg-[rgba(211,255,81,0.075)] hover:bg-[rgba(211,255,81,0.1)]'
-                              : 'border-white/[0.065] bg-white/[0.02] opacity-45'
-                        }`}
-                      >
-                        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] border text-xs font-black ${
-                          done
-                            ? 'border-[rgba(114,227,154,0.25)] bg-[var(--money)] text-[#0b160f]'
-                            : isNext
-                              ? 'border-[rgba(211,255,81,0.3)] bg-[var(--accent)] text-[#10140b]'
-                              : 'border-white/[0.08] bg-white/[0.03] text-white/35'
-                        }`}>
+                      <div key={step.key} className={`flex items-center gap-3 rounded-[17px] border p-3 ${done ? 'border-[rgba(114,227,154,0.2)] bg-[rgba(114,227,154,0.055)]' : activeStep ? 'border-[rgba(211,255,81,0.28)] bg-[rgba(211,255,81,0.07)]' : 'border-white/[0.065] bg-white/[0.02] opacity-45'}`}>
+                        <span className={`inline-flex h-9 w-9 items-center justify-center rounded-[13px] text-[10px] font-black ${done ? 'bg-[var(--money)] text-[#0b160f]' : activeStep ? 'bg-[var(--accent)] text-[#10140b]' : 'bg-white/[0.05] text-white/35'}`}>
                           {done ? 'OK' : String(index + 1).padStart(2, '0')}
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-black text-white">{step.label}</span>
-                          <span className="mt-0.5 block text-xs leading-relaxed text-white/34">{step.detail}</span>
-                        </span>
-                        {isNext && <span className="text-lg text-[var(--accent)]">›</span>}
-                      </button>
+                        <p className="text-sm font-black text-white">{step.label}</p>
+                      </div>
                     );
                   })}
                 </div>
-              )}
-
-              {canDeliver && (
+              ) : (
                 <div className="mt-5">
-                  <div className="rounded-[20px] border border-[rgba(211,255,81,0.2)] bg-[rgba(211,255,81,0.055)] p-5">
-                    <p className="text-[10px] font-black uppercase tracking-[0.15em] text-[var(--accent)]">Route released</p>
-                    <p className="mt-2 text-xl font-black text-white">Order ready for delivery</p>
-                    <p className="mt-2 text-sm leading-relaxed text-white/42">Confirm the customer handoff to calculate your rating, payout and XP.</p>
-                    <button type="button" onClick={() => handover().catch(() => {})} disabled={busy || underRepair} className="btn-primary mt-5 w-full rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
-                      Complete handoff
-                    </button>
+                  <QualityBar label="Freshness" value={active.freshness} tone="good" />
+                  <div className="mt-5">
+                    <QualityBar label="Vehicle condition" value={100 - active.damagePercent} tone={active.damagePercent >= 30 ? 'danger' : 'good'} />
                   </div>
+                  <button type="button" onClick={() => handover().catch(() => {})} disabled={busy || underRepair || !canDeliver} className="btn-primary mt-6 w-full rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
+                    Complete delivery
+                  </button>
                 </div>
               )}
             </div>
@@ -515,56 +633,61 @@ export default function PizzerPage() {
   );
 }
 
-function HeroStat({ label, value, money }: { label: string; value: string; money?: boolean }) {
+function HeroStat({ label, value, money = false }: { label: string; value: string; money?: boolean }) {
   return (
     <div className="min-w-0">
-      <p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/25">{label}</p>
+      <p className="text-[9px] font-black uppercase tracking-[0.15em] text-white/25">{label}</p>
       <p className={`mt-1 truncate text-sm font-black ${money ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p>
     </div>
   );
 }
 
-function ContractStat({ label, value, tone }: { label: string; value: string; tone?: string }) {
+function FleetDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/25">{label}</p>
+      <p className="mt-1 text-sm font-black text-white">{value}</p>
+    </div>
+  );
+}
+
+function ContractStat({ label, value, tone = 'text-white' }: { label: string; value: string; tone?: string }) {
   return (
     <div className="min-w-0 text-center">
       <p className="text-[9px] font-black uppercase tracking-[0.12em] text-white/24">{label}</p>
-      <p className={`mt-1 truncate text-xs font-black ${tone || 'text-white'}`}>{value}</p>
+      <p className={`mt-1 truncate text-xs font-black ${tone}`}>{value}</p>
     </div>
   );
 }
 
-function ManifestRow({ quantity, name, muted }: { quantity: number; name: string; muted?: boolean }) {
+function ManifestRow({ quantity, name, muted = false }: { quantity: number; name: string; muted?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-3 text-sm">
-      <span className={muted ? 'text-white/42' : 'text-white/72'}>{name}</span>
-      <span className={`rounded-lg border px-2 py-0.5 text-xs font-black ${muted ? 'border-white/[0.07] bg-white/[0.025] text-white/50' : 'border-[rgba(211,255,81,0.16)] bg-[rgba(211,255,81,0.05)] text-[var(--accent)]'}`}>×{quantity}</span>
+    <div className="flex items-center justify-between gap-3 rounded-[14px] border border-white/[0.06] bg-white/[0.025] px-3 py-2.5">
+      <span className={`truncate text-xs font-bold ${muted ? 'text-white/48' : 'text-white/72'}`}>{name}</span>
+      <span className={`shrink-0 text-xs font-black ${muted ? 'text-[var(--info)]' : 'text-[var(--accent)]'}`}>x{quantity}</span>
     </div>
   );
 }
 
-function MissionStat({ label, value, alert, good }: { label: string; value: string; alert?: boolean; good?: boolean }) {
-  const valueClass = alert ? 'text-[var(--danger)]' : good ? 'text-[var(--money)]' : 'text-white';
+function MissionStat({ label, value, alert = false, good = false }: { label: string; value: string; alert?: boolean; good?: boolean }) {
+  const tone = alert ? 'text-[var(--danger)]' : good ? 'text-[var(--money)]' : 'text-white';
   return (
-    <div className="game-card p-4">
+    <div className="rounded-[17px] border border-white/[0.07] bg-black/20 p-3">
       <p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/25">{label}</p>
-      <p className={`mt-2 truncate text-xl font-black tracking-[-0.025em] ${valueClass}`}>{value}</p>
+      <p className={`mt-1 text-lg font-black ${tone}`}>{value}</p>
     </div>
   );
 }
 
 function QualityBar({ label, value, tone }: { label: string; value: number; tone: 'good' | 'danger' }) {
-  const safeValue = clampPercent(value);
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3 text-xs">
         <span className="font-bold text-white/42">{label}</span>
-        <span className={`font-black ${tone === 'danger' ? 'text-[var(--danger)]' : 'text-white'}`}>{safeValue}%</span>
+        <span className={`font-black ${tone === 'danger' ? 'text-[var(--danger)]' : 'text-[var(--money)]'}`}>{clampPercent(value)}%</span>
       </div>
       <div className="progress-track">
-        <div
-          className={`h-full rounded-full transition-all ${tone === 'danger' ? 'bg-[var(--danger)]' : 'bg-[var(--money)]'}`}
-          style={{ width: `${safeValue}%` }}
-        />
+        <div className={`h-full rounded-full transition-[width] duration-300 ${tone === 'danger' ? 'bg-[var(--danger)]' : 'bg-[var(--money)]'}`} style={{ width: `${clampPercent(value)}%` }} />
       </div>
     </div>
   );
@@ -572,9 +695,9 @@ function QualityBar({ label, value, tone }: { label: string; value: number; tone
 
 function ResultStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="game-card p-4">
-      <p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/24">{label}</p>
-      <p className="mt-2 truncate text-lg font-black text-white">{value}</p>
+    <div className="rounded-[17px] border border-white/[0.07] bg-black/20 p-4">
+      <p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/25">{label}</p>
+      <p className="mt-1 text-base font-black text-white">{value}</p>
     </div>
   );
 }

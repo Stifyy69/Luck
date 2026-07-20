@@ -30,8 +30,11 @@ function fmt(value: number) {
 export default function SharedStatsPanel() {
   const { player } = usePlayer();
   const [stats, setStats] = useState<Record<string, number>>({});
+  const isProfilePage = typeof window !== 'undefined' && window.location.pathname === '/profile';
 
   useEffect(() => {
+    if (!isProfilePage) return undefined;
+
     const refresh = () => {
       const state = loadGameState() || {};
       setStats({
@@ -53,7 +56,7 @@ export default function SharedStatsPanel() {
     refresh();
     const timer = window.setInterval(refresh, 1000);
     return () => window.clearInterval(timer);
-  }, [player?.cleanMoney]);
+  }, [isProfilePage, player?.cleanMoney]);
 
   const totalTime = (stats.timeFarm ?? 0) + (stats.timeSleep ?? 0) + (stats.timePilot ?? 0);
   const activity = useMemo(
@@ -64,6 +67,8 @@ export default function SharedStatsPanel() {
     ],
     [stats.timeFarm, stats.timePilot, stats.timeSleep],
   );
+
+  if (!isProfilePage) return null;
 
   return (
     <section className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
