@@ -212,7 +212,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="min-h-screen pt-[92px] md:pl-[272px] lg:pl-[278px]">
+      <main className="min-h-screen pt-14 md:pl-[272px] md:pt-0 lg:pl-[278px]">
         <div className="lg:pt-20">
           {renderPage()}
         </div>
