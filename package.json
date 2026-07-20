@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
-    "start": "node server.cjs"
+    "check": "tsc --noEmit && node --check server/cityProgress/preload.cjs && node --check server/cityProgress/install.cjs && node --check server/cityProgress/store.cjs && node --check server/cityProgress/constants.cjs",
+    "start": "node -r ./server/cityProgress/preload.cjs server.cjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
