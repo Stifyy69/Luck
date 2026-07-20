@@ -11,21 +11,22 @@ import CNNMarketplace from './components/CNNMarketplace';
 import ShowroomPage from './components/ShowroomPage';
 import InventoryPage from './components/InventoryPage';
 import MyProfilePage from './components/MyProfilePage';
+import CityHubPage from './components/CityHubPage';
 import AccountHud from './components/AccountHud';
 import CityIcon, { type CityIconName } from './components/ui/CityIcon';
 import { startGameSync } from './lib/gameSync';
 
-type RoutePath = '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher' | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/gangs' | '/adminpanelv2';
+type RoutePath = '/city' | '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher' | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/gangs' | '/adminpanelv2';
 type NavItem = { path: RoutePath; label: string; icon: CityIconName; hint?: string };
 type NavGroup = { label: string; items: NavItem[] };
 
-const VALID_ROUTES: RoutePath[] = ['/ruleta', '/farmat', '/sleep', '/pilot', '/pizzer', '/fisher', '/showroom', '/inventory', '/owned', '/profile', '/cnn', '/gangs', '/adminpanelv2'];
+const VALID_ROUTES: RoutePath[] = ['/city', '/ruleta', '/farmat', '/sleep', '/pilot', '/pizzer', '/fisher', '/showroom', '/inventory', '/owned', '/profile', '/cnn', '/gangs', '/adminpanelv2'];
 const NAV_GROUPS: NavGroup[] = [
   { label: 'Career', items: [
     { path: '/farmat', label: 'Cayo', icon: 'leaf' },
     { path: '/sleep', label: 'Night Shift', icon: 'moon' },
     { path: '/pilot', label: 'Pilot', icon: 'plane' },
-    { path: '/pizzer', label: 'Pizza Courier', icon: 'pizza', hint: 'New UI' },
+    { path: '/pizzer', label: 'Pizza Courier', icon: 'pizza' },
     { path: '/fisher', label: 'Fisher', icon: 'fish' },
   ] },
   { label: 'Assets', items: [
@@ -44,19 +45,20 @@ function normalizePath(pathname: string): RoutePath {
   if (pathname === '/marketplace') return '/cnn';
   if (pathname === '/owned') return '/inventory';
   if (pathname === '/status') return '/profile';
+  if (pathname === '/') return '/city';
   if (VALID_ROUTES.includes(pathname as RoutePath)) return pathname as RoutePath;
-  return '/profile';
+  return '/city';
 }
 
 export default function App() {
-  const [path, setPath] = useState<RoutePath>(normalizePath(window.location.pathname || '/profile'));
+  const [path, setPath] = useState<RoutePath>(normalizePath(window.location.pathname || '/city'));
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const nextPath = normalizePath(window.location.pathname || path);
     if (nextPath !== window.location.pathname) window.history.replaceState({}, '', nextPath);
     if (nextPath !== path) setPath(nextPath);
-    const onPopState = () => setPath(normalizePath(window.location.pathname || '/profile'));
+    const onPopState = () => setPath(normalizePath(window.location.pathname || '/city'));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, [path]);
@@ -75,6 +77,7 @@ export default function App() {
   };
 
   const currentLabel = useMemo(() => {
+    if (path === '/city') return 'City Hub';
     if (path === '/profile') return 'My Profile';
     return NAV_GROUPS.flatMap((group) => group.items).find((item) => item.path === path)?.label || 'CityFlow';
   }, [path]);
@@ -98,13 +101,24 @@ export default function App() {
           </div>
         </div>
 
-        <button type="button" onClick={() => goTo('/profile')} className={`game-nav-item flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left ${path === '/profile' ? 'game-nav-item-active' : ''}`}>
-          <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${path === '/profile' ? 'bg-[#d8ff63]/10 text-[#d8ff63]' : 'bg-white/[0.025] text-white/45'}`}><CityIcon name="profile" className="h-[18px] w-[18px]" /></span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-extrabold">My Profile</span>
-            <span className="block text-[10px] text-white/25">Identity and progress</span>
-          </span>
-        </button>
+        <div className="space-y-1">
+          <button type="button" onClick={() => goTo('/city')} className={`game-nav-item flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left ${path === '/city' ? 'game-nav-item-active' : ''}`}>
+            <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${path === '/city' ? 'bg-[#d8ff63]/10 text-[#d8ff63]' : 'bg-white/[0.025] text-white/45'}`}><CityIcon name="home" className="h-[18px] w-[18px]" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-extrabold">City Hub</span>
+              <span className="block text-[10px] text-white/25">Next move and activity</span>
+            </span>
+            <span className="rounded-full bg-[#d8ff63]/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-[#d8ff63]">New</span>
+          </button>
+
+          <button type="button" onClick={() => goTo('/profile')} className={`game-nav-item flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left ${path === '/profile' ? 'game-nav-item-active' : ''}`}>
+            <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${path === '/profile' ? 'bg-[#d8ff63]/10 text-[#d8ff63]' : 'bg-white/[0.025] text-white/45'}`}><CityIcon name="profile" className="h-[18px] w-[18px]" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-extrabold">My Profile</span>
+              <span className="block text-[10px] text-white/25">Identity and progress</span>
+            </span>
+          </button>
+        </div>
 
         <nav className="mt-5 space-y-5">
           {NAV_GROUPS.map((group) => (
@@ -139,18 +153,19 @@ export default function App() {
           <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-white/24">CityFlow / {currentLabel}</p>
         </div>
         <div className="lg:pt-20">
-          {path === '/farmat' ? <FarmatPage />
-            : path === '/sleep' ? <SleepPage />
-              : path === '/pilot' ? <PilotPage />
-                : path === '/pizzer' ? <PizzerPage />
-                  : path === '/fisher' ? <FisherPage />
-                    : path === '/showroom' ? <ShowroomPage />
-                      : path === '/inventory' || path === '/owned' ? <InventoryPage />
-                        : path === '/profile' ? <MyProfilePage />
-                          : path === '/gangs' ? <GangsPage />
-                            : path === '/cnn' ? <CNNMarketplace />
-                              : path === '/adminpanelv2' ? <AdminPanelV2 />
-                                : <RouletteDemo />}
+          {path === '/city' ? <CityHubPage onNavigate={(nextPath) => goTo(nextPath)} />
+            : path === '/farmat' ? <FarmatPage />
+              : path === '/sleep' ? <SleepPage />
+                : path === '/pilot' ? <PilotPage />
+                  : path === '/pizzer' ? <PizzerPage />
+                    : path === '/fisher' ? <FisherPage />
+                      : path === '/showroom' ? <ShowroomPage />
+                        : path === '/inventory' || path === '/owned' ? <InventoryPage />
+                          : path === '/profile' ? <MyProfilePage />
+                            : path === '/gangs' ? <GangsPage />
+                              : path === '/cnn' ? <CNNMarketplace />
+                                : path === '/adminpanelv2' ? <AdminPanelV2 />
+                                  : <RouletteDemo />}
         </div>
       </main>
     </div>
