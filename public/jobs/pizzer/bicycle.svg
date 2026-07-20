@@ -1,0 +1,39 @@
+<svg width="720" height="360" viewBox="0 0 720 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="frame" x1="250" y1="85" x2="455" y2="252" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D7FF57"/>
+      <stop offset="1" stop-color="#6B8C19"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="210" y1="112" x2="470" y2="258" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F1F4EF"/>
+      <stop offset="0.45" stop-color="#7E8982"/>
+      <stop offset="1" stop-color="#252A27"/>
+    </linearGradient>
+    <filter id="shadow" x="120" y="70" width="500" height="250" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="12" result="blur"/>
+      <feOffset dy="14"/>
+      <feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .55 0"/>
+      <feBlend in2="SourceGraphic" result="shape"/>
+    </filter>
+  </defs>
+  <ellipse cx="360" cy="286" rx="210" ry="22" fill="#000" fill-opacity=".42"/>
+  <g filter="url(#shadow)" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="232" cy="244" r="69" stroke="#111512" stroke-width="21"/>
+    <circle cx="232" cy="244" r="51" stroke="#58615A" stroke-width="4"/>
+    <circle cx="490" cy="244" r="69" stroke="#111512" stroke-width="21"/>
+    <circle cx="490" cy="244" r="51" stroke="#58615A" stroke-width="4"/>
+    <path d="M234 244L301 135L383 244H234Z" stroke="url(#frame)" stroke-width="15"/>
+    <path d="M301 135L426 146L383 244" stroke="url(#frame)" stroke-width="15"/>
+    <path d="M426 146L490 244" stroke="url(#metal)" stroke-width="13"/>
+    <path d="M383 244L490 244" stroke="url(#metal)" stroke-width="13"/>
+    <path d="M280 123H337" stroke="#202621" stroke-width="14"/>
+    <path d="M417 129L456 106" stroke="#DDE4DD" stroke-width="10"/>
+    <path d="M448 104L475 110" stroke="#202621" stroke-width="10"/>
+    <path d="M302 135L289 102" stroke="#AAB3AC" stroke-width="9"/>
+    <circle cx="383" cy="244" r="18" fill="#D7FF57" stroke="#1C241D" stroke-width="8"/>
+    <path d="M383 244L421 267" stroke="#DDE4DD" stroke-width="8"/>
+    <path d="M383 244L355 273" stroke="#DDE4DD" stroke-width="8"/>
+    <rect x="389" y="126" width="58" height="34" rx="10" fill="#101510" stroke="#D7FF57" stroke-opacity=".55" stroke-width="3"/>
+    <path d="M403 138H432" stroke="#D7FF57" stroke-width="5"/>
+  </g>
+</svg>
