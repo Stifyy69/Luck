@@ -18,7 +18,7 @@
     </filter>
   </defs>
   <ellipse cx="365" cy="290" rx="230" ry="24" fill="#000" fill-opacity=".46"/>
-  <g filter="url(#shadow)">
+  <g>
     <circle cx="231" cy="244" r="57" fill="#111512" stroke="#59615B" stroke-width="6"/>
     <circle cx="231" cy="244" r="31" fill="#313833" stroke="#B6BEB8" stroke-width="5"/>
     <circle cx="494" cy="244" r="57" fill="#111512" stroke="#59615B" stroke-width="6"/>
