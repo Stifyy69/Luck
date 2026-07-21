@@ -36,13 +36,29 @@ async function syncGang(playerId, gangData) {
   const protectedIds = new Set(protectedMythics.map((member) => member.id));
   const incomingMembers = sanitizeMembers(gangData?.members, { allowMythicIds: protectedIds });
   const members = mergeProtectedMythics(incomingMembers, protectedMythics);
-  const leaves = clampInteger(gangData?.frunze, 0, 10_000_000_000);
-  const whitePacks = clampInteger(gangData?.white, 0, 10_000_000_000);
-  const bluePacks = clampInteger(gangData?.blue, 0, 10_000_000_000);
+
+  const leaves = clampInteger(gangData?.frunze ?? gangData?.leaves, 0, 10_000_000_000);
+  const whitePacks = clampInteger(gangData?.white ?? gangData?.whitePacks, 0, 10_000_000_000);
+  const bluePacks = clampInteger(gangData?.blue ?? gangData?.bluePacks, 0, 10_000_000_000);
+  const sulfur = clampInteger(gangData?.sulfur, 0, 10_000_000_000);
+  const ironOre = clampInteger(gangData?.ironOre, 0, 10_000_000_000);
+  const gunpowder = clampInteger(gangData?.gunpowder, 0, 10_000_000_000);
+  const steel = clampInteger(gangData?.steel, 0, 10_000_000_000);
+  const cleanBalance = clampInteger(gangData?.cleanBalance, 0, Number.MAX_SAFE_INTEGER);
+  const dirtyBalance = clampInteger(gangData?.dirtyBalance, 0, Number.MAX_SAFE_INTEGER);
   const dirtyEarned = clampInteger(gangData?.dirtyEarned, 0, Number.MAX_SAFE_INTEGER);
   const lastLeaveAt = clampInteger(gangData?.lastLeaveAt || Date.now(), 0, Number.MAX_SAFE_INTEGER);
+  const activeWorkers = clampInteger(gangData?.onlineNow, 0, members.length);
   const gangLevelIndex = calculateGangLevelIndex(dirtyEarned);
-  const stockValue = Math.floor(leaves * 100 + whitePacks * 900 + bluePacks * 2300);
+  const stockValue = Math.floor(
+    leaves * 100
+    + whitePacks * 900
+    + bluePacks * 2300
+    + sulfur * 1000
+    + ironOre * 1200
+    + gunpowder * 5000
+    + steel * 6000,
+  );
 
   if (name) {
     const accessResult = await pool.query(
@@ -56,14 +72,14 @@ async function syncGang(playerId, gangData) {
 
   await withTransaction(async (db) => {
     await ensurePlayer(db, playerId);
-    const activeWorkers = members.length;
     await db.query(
       `
         INSERT INTO player_gangs (
           player_id, gang_name, gang_level_index, members, members_count, active_workers,
-          leaves, white_packs, blue_packs, dirty_earned, stock_value, last_leave_at, updated_at
+          leaves, white_packs, blue_packs, sulfur, iron_ore, gunpowder, steel,
+          clean_balance, dirty_balance, dirty_earned, stock_value, last_leave_at, updated_at
         )
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
         ON CONFLICT (player_id) DO UPDATE SET
           gang_name = EXCLUDED.gang_name,
           gang_level_index = EXCLUDED.gang_level_index,
@@ -73,12 +89,22 @@ async function syncGang(playerId, gangData) {
           leaves = EXCLUDED.leaves,
           white_packs = EXCLUDED.white_packs,
           blue_packs = EXCLUDED.blue_packs,
+          sulfur = EXCLUDED.sulfur,
+          iron_ore = EXCLUDED.iron_ore,
+          gunpowder = EXCLUDED.gunpowder,
+          steel = EXCLUDED.steel,
+          clean_balance = EXCLUDED.clean_balance,
+          dirty_balance = EXCLUDED.dirty_balance,
           dirty_earned = EXCLUDED.dirty_earned,
           stock_value = EXCLUDED.stock_value,
           last_leave_at = EXCLUDED.last_leave_at,
           updated_at = NOW()
       `,
-      [playerId, name, gangLevelIndex, JSON.stringify(members), members.length, activeWorkers, leaves, whitePacks, bluePacks, dirtyEarned, stockValue, lastLeaveAt],
+      [
+        playerId, name, gangLevelIndex, JSON.stringify(members), members.length, activeWorkers,
+        leaves, whitePacks, bluePacks, sulfur, ironOre, gunpowder, steel,
+        cleanBalance, dirtyBalance, dirtyEarned, stockValue, lastLeaveAt,
+      ],
     );
   });
 
@@ -99,7 +125,7 @@ async function grantMythicGangMember(playerId, customName = '') {
     if (existing.length >= 34) throw new Error('gang member limit reached');
     const members = [member, ...existing];
     await db.query(
-      `UPDATE player_gangs SET members = $2::jsonb, members_count = $3, active_workers = $3, updated_at = NOW() WHERE player_id = $1`,
+      `UPDATE player_gangs SET members = $2::jsonb, members_count = $3, updated_at = NOW() WHERE player_id = $1`,
       [playerId, JSON.stringify(members), members.length],
     );
   });
@@ -122,10 +148,16 @@ async function getGangState(playerId) {
     gangLevel: GANG_LEVEL_LABELS[Number(row.gang_level_index || 0)] || GANG_LEVEL_LABELS[0],
     members,
     membersCount: members.length,
-    activeWorkers: members.length,
+    activeWorkers: Number(row.active_workers || 0),
     leaves: Number(row.leaves || 0),
     whitePacks: Number(row.white_packs || 0),
     bluePacks: Number(row.blue_packs || 0),
+    sulfur: Number(row.sulfur || 0),
+    ironOre: Number(row.iron_ore || 0),
+    gunpowder: Number(row.gunpowder || 0),
+    steel: Number(row.steel || 0),
+    cleanBalance: Number(row.clean_balance || 0),
+    dirtyBalance: Number(row.dirty_balance || 0),
     dirtyEarned: Number(row.dirty_earned || 0),
     stockValue: Number(row.stock_value || 0),
     lastLeaveAt: Number(row.last_leave_at || 0),

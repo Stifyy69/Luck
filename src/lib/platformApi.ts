@@ -12,17 +12,12 @@ export type VipStatus = {
   remainingMs: number;
 };
 
-export type PlatformStatus = {
-  vip: VipStatus;
-};
+export type PlatformStatus = { vip: VipStatus };
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers || {}),
-    },
+    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
     credentials: options?.credentials || 'include',
   });
   const payload = await response.json().catch(() => null);
@@ -119,6 +114,12 @@ export type ServerGangState = {
   leaves: number;
   whitePacks: number;
   bluePacks: number;
+  sulfur: number;
+  ironOre: number;
+  gunpowder: number;
+  steel: number;
+  cleanBalance: number;
+  dirtyBalance: number;
   dirtyEarned: number;
   stockValue: number;
   lastLeaveAt: number;
