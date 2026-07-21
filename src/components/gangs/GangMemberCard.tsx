@@ -13,10 +13,12 @@ export default function GangMemberCard({
   member,
   disabled,
   onDismiss,
+  onSupport,
 }: {
   member: GangMember;
   disabled: boolean;
   onDismiss: (member: GangMember) => void;
+  onSupport: (member: GangMember) => void;
 }) {
   const primarySkill = getPrimarySkill(member);
   const xpNeeded = memberXpForNextLevel(member.level);
@@ -33,22 +35,14 @@ export default function GangMemberCard({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-current/20 bg-black/20 px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em]">
-                {RARITY_LABELS[member.rarity]}
-              </span>
-              {member.source === 'ADMIN_EVENT' ? (
-                <span className="rounded-full border border-rose-300/20 bg-rose-400/[0.08] px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-rose-100">
-                  Event exclusive
-                </span>
-              ) : null}
+              <span className="rounded-full border border-current/20 bg-black/20 px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em]">{RARITY_LABELS[member.rarity]}</span>
+              {member.source === 'ADMIN_EVENT' ? <span className="rounded-full border border-rose-300/20 bg-rose-400/[0.08] px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-rose-100">Event exclusive</span> : null}
               <span className={`rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] ${member.status === 'WORKING' ? 'border-emerald-300/20 bg-emerald-400/[0.08] text-emerald-100' : 'border-white/10 bg-white/[0.035] text-white/40'}`}>
                 {member.status === 'WORKING' ? 'Working' : 'Available'}
               </span>
             </div>
             <h3 className="mt-2 truncate text-base font-black tracking-[-0.025em] text-white">{member.displayName}</h3>
-            <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.13em] text-white/35">
-              {getMemberRole(member)} · Lv. {member.level}
-            </p>
+            <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.13em] text-white/35">{getMemberRole(member)} · Lv. {member.level}</p>
           </div>
         </div>
 
@@ -58,13 +52,8 @@ export default function GangMemberCard({
         </div>
 
         <div className="mt-3">
-          <div className="flex items-center justify-between gap-3 text-[9px] font-black uppercase tracking-[0.12em] text-white/30">
-            <span>Member XP</span>
-            <span>{member.level >= 50 ? 'MAX' : `${member.xp} / ${xpNeeded}`}</span>
-          </div>
-          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
-            <div className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-500" style={{ width: `${xpPercent}%` }} />
-          </div>
+          <div className="flex items-center justify-between gap-3 text-[9px] font-black uppercase tracking-[0.12em] text-white/30"><span>Member XP</span><span>{member.level >= 50 ? 'MAX' : `${member.xp} / ${xpNeeded}`}</span></div>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-500" style={{ width: `${xpPercent}%` }} /></div>
         </div>
       </div>
 
@@ -82,51 +71,23 @@ export default function GangMemberCard({
           <div className="mt-3 space-y-2">
             {member.bonuses.map((bonus) => (
               <div key={bonus.id} className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2.5">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[10px] font-black text-white/72">{bonus.label}</p>
-                  <span className="text-[9px] font-black text-[var(--accent)]">+{bonus.value}</span>
-                </div>
+                <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-black text-white/72">{bonus.label}</p><span className="text-[9px] font-black text-[var(--accent)]">+{bonus.value}</span></div>
                 <p className="mt-1 text-[9px] leading-4 text-white/30">{bonus.description}</p>
               </div>
             ))}
           </div>
-        ) : (
-          <p className="mt-3 rounded-xl border border-dashed border-white/[0.08] px-3 py-3 text-center text-[9px] font-bold uppercase tracking-[0.12em] text-white/22">
-            No permanent bonus
-          </p>
-        )}
+        ) : <p className="mt-3 rounded-xl border border-dashed border-white/[0.08] px-3 py-3 text-center text-[9px] font-bold uppercase tracking-[0.12em] text-white/22">No permanent bonus</p>}
 
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onDismiss(member)}
-          className="mt-4 w-full rounded-xl border border-red-400/15 bg-red-500/[0.045] px-3 py-2.5 text-[10px] font-black uppercase tracking-[0.12em] text-red-100/70 transition hover:bg-red-500/[0.09] disabled:cursor-not-allowed disabled:opacity-35"
-        >
-          Dismiss member
-        </button>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button type="button" disabled={disabled || member.loyalty >= 100} onClick={() => onSupport(member)} className="rounded-xl border border-emerald-300/15 bg-emerald-400/[0.055] px-3 py-2.5 text-[10px] font-black uppercase tracking-[0.1em] text-emerald-100/80 disabled:opacity-30">Buy support</button>
+          <button type="button" disabled={disabled} onClick={() => onDismiss(member)} className="rounded-xl border border-red-400/15 bg-red-500/[0.045] px-3 py-2.5 text-[10px] font-black uppercase tracking-[0.1em] text-red-100/70 disabled:opacity-35">Dismiss member</button>
+        </div>
       </div>
     </article>
   );
 }
 
-function StatPill({
-  label,
-  value,
-  tone = 'normal',
-}: {
-  label: string;
-  value: string;
-  tone?: 'normal' | 'warning' | 'danger';
-}) {
-  const toneClass = tone === 'danger'
-    ? 'text-red-200'
-    : tone === 'warning'
-      ? 'text-amber-200'
-      : 'text-white/75';
-  return (
-    <div className="rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2.5">
-      <p className="text-[8px] font-black uppercase tracking-[0.12em] text-white/25">{label}</p>
-      <p className={`mt-1 truncate text-xs font-black ${toneClass}`}>{value}</p>
-    </div>
-  );
+function StatPill({ label, value, tone = 'normal' }: { label: string; value: string; tone?: 'normal' | 'warning' | 'danger' }) {
+  const toneClass = tone === 'danger' ? 'text-red-200' : tone === 'warning' ? 'text-amber-200' : 'text-white/75';
+  return <div className="rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2.5"><p className="text-[8px] font-black uppercase tracking-[0.12em] text-white/25">{label}</p><p className={`mt-1 truncate text-xs font-black ${toneClass}`}>{value}</p></div>;
 }
