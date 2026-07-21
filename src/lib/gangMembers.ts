@@ -11,7 +11,6 @@ export type GangMemberSkill = (typeof GANG_MEMBER_SKILLS)[number];
 export type GangMemberRarity = 'COMMON' | 'RARE' | 'EPIC' | 'LEGENDARY' | 'MYTHIC';
 export type GangMemberSource = 'STARTER' | 'RECRUITMENT' | 'ADMIN_EVENT';
 export type GangMemberStatus = 'AVAILABLE' | 'WORKING';
-
 export type GangMemberSkills = Record<GangMemberSkill, number>;
 
 export type GangMemberBonus = {
@@ -43,7 +42,7 @@ export type GangMember = {
 export type DismissalResult = {
   members: GangMember[];
   dismissed: GangMember | null;
-  voluntaryDeparture: GangMember | null;
+  voluntaryDeparture: null;
   loyaltyLoss: number;
   pressure: number;
   lastDismissalAt: number;
@@ -78,54 +77,22 @@ const FIRST_NAMES = [
   'Enzo', 'Adrian', 'Darius', 'Sebi', 'Rico', 'Marcus', 'Mihai', 'Tavi', 'Nico', 'Alex', 'Danut', 'Edi',
   'Radu', 'Victor', 'Nash', 'Tudor', 'Dante', 'Ionut', 'Marius', 'Lucian', 'Razvan', 'Theo', 'Cristi', 'Fabian',
 ];
-
 const NICKNAMES = [
   'Ghost', 'Frost', 'Flame', 'Viper', 'Hood', 'Zero', 'Smoke', 'Ace', 'Wolf', 'Shadow', 'Flex', 'Nova',
   'Lucky', 'Razor', 'Cash', 'Storm', 'Mamba', 'Bullet', 'Brick', 'Slick', 'Fox', 'Boss', 'Kid', 'Saint',
 ];
-
 const LAST_NAMES = [
   'Ionescu', 'Popa', 'Marin', 'Stan', 'Dobre', 'Matei', 'Dinu', 'Toma', 'Rusu', 'Munteanu', 'Petrescu', 'Ilie',
   'Stoica', 'Dragomir', 'Sandu', 'Lazar', 'Roman', 'Mocanu', 'Avram', 'Neagu', 'Serban', 'Manea', 'Nistor', 'Barbu',
 ];
 
 const BONUS_DEFINITIONS: Record<GangMemberSkill, Omit<GangMemberBonus, 'id' | 'value'> & { values: number[] }> = {
-  shooting: {
-    label: 'Sharp Shooter',
-    description: 'Prepared for future combat systems.',
-    skill: 'shooting',
-    values: [3, 5, 7],
-  },
-  farming: {
-    label: 'Heavy Harvester',
-    description: 'Collects extra leaves during gang farming.',
-    skill: 'farming',
-    values: [3, 5, 8],
-  },
-  tactics: {
-    label: 'Tactical Mind',
-    description: 'Prepared for future heists and operations.',
-    skill: 'tactics',
-    values: [3, 5, 7],
-  },
-  recruiting: {
-    label: 'Talent Spotter',
-    description: 'Improves the quality of normal recruitment candidates.',
-    skill: 'recruiting',
-    values: [3, 5, 8],
-  },
-  leadership: {
-    label: 'Natural Leader',
-    description: 'Improves the farming output of the active crew.',
-    skill: 'leadership',
-    values: [2, 4, 6],
-  },
-  streetSmart: {
-    label: 'Street Connected',
-    description: 'Can trigger extra opportunities during gang work.',
-    skill: 'streetSmart',
-    values: [2, 4, 6],
-  },
+  shooting: { label: 'Sharp Shooter', description: 'Prepared for future combat systems.', skill: 'shooting', values: [3, 5, 7] },
+  farming: { label: 'Heavy Harvester', description: 'Collects extra leaves during gang farming.', skill: 'farming', values: [3, 5, 8] },
+  tactics: { label: 'Tactical Mind', description: 'Prepared for future heists and operations.', skill: 'tactics', values: [3, 5, 7] },
+  recruiting: { label: 'Talent Spotter', description: 'Improves the quality of normal recruitment candidates.', skill: 'recruiting', values: [3, 5, 8] },
+  leadership: { label: 'Natural Leader', description: 'Improves the output of the active crew.', skill: 'leadership', values: [2, 4, 6] },
+  streetSmart: { label: 'Street Connected', description: 'Reduces risk and improves illegal transport results.', skill: 'streetSmart', values: [2, 4, 6] },
 };
 
 const RARITY_RANGES: Record<GangMemberRarity, { min: number; max: number; loyaltyMin: number; loyaltyMax: number }> = {
@@ -185,8 +152,7 @@ function strongestSkills(skills: GangMemberSkills) {
 function createBonuses(rarity: GangMemberRarity, skills: GangMemberSkills, seed = Math.random()) {
   const count = getBonusCount(rarity);
   if (count <= 0) return [];
-  const sorted = strongestSkills(skills);
-  return sorted.slice(0, count).map((skill, index) => {
+  return strongestSkills(skills).slice(0, count).map((skill, index) => {
     const definition = BONUS_DEFINITIONS[skill];
     const tier = rarity === 'MYTHIC' || rarity === 'LEGENDARY' ? 2 : rarity === 'EPIC' ? 1 : 0;
     const value = definition.values[tier] + (rarity === 'MYTHIC' && index === 0 ? 3 : 0);
@@ -217,11 +183,8 @@ function createSkills(rarity: GangMemberRarity, seed?: number): GangMemberSkills
   const useSeed = typeof seed === 'number';
   const base = {} as GangMemberSkills;
   GANG_MEMBER_SKILLS.forEach((skill, index) => {
-    base[skill] = useSeed
-      ? seededBetween(seed, index + 10, range.min, range.max)
-      : randomBetween(range.min, range.max);
+    base[skill] = useSeed ? seededBetween(seed, index + 10, range.min, range.max) : randomBetween(range.min, range.max);
   });
-
   const specialist = useSeed
     ? GANG_MEMBER_SKILLS[seededBetween(seed, 90, 0, GANG_MEMBER_SKILLS.length - 1)]
     : GANG_MEMBER_SKILLS[Math.floor(Math.random() * GANG_MEMBER_SKILLS.length)];
@@ -245,7 +208,6 @@ export function createGangMember(options: {
   const range = RARITY_RANGES[rarity];
   const loyalty = seededBetween(seed, 5, range.loyaltyMin, range.loyaltyMax);
   const source = options.source || (rarity === 'MYTHIC' ? 'ADMIN_EVENT' : 'RECRUITMENT');
-
   return {
     id: makeId(source === 'ADMIN_EVENT' ? 'event' : 'member'),
     firstName,
@@ -271,7 +233,6 @@ export function migrateGangMember(value: unknown, index = 0): GangMember | null 
     return createGangMember({ forcedName: value.slice(0, 20), source: 'STARTER', rarity: index === 0 ? 'RARE' : 'COMMON', seed });
   }
   if (!value || typeof value !== 'object') return null;
-
   const raw = value as Partial<GangMember> & { name?: string };
   const fallbackSeed = hashString(String(raw.id || raw.displayName || raw.name || index));
   const rarity: GangMemberRarity = ['COMMON', 'RARE', 'EPIC', 'LEGENDARY', 'MYTHIC'].includes(String(raw.rarity))
@@ -289,7 +250,6 @@ export function migrateGangMember(value: unknown, index = 0): GangMember | null 
   GANG_MEMBER_SKILLS.forEach((skill) => {
     skills[skill] = clamp(Number(rawSkills[skill] ?? fallbackSkills[skill]), 1, 100);
   });
-
   const bonuses = Array.isArray(raw.bonuses)
     ? raw.bonuses.slice(0, 3).map((bonus, bonusIndex) => ({
         id: String(bonus?.id || `legacy_${fallbackSeed}_${bonusIndex}`).slice(0, 80),
@@ -299,7 +259,6 @@ export function migrateGangMember(value: unknown, index = 0): GangMember | null 
         value: clamp(Number(bonus?.value || 1), 1, 25),
       }))
     : createBonuses(rarity, skills, seededValue(fallbackSeed, 7));
-
   return {
     id: String(raw.id || `legacy_${fallbackSeed}_${index}`).slice(0, 100),
     firstName,
@@ -338,12 +297,7 @@ export function getPrimarySkill(member: GangMember): GangMemberSkill {
 
 export function getMemberRole(member: GangMember) {
   const roles: Record<GangMemberSkill, string> = {
-    shooting: 'Shooter',
-    farming: 'Farmer',
-    tactics: 'Strategist',
-    recruiting: 'Recruiter',
-    leadership: 'Leader',
-    streetSmart: 'Street Fixer',
+    shooting: 'Shooter', farming: 'Farmer', tactics: 'Strategist', recruiting: 'Recruiter', leadership: 'Leader', streetSmart: 'Street Fixer',
   };
   return roles[getPrimarySkill(member)];
 }
@@ -383,37 +337,13 @@ export function dismissGangMember(
   lastDismissalAt: number,
 ): DismissalResult {
   const dismissed = members.find((member) => member.id === memberId) || null;
-  if (!dismissed) {
-    return { members, dismissed: null, voluntaryDeparture: null, loyaltyLoss: 0, pressure: currentPressure, lastDismissalAt };
-  }
-
-  const decayedPressure = decayDismissalPressure(currentPressure, lastDismissalAt);
-  const pressure = clamp(decayedPressure + 1, 1, 5);
+  if (!dismissed) return { members, dismissed: null, voluntaryDeparture: null, loyaltyLoss: 0, pressure: currentPressure, lastDismissalAt };
+  const pressure = clamp(decayDismissalPressure(currentPressure, lastDismissalAt) + 1, 1, 5);
   const loyaltyLoss = 5 + Math.max(0, pressure - 1) * 2;
-  let remaining = members
+  const remaining = members
     .filter((member) => member.id !== memberId)
     .map((member) => ({ ...member, loyalty: clamp(member.loyalty - loyaltyLoss, 0, 100) }));
-
-  let voluntaryDeparture: GangMember | null = null;
-  if (pressure >= 2 && remaining.length > 0) {
-    const atRisk = [...remaining].sort((left, right) => left.loyalty - right.loyalty)[0];
-    const loyaltyRisk = Math.max(0, 58 - atRisk.loyalty) * 0.008;
-    const pressureRisk = (pressure - 1) * 0.045;
-    const leaveChance = Math.min(0.4, loyaltyRisk + pressureRisk);
-    if (Math.random() < leaveChance) {
-      voluntaryDeparture = atRisk;
-      remaining = remaining.filter((member) => member.id !== atRisk.id);
-    }
-  }
-
-  return {
-    members: remaining,
-    dismissed,
-    voluntaryDeparture,
-    loyaltyLoss,
-    pressure,
-    lastDismissalAt: Date.now(),
-  };
+  return { members: remaining, dismissed, voluntaryDeparture: null, loyaltyLoss, pressure, lastDismissalAt: Date.now() };
 }
 
 export function memberXpForNextLevel(level: number) {
@@ -441,13 +371,21 @@ export function awardMemberActivity(
       ...member,
       level,
       xp,
-      loyalty: member.loyalty,
       status: 'AVAILABLE' as GangMemberStatus,
-      skills: focusSkill
-        ? { ...member.skills, [focusSkill]: clamp(member.skills[focusSkill] + skillGain, 1, 100) }
-        : member.skills,
+      skills: focusSkill ? { ...member.skills, [focusSkill]: clamp(member.skills[focusSkill] + skillGain, 1, 100) } : member.skills,
     };
   });
+}
+
+export function addMemberLoyalty(members: GangMember[], participantIds: string[], amount: number) {
+  const active = new Set(participantIds);
+  return members.map((member) => active.has(member.id)
+    ? { ...member, loyalty: clamp(member.loyalty + amount, 0, 100), status: 'AVAILABLE' as GangMemberStatus }
+    : { ...member, status: member.status === 'WORKING' ? 'AVAILABLE' as GangMemberStatus : member.status });
+}
+
+export function restoreMemberLoyalty(members: GangMember[], memberId: string, amount: number) {
+  return addMemberLoyalty(members, [memberId], amount);
 }
 
 export function markMembersWorking(members: GangMember[], participantIds: string[]) {
@@ -456,9 +394,11 @@ export function markMembersWorking(members: GangMember[], participantIds: string
 }
 
 export function selectActiveMembers(members: GangMember[], count: number) {
-  return [...members]
-    .sort(() => Math.random() - 0.5)
-    .slice(0, clamp(count, 0, members.length));
+  return [...members].sort(() => Math.random() - 0.5).slice(0, clamp(count, 0, members.length));
+}
+
+export function getLoyaltyEfficiency(member: GangMember) {
+  return 0.55 + clamp(member.loyalty, 0, 100) * 0.0045;
 }
 
 export function calculateFarmingYield(participants: GangMember[]) {
@@ -468,7 +408,7 @@ export function calculateFarmingYield(participants: GangMember[]) {
   participants.forEach((member) => {
     const farmingBonus = member.bonuses.filter((entry) => entry.skill === 'farming').reduce((sum, entry) => sum + entry.value, 0);
     const personalBonus = Math.floor(1200 * (member.skills.farming + farmingBonus) / 500);
-    let yieldAmount = 1200 + personalBonus;
+    let yieldAmount = Math.floor((1200 + personalBonus) * getLoyaltyEfficiency(member));
     const exceptionalChance = Math.min(0.22, 0.025 + member.skills.farming / 900);
     if (Math.random() < exceptionalChance) {
       yieldAmount += 300;
@@ -476,16 +416,11 @@ export function calculateFarmingYield(participants: GangMember[]) {
     }
     total += yieldAmount;
   });
-
   const bestLeader = participants.reduce((best, member) => {
     const bonus = member.bonuses.filter((entry) => entry.skill === 'leadership').reduce((sum, entry) => sum + entry.value, 0);
     return Math.max(best, member.skills.leadership + bonus);
   }, 0);
   const leadershipBonus = Math.floor(total * Math.min(0.1, bestLeader / 1000));
   total += leadershipBonus;
-  return {
-    total,
-    bonus: total - participants.length * 1200,
-    exceptionalCount,
-  };
+  return { total, bonus: Math.max(0, total - participants.length * 1200), exceptionalCount };
 }
