@@ -37,12 +37,25 @@ async function ensureSchema() {
         leaves BIGINT NOT NULL DEFAULT 0,
         white_packs BIGINT NOT NULL DEFAULT 0,
         blue_packs BIGINT NOT NULL DEFAULT 0,
+        sulfur BIGINT NOT NULL DEFAULT 0,
+        iron_ore BIGINT NOT NULL DEFAULT 0,
+        gunpowder BIGINT NOT NULL DEFAULT 0,
+        steel BIGINT NOT NULL DEFAULT 0,
+        clean_balance BIGINT NOT NULL DEFAULT 0,
+        dirty_balance BIGINT NOT NULL DEFAULT 0,
         dirty_earned BIGINT NOT NULL DEFAULT 0,
         stock_value BIGINT NOT NULL DEFAULT 0,
         last_leave_at BIGINT NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+
+    await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS sulfur BIGINT NOT NULL DEFAULT 0;`);
+    await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS iron_ore BIGINT NOT NULL DEFAULT 0;`);
+    await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS gunpowder BIGINT NOT NULL DEFAULT 0;`);
+    await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS steel BIGINT NOT NULL DEFAULT 0;`);
+    await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS clean_balance BIGINT NOT NULL DEFAULT 0;`);
+    await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS dirty_balance BIGINT NOT NULL DEFAULT 0;`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS admin_action_log (
@@ -101,7 +114,6 @@ async function ensureEditableTableRow(db, table, playerId) {
   if (!allowed.has(table)) return;
   await db.query(`INSERT INTO ${table} (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`, [playerId]);
 }
-
 
 module.exports = {
   clampInteger,
