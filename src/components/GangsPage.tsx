@@ -4,7 +4,9 @@ import PageDisclaimer from './PageDisclaimer';
 
 const GAME_KEY = 'luck_game_state_v1';
 const GAME_SALT = 'stifyy-ogromania-salt';
-const LEAVE_INTERVAL_MS = 3 * 60 * 1000;
+const LEAVE_INTERVAL_MS = 60 * 60 * 1000;
+const MAX_OFFLINE_LEAVES = 3;
+const MIN_GANG_MEMBERS = 4;
 const GANG_RAZIA_CHANCE = 0.05;
 
 const MEMBER_POOL = [
@@ -94,17 +96,39 @@ export default function GangsPage() {
     });
   };
 
+  const pushPopup = (text: string) => {
+    setPopup(text);
+    window.setTimeout(() => setPopup(null), 2400);
+  };
+
   const applyLeaves = () => {
     if (!formed || gangData.members.length === 0) return;
     const now = Date.now();
     const elapsed = now - gangData.lastLeaveAt;
     if (elapsed < LEAVE_INTERVAL_MS) return;
-    const leaves = Math.floor(elapsed / LEAVE_INTERVAL_MS);
-    if (leaves <= 0) return;
-    const nextMembers = gangData.members.slice(0, Math.max(0, gangData.members.length - leaves));
-    const nextGangData = { ...gangData, members: nextMembers, lastLeaveAt: gangData.lastLeaveAt + leaves * LEAVE_INTERVAL_MS };
+
+    const elapsedIntervals = Math.floor(elapsed / LEAVE_INTERVAL_MS);
+    const removableMembers = Math.max(0, gangData.members.length - MIN_GANG_MEMBERS);
+    const leaveCount = Math.min(elapsedIntervals, MAX_OFFLINE_LEAVES, removableMembers);
+    const nextLastLeaveAt = gangData.lastLeaveAt + elapsedIntervals * LEAVE_INTERVAL_MS;
+
+    if (leaveCount <= 0) {
+      const nextGangData = { ...gangData, lastLeaveAt: nextLastLeaveAt };
+      setGangData(nextGangData);
+      persist(nextGangData);
+      return;
+    }
+
+    const leavingMembers = gangData.members.slice(-leaveCount);
+    const nextMembers = gangData.members.slice(0, gangData.members.length - leaveCount);
+    const nextGangData = { ...gangData, members: nextMembers, lastLeaveAt: nextLastLeaveAt };
     setGangData(nextGangData);
     persist(nextGangData);
+    pushPopup(
+      leaveCount === 1
+        ? `${leavingMembers[0]} left because the gang was inactive.`
+        : `${leaveCount} members left because the gang was inactive.`,
+    );
   };
 
   useEffect(() => {
@@ -119,11 +143,6 @@ export default function GangsPage() {
   useEffect(() => {
     persist();
   }, [gangData, cashBalance, baniMurdari, timeFarm]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const pushPopup = (text: string) => {
-    setPopup(text);
-    window.setTimeout(() => setPopup(null), 2400);
-  };
 
   const formGang = () => {
     if (formed) return;
@@ -320,7 +339,7 @@ export default function GangsPage() {
           {!formed ? (
             <div className="mx-auto mt-6 max-w-xl rounded-xl border border-white/15 bg-black/25 p-4">
               <p className="text-sm text-white/75">Create Unrecognized Gang (cost: 10,000,000 dirty cash)</p>
-              <input value={gangNameInput} onChange={(e) => setGangNameInput(e.target.value)} placeholder="Gang name" className="mt-3 w-full rounded-lg border border-white/15 bg-black/35 px-3 py-2" />
+              <input value={gangNameInput} onChange={(e: { target: { value: string } }) => setGangNameInput(e.target.value)} placeholder="Gang name" className="mt-3 w-full rounded-lg border border-white/15 bg-black/35 px-3 py-2" />
               <button type="button" onClick={formGang} className="mt-3 w-full rounded-lg bg-rose-500/80 px-4 py-2 font-black">Create gang</button>
             </div>
           ) : (
@@ -339,6 +358,7 @@ export default function GangsPage() {
 
               <div className="mt-4 rounded-xl border border-white/15 bg-black/25 p-4">
                 <p className="text-sm font-semibold uppercase tracking-[0.12em] text-white/60">Recruitment</p>
+                <p className="mt-2 text-xs leading-relaxed text-white/45">Inactivity removes one member every 60 minutes, with a maximum of 3 lost while offline. The first 4 members are protected.</p>
                 <button type="button" onClick={startRecruit} disabled={recruitTimer > 0 || actionType !== null} className={`mt-3 rounded-lg px-4 py-2 font-black ${recruitTimer > 0 || actionType ? 'bg-[#2a2744] text-white/50' : 'bg-cyan-500/80'}`}>
                   {recruitTimer > 0 ? `Recruiting... ${recruitTimer}s` : 'Recruit member (5-10s)'}
                 </button>
@@ -394,7 +414,7 @@ export default function GangsPage() {
 
       {popup ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onClick={() => setPopup(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-2xl border border-white/25 bg-[#1a1635] px-5 py-5 text-center text-base font-semibold text-white shadow-xl">
+          <div onClick={(e: { stopPropagation: () => void }) => e.stopPropagation()} className="w-full max-w-md rounded-2xl border border-white/25 bg-[#1a1635] px-5 py-5 text-center text-base font-semibold text-white shadow-xl">
             {popup}
           </div>
         </div>
@@ -402,7 +422,7 @@ export default function GangsPage() {
 
       {confirmConvert ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !isConverting && setConfirmConvert(null)}>
-          <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white" onClick={(event) => event.stopPropagation()}>
+          <div className="w-full max-w-md rounded-2xl border border-amber-300/40 bg-[#1a142d] p-5 text-white" onClick={(event: { stopPropagation: () => void }) => event.stopPropagation()}>
             <p className="text-lg font-black">Convert clean money into dirty money for gang?</p>
             <p className="mt-2 text-sm text-white/70">
               Required dirty: {confirmConvert.needed.toLocaleString('en-US')} · Clean cost: {confirmConvert.cleanCost.toLocaleString('en-US')}

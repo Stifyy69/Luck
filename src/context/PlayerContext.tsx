@@ -72,6 +72,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const syncCityProgress = () => refresh();
+    window.addEventListener('city-progress-updated', syncCityProgress as EventListener);
+    return () => window.removeEventListener('city-progress-updated', syncCityProgress as EventListener);
+  }, [refresh]);
+
   return (
     <PlayerContext.Provider value={{ playerId, player, loading, error, refresh }}>
       {children}

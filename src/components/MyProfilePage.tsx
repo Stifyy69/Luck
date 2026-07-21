@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
+import { replayCityTutorial } from '../lib/cityProgressApi';
+import { readPlayerCityProgress } from '../lib/cityProgress';
 import SharedStatsPanel from './SharedStatsPanel';
 
 function fmt(n: number) {
@@ -18,9 +20,11 @@ export default function MyProfilePage() {
   const [editing, setEditing] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [saving, setSaving] = useState(false);
+  const [tutorialBusy, setTutorialBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const displayName = String(player?.displayName || 'Player');
+  const cityProgress = readPlayerCityProgress(player);
   const fleetValue = useMemo(
     () => (player?.ownedVehicles || []).reduce((total, vehicle) => total + Number(vehicle.purchasePrice || 0), 0),
     [player?.ownedVehicles],
@@ -59,6 +63,19 @@ export default function MyProfilePage() {
     }
   };
 
+  const replayTutorial = async () => {
+    if (tutorialBusy) return;
+    setTutorialBusy(true);
+    setError(null);
+    try {
+      await replayCityTutorial(playerId);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Could not restart tutorial.');
+    } finally {
+      setTutorialBusy(false);
+    }
+  };
+
   return (
     <div className="min-h-screen px-4 pb-10 pt-20 sm:px-6 md:px-8 md:pb-12 md:pt-8">
       <div className="mx-auto max-w-[1220px] space-y-5">
@@ -69,6 +86,7 @@ export default function MyProfilePage() {
               <div className="flex flex-wrap items-center gap-2">
                 <p className="section-kicker">City identity</p>
                 <span className="rounded-full border border-[rgba(114,227,154,0.2)] bg-[rgba(114,227,154,0.07)] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[var(--money)]">Resident active</span>
+                <span className="rounded-full border border-[rgba(211,255,81,0.2)] bg-[rgba(211,255,81,0.06)] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[var(--accent)]">City Level {cityProgress?.level || 1}</span>
               </div>
 
               <div className="mt-6 flex flex-col gap-5 sm:flex-row sm:items-center">
@@ -92,9 +110,11 @@ export default function MyProfilePage() {
 
               <div className="mt-7 flex flex-wrap gap-3">
                 <button type="button" onClick={openRename} className="btn-primary rounded-2xl px-5 py-3 text-sm">Edit identity</button>
+                <button type="button" onClick={() => replayTutorial().catch(() => {})} disabled={tutorialBusy} className="btn-ghost rounded-2xl px-5 py-3 text-sm disabled:opacity-40">{tutorialBusy ? 'Loading tutorial...' : 'Replay tutorial'}</button>
                 <a href="/inventory" className="btn-ghost rounded-2xl px-5 py-3 text-sm no-underline">Open inventory</a>
                 <a href="/showroom" className="btn-ghost rounded-2xl px-5 py-3 text-sm no-underline">Visit showroom</a>
               </div>
+              {error && !editing ? <p className="mt-3 rounded-xl border border-red-400/20 bg-red-500/[0.07] px-3 py-2 text-xs font-semibold text-red-200">{error}</p> : null}
             </div>
 
             <div className="rounded-[22px] border border-white/[0.08] bg-black/25 p-5">
@@ -152,8 +172,8 @@ export default function MyProfilePage() {
               <h2 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">Ready for action</h2>
               <div className="mt-5 space-y-3">
                 <QuickLink href="/pizzer" code="PZ" title="Courier shift" detail="Build cash and a delivery streak." />
-                <QuickLink href="/fisher" code="FS" title="Fishing run" detail="Hunt rare catches and upgrade gear." />
-                <QuickLink href="/pilot" code="PL" title="Pilot route" detail="Climb the aviation career ladder." />
+                <QuickLink href="/fisher" code="FS" title="Fishing run" detail="Unlocks at City Level 3." />
+                <QuickLink href="/pilot" code="PL" title="Pilot route" detail="Unlocks at City Level 6." />
               </div>
             </div>
           </section>
@@ -175,7 +195,7 @@ export default function MyProfilePage() {
                 <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.16em] text-white/32">Display name</span>
                 <input
                   value={nameInput}
-                  onChange={(event) => setNameInput(event.target.value.slice(0, 32))}
+                  onChange={(event: { target: { value: string } }) => setNameInput(event.target.value.slice(0, 32))}
                   placeholder="Enter name"
                   className="input-dark w-full rounded-2xl px-4 py-3 text-sm font-semibold outline-none"
                   autoFocus
