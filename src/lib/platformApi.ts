@@ -1,3 +1,5 @@
+import type { GangMember } from './gangMembers';
+
 export type VipTier = 'VIP_SILVER' | 'VIP_GOLD';
 
 export type VipStatus = {
@@ -106,14 +108,36 @@ export type GangLeaderboardResponse = {
   gangs: LeaderboardGang[];
 };
 
+export type ServerGangState = {
+  playerId: string;
+  name: string;
+  gangLevelIndex: number;
+  gangLevel: string;
+  members: GangMember[];
+  membersCount: number;
+  activeWorkers: number;
+  leaves: number;
+  whitePacks: number;
+  bluePacks: number;
+  dirtyEarned: number;
+  stockValue: number;
+  lastLeaveAt: number;
+  updatedAt: string | null;
+};
+
 export const fetchPlayerLeaderboard = (metric: PlayerLeaderboardMetric) =>
   request<PlayerLeaderboardResponse>(`/api/leaderboards/players?${new URLSearchParams({ metric })}`);
 
 export const fetchGangLeaderboard = (metric: GangLeaderboardMetric) =>
   request<GangLeaderboardResponse>(`/api/leaderboards/gangs?${new URLSearchParams({ metric })}`);
 
+export async function fetchGangState(playerId: string) {
+  const payload = await request<{ gang: ServerGangState | null }>(`/api/gangs/state?${new URLSearchParams({ playerId })}`);
+  return payload.gang;
+}
+
 export function syncGangState(playerId: string, gangData: Record<string, unknown>) {
-  return request<{ ok: true }>('/api/gangs/sync', {
+  return request<{ ok: true; gang: ServerGangState }>('/api/gangs/sync', {
     method: 'POST',
     body: JSON.stringify({ playerId, gangData }),
   });
