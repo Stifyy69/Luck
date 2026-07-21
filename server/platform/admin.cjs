@@ -12,7 +12,7 @@ const {
   safeNumber,
   withTransaction,
 } = require('./db.cjs');
-const { getGangState } = require('./gangs.cjs');
+const { getGangState, grantMythicGangMember } = require('./gangs.cjs');
 const { loadGangDataset, loadPlayerDataset, sortRows } = require('./rankings.cjs');
 const { activateVip, getVipStatus, revokeVip } = require('./vip.cjs');
 
@@ -240,6 +240,16 @@ async function grantAdminItem(adminName, playerId, itemType, quantity) {
   return getAdminPlayerDetail(playerId);
 }
 
+async function grantAdminMythicMember(adminName, playerId, customName = '') {
+  const result = await grantMythicGangMember(playerId, customName);
+  await logAdminAction(adminName, playerId, 'mythic_gang_member_grant', {
+    memberId: result.member.id,
+    memberName: result.member.displayName,
+    rarity: result.member.rarity,
+  });
+  return getAdminPlayerDetail(playerId);
+}
+
 async function setAdminVip(adminName, playerId, tier) {
   let status;
   if (!tier || tier === 'NONE') status = await revokeVip(playerId);
@@ -268,6 +278,7 @@ module.exports = {
   getAdminPlayerDetail,
   getAdminPlayers,
   grantAdminItem,
+  grantAdminMythicMember,
   logAdminAction,
   parseAdminFilters,
   resetAdminTutorial,
