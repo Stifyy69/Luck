@@ -17,6 +17,7 @@ const {
   getPlatformStatus,
   getPlayerLeaderboard,
   grantAdminItem,
+  grantAdminMythicMember,
   normalizeLatestVipActivation,
   resetAdminTutorial,
   setAdminVip,
@@ -177,6 +178,19 @@ function installPlatformSystems(app, express) {
       return res.json({ ok: true, detail });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : 'item grant failed' });
+    }
+  });
+
+  app.post('/api/adminpanelv3/players/:playerId/gang/mythic', requirePlatformAdmin, async (req, res) => {
+    try {
+      const detail = await grantAdminMythicMember(
+        ADMIN_USER,
+        String(req.params.playerId || ''),
+        String(req.body?.name || ''),
+      );
+      return res.json({ ok: true, detail });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'Mythic member grant failed' });
     }
   });
 
