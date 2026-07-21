@@ -3,6 +3,7 @@ import { usePlatformStatus } from '../../context/PlatformStatusContext';
 import { usePlayer } from '../../hooks/usePlayer';
 import { CITY_UNLOCKS, readPlayerCityProgress, type CityProgress, type CityUnlock } from '../../lib/cityProgress';
 import { fetchCityProgress, subscribeCityProgress, type CityProgressEventDetail } from '../../lib/cityProgressApi';
+import AccountHud from '../AccountHud';
 import CityIcon from '../ui/CityIcon';
 
 type CityProgressHudProps = {
@@ -93,34 +94,48 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
 
   return (
     <>
-      <div className="fixed left-[64px] right-4 top-4 z-[65] md:left-[272px] md:right-[224px] lg:left-[278px] lg:right-[224px]">
-        <div className="relative rounded-[20px] border border-white/[0.07] bg-[#0a0d11]/95 px-4 py-3 shadow-2xl backdrop-blur-xl">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[var(--accent)] text-sm font-black text-[#10140b]">{progress?.level || 1}</span>
+      <div className="fixed left-[64px] right-4 top-4 z-[65] md:left-[272px] lg:left-[278px]">
+        <div className="rounded-[20px] border border-white/[0.07] bg-[#0a0d11]/95 px-3 py-2.5 shadow-2xl backdrop-blur-xl">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[var(--accent)] text-sm font-black text-[#10140b]">
+              {progress?.level || 1}
+            </span>
+
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-3">
-                <p className="truncate text-[10px] font-black uppercase tracking-[0.15em] text-white/35">City Level · {currentLabel}</p>
-                <p className="shrink-0 text-[10px] font-black text-white/55">
+                <p className="truncate text-[9px] font-black uppercase tracking-[0.15em] text-white/35 sm:text-[10px]">
+                  City Level · {currentLabel}
+                </p>
+                <p className="shrink-0 text-[9px] font-black text-white/55 sm:text-[10px]">
                   {progress?.nextLevelXp === null ? 'MAX' : `${progress?.currentLevelXp || 0} / ${progress?.nextLevelXp || 0} XP`}
                 </p>
               </div>
+
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
-                <div className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-700 ease-out" style={{ width: `${progress?.progressPercent || 0}%` }} />
+                <div
+                  className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-700 ease-out"
+                  style={{ width: `${progress?.progressPercent || 0}%` }}
+                />
               </div>
-              <div className="mt-1.5 flex items-center justify-between gap-3">
-                <p className="min-w-0 truncate text-[9px] font-bold uppercase tracking-[0.12em] text-white/24">Next unlock: {nextUnlockLabel}</p>
+
+              <div className="mt-1.5 flex min-w-0 items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-[8px] font-bold uppercase tracking-[0.1em] text-white/24 sm:text-[9px] sm:tracking-[0.12em]">
+                  Next unlock: {nextUnlockLabel}
+                </p>
                 {status.vip.active ? (
-                  <span className="shrink-0 rounded-full border border-[rgba(211,255,81,0.22)] bg-[rgba(211,255,81,0.075)] px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--accent)]">
+                  <span className="hidden shrink-0 rounded-full border border-[rgba(211,255,81,0.22)] bg-[rgba(211,255,81,0.075)] px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--accent)] sm:inline-flex">
                     {status.vip.label} · {formatRemaining(status.vip.remainingMs)}
                   </span>
                 ) : null}
               </div>
             </div>
+
+            <AccountHud embedded />
           </div>
         </div>
 
         {xpToast ? (
-          <div className="animate-toast-in pointer-events-none absolute left-1/2 top-[74px] -translate-x-1/2 rounded-full border border-[rgba(211,255,81,0.25)] bg-[#11170d]/95 px-4 py-2 text-[11px] font-black uppercase tracking-[0.13em] text-[var(--accent)] shadow-2xl">
+          <div className="animate-toast-in pointer-events-none absolute left-1/2 top-[72px] -translate-x-1/2 rounded-full border border-[rgba(211,255,81,0.25)] bg-[#11170d]/95 px-4 py-2 text-[11px] font-black uppercase tracking-[0.13em] text-[var(--accent)] shadow-2xl">
             +{xpToast} City XP
           </div>
         ) : null}

@@ -13,7 +13,6 @@ import InventoryPage from './components/InventoryPage';
 import MyProfilePage from './components/MyProfilePage';
 import CityHubPage from './components/CityHubPage';
 import LeaderboardsPage from './components/LeaderboardsPage';
-import AccountHud from './components/AccountHud';
 import CityProgressHud from './components/city/CityProgressHud';
 import CityTutorialOverlay from './components/city/CityTutorialOverlay';
 import CityCayoProgressBridge from './components/city/CityCayoProgressBridge';
@@ -161,7 +160,6 @@ export default function App() {
   return (
     <div className="relative min-h-screen">
       <CityProgressHud currentLabel={currentLabel} onNavigate={navigateLoose} />
-      <AccountHud />
       <CityTutorialOverlay path={path} onNavigate={navigateLoose} />
       <CityCayoProgressBridge />
       <GangSyncBridge />

@@ -3,6 +3,7 @@ const {
   ADMIN_GRANTABLE_ITEMS,
 } = require('./constants.cjs');
 const {
+  clampInteger,
   ensureCityProgress,
   ensureEditableTableRow,
   ensurePlayer,
