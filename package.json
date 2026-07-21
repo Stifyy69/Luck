@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
-    "check": "tsc --noEmit && node --check server/cityProgress/preload.cjs && node --check server/cityProgress/install.cjs && node --check server/cityProgress/store.cjs && node --check server/cityProgress/constants.cjs",
+    "check": "tsc --noEmit && node --check server/cityProgress/preload.cjs && node --check server/cityProgress/install.cjs && node --check server/cityProgress/store.cjs && node --check server/cityProgress/constants.cjs && node --check server/platform/install.cjs && node --check server/platform/store.cjs && node --check server/platform/auth.cjs && node --check server/platform/constants.cjs && node --check server/platform/db.cjs && node --check server/platform/vip.cjs && node --check server/platform/gangs.cjs && node --check server/platform/rankings.cjs && node --check server/platform/admin.cjs",
     "start": "node -r ./server/cityProgress/preload.cjs server.cjs"
   },
   "dependencies": {

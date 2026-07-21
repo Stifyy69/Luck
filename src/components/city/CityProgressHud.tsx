@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { usePlatformStatus } from '../../context/PlatformStatusContext';
 import { usePlayer } from '../../hooks/usePlayer';
-import { fetchCityProgress, subscribeCityProgress, type CityProgressEventDetail } from '../../lib/cityProgressApi';
 import { CITY_UNLOCKS, readPlayerCityProgress, type CityProgress, type CityUnlock } from '../../lib/cityProgress';
+import { fetchCityProgress, subscribeCityProgress, type CityProgressEventDetail } from '../../lib/cityProgressApi';
 import CityIcon from '../ui/CityIcon';
 
 type CityProgressHudProps = {
@@ -15,8 +16,16 @@ type LevelUpState = {
   unlocks: CityUnlock[];
 };
 
+function formatRemaining(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 export default function CityProgressHud({ currentLabel, onNavigate }: CityProgressHudProps) {
   const { playerId, player } = usePlayer();
+  const { status } = usePlatformStatus();
   const playerProgress = readPlayerCityProgress(player);
   const [progress, setProgress] = useState<CityProgress | null>(playerProgress);
   const [xpToast, setXpToast] = useState<number | null>(null);
@@ -84,11 +93,8 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
 
   return (
     <>
-      <div className="fixed left-[64px] right-4 top-4 z-[65] md:left-[272px] lg:left-[278px]">
-        <div className="relative overflow-hidden rounded-[20px] border border-white/[0.07] bg-[#0a0d11]/95 px-4 py-3 shadow-2xl backdrop-blur-xl md:pr-[210px]">
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-white/[0.04]">
-            <div className="h-full bg-[var(--accent)] transition-[width] duration-700 ease-out" style={{ width: `${progress?.progressPercent || 0}%` }} />
-          </div>
+      <div className="fixed left-[64px] right-4 top-4 z-[65] md:left-[272px] md:right-[224px] lg:left-[278px] lg:right-[224px]">
+        <div className="relative rounded-[20px] border border-white/[0.07] bg-[#0a0d11]/95 px-4 py-3 shadow-2xl backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[var(--accent)] text-sm font-black text-[#10140b]">{progress?.level || 1}</span>
             <div className="min-w-0 flex-1">
@@ -101,7 +107,14 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
                 <div className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-700 ease-out" style={{ width: `${progress?.progressPercent || 0}%` }} />
               </div>
-              <p className="mt-1.5 truncate text-[9px] font-bold uppercase tracking-[0.12em] text-white/24">Next unlock: {nextUnlockLabel}</p>
+              <div className="mt-1.5 flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-[9px] font-bold uppercase tracking-[0.12em] text-white/24">Next unlock: {nextUnlockLabel}</p>
+                {status.vip.active ? (
+                  <span className="shrink-0 rounded-full border border-[rgba(211,255,81,0.22)] bg-[rgba(211,255,81,0.075)] px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--accent)]">
+                    {status.vip.label} · {formatRemaining(status.vip.remainingMs)}
+                  </span>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>

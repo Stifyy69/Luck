@@ -11,6 +11,7 @@ export type CityIconName =
   | 'car'
   | 'market'
   | 'gangs'
+  | 'leaderboard'
   | 'menu'
   | 'close'
   | 'wallet'
@@ -71,6 +72,8 @@ export default function CityIcon({ name, className = 'h-5 w-5', strokeWidth = 1.
         return <><path d="M4 9h16l-1.3-5H5.3L4 9Z" {...common} /><path d="M5 9v11h14V9M9 20v-6h6v6" {...common} /><path d="M4 9c0 1.5 1 2.5 2.5 2.5S9 10.5 9 9c0 1.5 1 2.5 3 2.5s3-1 3-2.5c0 1.5 1 2.5 2.5 2.5S20 10.5 20 9" {...common} /></>;
       case 'gangs':
         return <><circle cx="9" cy="9" r="3" {...common} /><circle cx="17" cy="10" r="2.4" {...common} /><path d="M3.5 19c.5-3.1 2.3-4.8 5.5-4.8s5 1.7 5.5 4.8M14.5 15.2c2.9-.5 4.9.8 5.8 3.8" {...common} /></>;
+      case 'leaderboard':
+        return <><path d="M4 20V11h4v9M10 20V5h4v15M16 20v-7h4v7" {...common} /><path d="M3 20h18" {...common} /></>;
       case 'menu':
         return <path d="M5 7h14M5 12h14M5 17h14" {...common} />;
       case 'close':
