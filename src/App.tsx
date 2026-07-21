@@ -12,22 +12,25 @@ import ShowroomPage from './components/ShowroomPage';
 import InventoryPage from './components/InventoryPage';
 import MyProfilePage from './components/MyProfilePage';
 import CityHubPage from './components/CityHubPage';
+import LeaderboardsPage from './components/LeaderboardsPage';
 import AccountHud from './components/AccountHud';
 import CityProgressHud from './components/city/CityProgressHud';
 import CityTutorialOverlay from './components/city/CityTutorialOverlay';
 import CityCayoProgressBridge from './components/city/CityCayoProgressBridge';
+import GangSyncBridge from './components/city/GangSyncBridge';
 import LockedCareerPage from './components/city/LockedCareerPage';
 import CityIcon, { type CityIconName } from './components/ui/CityIcon';
+import { usePlatformStatus } from './context/PlatformStatusContext';
 import { usePlayer } from './hooks/usePlayer';
 import { CAREER_REQUIREMENTS, careerAccessForPath, readPlayerCityProgress, type CityProgress } from './lib/cityProgress';
 import { subscribeCityProgress } from './lib/cityProgressApi';
 import { startGameSync } from './lib/gameSync';
 
-type RoutePath = '/city' | '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher' | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/gangs' | '/adminpanelv2';
+type RoutePath = '/city' | '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher' | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/gangs' | '/leaderboards' | '/adminpanelv2';
 type NavItem = { path: RoutePath; label: string; icon: CityIconName; hint?: string; unlockLevel?: number; vipOnly?: boolean };
 type NavGroup = { label: string; items: NavItem[] };
 
-const VALID_ROUTES: RoutePath[] = ['/city', '/ruleta', '/farmat', '/sleep', '/pilot', '/pizzer', '/fisher', '/showroom', '/inventory', '/owned', '/profile', '/cnn', '/gangs', '/adminpanelv2'];
+const VALID_ROUTES: RoutePath[] = ['/city', '/ruleta', '/farmat', '/sleep', '/pilot', '/pizzer', '/fisher', '/showroom', '/inventory', '/owned', '/profile', '/cnn', '/gangs', '/leaderboards', '/adminpanelv2'];
 const NAV_GROUPS: NavGroup[] = [
   { label: 'Career', items: [
     { path: '/pizzer', label: 'Pizza Courier', icon: 'pizza', unlockLevel: 1 },
@@ -42,6 +45,7 @@ const NAV_GROUPS: NavGroup[] = [
     { path: '/cnn', label: 'CNN Market', icon: 'market' },
   ] },
   { label: 'City', items: [
+    { path: '/leaderboards', label: 'Rankings', icon: 'leaderboard' },
     { path: '/ruleta', label: 'Roulette', icon: 'roulette' },
     { path: '/gangs', label: 'Gangs', icon: 'gangs', unlockLevel: 15 },
   ] },
@@ -59,6 +63,7 @@ function normalizePath(pathname: string): RoutePath {
 
 export default function App() {
   const { player } = usePlayer();
+  const { status } = usePlatformStatus();
   const playerCityProgress = readPlayerCityProgress(player);
   const [cityProgress, setCityProgress] = useState<CityProgress | null>(playerCityProgress);
   const [path, setPath] = useState<RoutePath>(normalizePath(window.location.pathname || '/city'));
@@ -83,8 +88,25 @@ export default function App() {
   }, [playerCityProgress?.xp, playerCityProgress?.level, playerCityProgress?.vipActive]);
 
   useEffect(() => subscribeCityProgress(({ progress }) => setCityProgress(progress)), []);
-
   useEffect(() => setMenuOpen(false), [path]);
+
+  const effectiveCityProgress = useMemo<CityProgress | null>(() => {
+    if (!cityProgress) return null;
+    const vipActive = status.vip.active;
+    return {
+      ...cityProgress,
+      vipActive,
+      careerAccess: {
+        ...cityProgress.careerAccess,
+        nightShift: {
+          unlocked: vipActive,
+          requiredLevel: null,
+          vipOnly: true,
+          reason: vipActive ? null : 'VIP access required',
+        },
+      },
+    };
+  }, [cityProgress, status.vip.active]);
 
   const goTo = (nextPath: RoutePath) => {
     if (nextPath === path) return;
@@ -97,12 +119,14 @@ export default function App() {
   const currentLabel = useMemo(() => {
     if (path === '/city') return 'City Hub';
     if (path === '/profile') return 'My Profile';
+    if (path === '/leaderboards') return 'Rankings';
+    if (path === '/adminpanelv2') return 'Control Center';
     return NAV_GROUPS.flatMap((group) => group.items).find((item) => item.path === path)?.label || 'CityFlow';
   }, [path]);
 
   const renderPage = () => {
     const requirement = CAREER_REQUIREMENTS[path];
-    const access = careerAccessForPath(path, cityProgress);
+    const access = careerAccessForPath(path, effectiveCityProgress);
     if (requirement && access && !access.unlocked) {
       const item = NAV_GROUPS.flatMap((group) => group.items).find((candidate) => candidate.path === path);
       return (
@@ -111,7 +135,7 @@ export default function App() {
           icon={item?.icon || 'alert'}
           requiredLevel={requirement.level}
           vipOnly={requirement.vipOnly}
-          progress={cityProgress}
+          progress={effectiveCityProgress}
           onNavigate={navigateLoose}
           recommendedPath={requirement.recommendedPath}
         />
@@ -128,6 +152,7 @@ export default function App() {
     if (path === '/inventory' || path === '/owned') return <InventoryPage />;
     if (path === '/profile') return <MyProfilePage />;
     if (path === '/gangs') return <GangsPage />;
+    if (path === '/leaderboards') return <LeaderboardsPage />;
     if (path === '/cnn') return <CNNMarketplace />;
     if (path === '/adminpanelv2') return <AdminPanelV2 />;
     return <RouletteDemo />;
@@ -139,6 +164,7 @@ export default function App() {
       <AccountHud />
       <CityTutorialOverlay path={path} onNavigate={navigateLoose} />
       <CityCayoProgressBridge />
+      <GangSyncBridge />
 
       {menuOpen && <button type="button" aria-label="Close navigation overlay" className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm md:hidden" onClick={() => setMenuOpen(false)} />}
 
@@ -158,18 +184,12 @@ export default function App() {
         <div className="space-y-1">
           <button type="button" onClick={() => goTo('/city')} className={`game-nav-item flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left ${path === '/city' ? 'game-nav-item-active' : ''}`}>
             <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${path === '/city' ? 'bg-[#d8ff63]/10 text-[#d8ff63]' : 'bg-white/[0.025] text-white/45'}`}><CityIcon name="home" className="h-[18px] w-[18px]" /></span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-extrabold">City Hub</span>
-              <span className="block text-[10px] text-white/25">Next move and activity</span>
-            </span>
+            <span className="min-w-0 flex-1"><span className="block text-sm font-extrabold">City Hub</span><span className="block text-[10px] text-white/25">Next move and activity</span></span>
           </button>
 
           <button type="button" onClick={() => goTo('/profile')} className={`game-nav-item flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left ${path === '/profile' ? 'game-nav-item-active' : ''}`}>
             <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${path === '/profile' ? 'bg-[#d8ff63]/10 text-[#d8ff63]' : 'bg-white/[0.025] text-white/45'}`}><CityIcon name="profile" className="h-[18px] w-[18px]" /></span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-extrabold">My Profile</span>
-              <span className="block text-[10px] text-white/25">Identity and progress</span>
-            </span>
+            <span className="min-w-0 flex-1"><span className="block text-sm font-extrabold">My Profile</span><span className="block text-[10px] text-white/25">Identity and progress</span></span>
           </button>
         </div>
 
@@ -180,16 +200,14 @@ export default function App() {
               <div className="space-y-1">
                 {group.items.map((item) => {
                   const active = path === item.path;
-                  const access = careerAccessForPath(item.path, cityProgress);
+                  const access = careerAccessForPath(item.path, effectiveCityProgress);
                   const locked = Boolean(access && !access.unlocked);
                   return (
                     <button key={item.path} type="button" onClick={() => goTo(item.path)} className={`game-nav-item flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left ${active ? 'game-nav-item-active' : ''} ${locked ? 'opacity-55' : ''}`}>
                       <CityIcon name={item.icon} className="h-[17px] w-[17px] shrink-0" />
                       <span className="min-w-0 flex-1 truncate text-xs font-bold">{item.label}</span>
                       {locked ? (
-                        <span className="rounded-full border border-white/[0.08] bg-black/25 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-white/35">
-                          {item.vipOnly ? 'VIP' : `Lv ${item.unlockLevel}`}
-                        </span>
+                        <span className="rounded-full border border-white/[0.08] bg-black/25 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-white/35">{item.vipOnly ? 'VIP' : `Lv ${item.unlockLevel}`}</span>
                       ) : item.hint ? (
                         <span className="rounded-full bg-[#d8ff63]/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-[#d8ff63]">{item.hint}</span>
                       ) : null}
@@ -203,19 +221,14 @@ export default function App() {
 
         <div className="mt-auto pt-6">
           <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3.5">
-            <div className="flex items-center justify-between gap-2 text-[9px] font-extrabold uppercase tracking-[0.16em] text-[#d8ff63]/70">
-              <span className="inline-flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-[#65e6a5]" />City Level {cityProgress?.level || 1}</span>
-              <span>{cityProgress?.xp || 0} XP</span>
-            </div>
+            <div className="flex items-center justify-between gap-2 text-[9px] font-extrabold uppercase tracking-[0.16em] text-[#d8ff63]/70"><span className="inline-flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-[#65e6a5]" />City Level {effectiveCityProgress?.level || 1}</span><span>{effectiveCityProgress?.xp || 0} XP</span></div>
             <p className="mt-2 text-[11px] leading-4 text-white/35">Complete careers to open the rest of the city.</p>
           </div>
         </div>
       </aside>
 
       <main className="min-h-screen pt-14 md:pl-[272px] md:pt-0 lg:pl-[278px]">
-        <div className="lg:pt-20">
-          {renderPage()}
-        </div>
+        <div className="lg:pt-20">{renderPage()}</div>
       </main>
     </div>
   );
