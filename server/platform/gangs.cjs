@@ -1,6 +1,12 @@
 const { cityLevelFromXp } = require('../cityProgress/constants.cjs');
 const { GANG_LEVEL_LABELS } = require('./constants.cjs');
 const {
+  createAdminEventMember,
+  getProtectedMythics,
+  mergeProtectedMythics,
+  sanitizeMembers,
+} = require('./gangMembers.cjs');
+const {
   clampInteger,
   ensurePlayer,
   ensureSchema,
@@ -8,15 +14,6 @@ const {
   safeNumber,
   withTransaction,
 } = require('./db.cjs');
-
-function sanitizeMembers(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((entry) => typeof entry === 'string')
-    .map((entry) => entry.trim().slice(0, 32))
-    .filter(Boolean)
-    .slice(0, 34);
-}
 
 function calculateGangLevelIndex(dirtyEarned) {
   if (dirtyEarned >= 10_000_000_000) return 3;
@@ -28,7 +25,17 @@ function calculateGangLevelIndex(dirtyEarned) {
 async function syncGang(playerId, gangData) {
   await ensureSchema();
   const name = String(gangData?.name || '').trim().slice(0, 48);
-  const members = sanitizeMembers(gangData?.members);
+  const existingResult = await pool.query(`SELECT members FROM player_gangs WHERE player_id = $1`, [playerId]);
+  const removedEventMemberIds = new Set(
+    Array.isArray(gangData?.removedEventMemberIds)
+      ? gangData.removedEventMemberIds.map((value) => String(value).slice(0, 100)).slice(0, 100)
+      : [],
+  );
+  const protectedMythics = getProtectedMythics(existingResult.rows[0]?.members)
+    .filter((member) => !removedEventMemberIds.has(member.id));
+  const protectedIds = new Set(protectedMythics.map((member) => member.id));
+  const incomingMembers = sanitizeMembers(gangData?.members, { allowMythicIds: protectedIds });
+  const members = mergeProtectedMythics(incomingMembers, protectedMythics);
   const leaves = clampInteger(gangData?.frunze, 0, 10_000_000_000);
   const whitePacks = clampInteger(gangData?.white, 0, 10_000_000_000);
   const bluePacks = clampInteger(gangData?.blue, 0, 10_000_000_000);
@@ -49,8 +56,7 @@ async function syncGang(playerId, gangData) {
 
   await withTransaction(async (db) => {
     await ensurePlayer(db, playerId);
-    const vehicleResult = await db.query(`SELECT COUNT(*)::INT AS count FROM owned_vehicles WHERE player_id = $1`, [playerId]);
-    const activeWorkers = Math.min(members.length, Number(vehicleResult.rows[0]?.count || 0));
+    const activeWorkers = members.length;
     await db.query(
       `
         INSERT INTO player_gangs (
@@ -79,19 +85,44 @@ async function syncGang(playerId, gangData) {
   return getGangState(playerId);
 }
 
+async function grantMythicGangMember(playerId, customName = '') {
+  await ensureSchema();
+  const member = createAdminEventMember(customName);
+  await withTransaction(async (db) => {
+    await ensurePlayer(db, playerId);
+    const result = await db.query(`SELECT gang_name, members FROM player_gangs WHERE player_id = $1 FOR UPDATE`, [playerId]);
+    const row = result.rows[0];
+    if (!row?.gang_name) throw new Error('player does not have a synchronized gang');
+    const existing = sanitizeMembers(row.members, {
+      allowMythicIds: new Set(getProtectedMythics(row.members).map((entry) => entry.id)),
+    });
+    if (existing.length >= 34) throw new Error('gang member limit reached');
+    const members = [member, ...existing];
+    await db.query(
+      `UPDATE player_gangs SET members = $2::jsonb, members_count = $3, active_workers = $3, updated_at = NOW() WHERE player_id = $1`,
+      [playerId, JSON.stringify(members), members.length],
+    );
+  });
+  return { member, gang: await getGangState(playerId) };
+}
+
 async function getGangState(playerId) {
   await ensureSchema();
   const result = await pool.query(`SELECT * FROM player_gangs WHERE player_id = $1`, [playerId]);
   const row = result.rows[0];
   if (!row) return null;
+  const protectedMythics = getProtectedMythics(row.members);
+  const members = sanitizeMembers(row.members, {
+    allowMythicIds: new Set(protectedMythics.map((member) => member.id)),
+  });
   return {
     playerId: row.player_id,
     name: row.gang_name,
     gangLevelIndex: Number(row.gang_level_index || 0),
     gangLevel: GANG_LEVEL_LABELS[Number(row.gang_level_index || 0)] || GANG_LEVEL_LABELS[0],
-    members: Array.isArray(row.members) ? row.members : [],
-    membersCount: Number(row.members_count || 0),
-    activeWorkers: Number(row.active_workers || 0),
+    members,
+    membersCount: members.length,
+    activeWorkers: members.length,
     leaves: Number(row.leaves || 0),
     whitePacks: Number(row.white_packs || 0),
     bluePacks: Number(row.blue_packs || 0),
@@ -102,10 +133,10 @@ async function getGangState(playerId) {
   };
 }
 
-
 module.exports = {
   calculateGangLevelIndex,
   getGangState,
+  grantMythicGangMember,
   sanitizeMembers,
   syncGang,
 };

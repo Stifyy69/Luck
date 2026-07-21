@@ -77,6 +77,13 @@ export function grantAdminItem(playerId: string, itemType: string, quantity: num
   });
 }
 
+export function grantAdminMythicMember(playerId: string, name: string) {
+  return request<{ ok: true; detail: AdminPlayerDetail }>(`/api/adminpanelv3/players/${encodeURIComponent(playerId)}/gang/mythic`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
 export function setAdminVip(playerId: string, tier: VipTier | 'NONE') {
   return request<{ ok: true; detail: AdminPlayerDetail }>(`/api/adminpanelv3/players/${encodeURIComponent(playerId)}/vip`, {
     method: 'POST',
