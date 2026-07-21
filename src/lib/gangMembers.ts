@@ -423,7 +423,7 @@ export function memberXpForNextLevel(level: number) {
 export function awardMemberActivity(
   members: GangMember[],
   participantIds: string[],
-  focusSkill: GangMemberSkill,
+  focusSkill: GangMemberSkill | null,
   xpGain: number,
 ) {
   const active = new Set(participantIds);
@@ -441,12 +441,11 @@ export function awardMemberActivity(
       ...member,
       level,
       xp,
-      loyalty: clamp(member.loyalty + 1, 0, 100),
+      loyalty: member.loyalty,
       status: 'AVAILABLE' as GangMemberStatus,
-      skills: {
-        ...member.skills,
-        [focusSkill]: clamp(member.skills[focusSkill] + skillGain, 1, 100),
-      },
+      skills: focusSkill
+        ? { ...member.skills, [focusSkill]: clamp(member.skills[focusSkill] + skillGain, 1, 100) }
+        : member.skills,
     };
   });
 }
