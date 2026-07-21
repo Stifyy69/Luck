@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   fetchAdminPlayerDetail,
   grantAdminItem,
+  grantAdminMythicMember,
   resetAdminTutorial,
   setAdminVip,
   updateAdminNumeric,
@@ -35,6 +36,7 @@ export default function AdminPlayerEditor({ player, onClose, onChanged }: { play
   const [displayName, setDisplayName] = useState(player.displayName);
   const [itemType, setItemType] = useState('MYSTERY_BOX');
   const [quantity, setQuantity] = useState('1');
+  const [mythicName, setMythicName] = useState('');
 
   const load = () => fetchAdminPlayerDetail(player.playerId).then((next) => {
     setDetail(next);
@@ -81,20 +83,35 @@ export default function AdminPlayerEditor({ player, onClose, onChanged }: { play
             <section className="game-panel-soft p-5">
               <p className="section-kicker">Core values</p><h3 className="mt-2 text-2xl font-black text-white">Add, subtract or set</h3>
               <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_120px_150px]">
-                <select className="input-dark rounded-xl px-3 py-3 text-sm" value={field} onChange={(e) => setField(e.target.value as AdminNumericField)}>{FIELDS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}</select>
-                <select className="input-dark rounded-xl px-3 py-3 text-sm" value={mode} onChange={(e) => setMode(e.target.value as 'add' | 'set')}><option value="add">Add / subtract</option><option value="set">Set exact</option></select>
-                <input className="input-dark rounded-xl px-3 py-3 text-sm" type="number" value={value} onChange={(e) => setValue(e.target.value)} />
+                <select className="input-dark rounded-xl px-3 py-3 text-sm" value={field} onChange={(event) => setField(event.target.value as AdminNumericField)}>{FIELDS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}</select>
+                <select className="input-dark rounded-xl px-3 py-3 text-sm" value={mode} onChange={(event) => setMode(event.target.value as 'add' | 'set')}><option value="add">Add / subtract</option><option value="set">Set exact</option></select>
+                <input className="input-dark rounded-xl px-3 py-3 text-sm" type="number" value={value} onChange={(event) => setValue(event.target.value)} />
               </div>
               <p className="mt-2 text-[10px] text-white/28">Use a negative number in Add mode to subtract.</p>
               <button type="button" disabled={busy} onClick={() => run(() => updateAdminNumeric(current.playerId, field, mode, Number(value)), 'Value updated.')} className="btn-primary mt-4 w-full rounded-xl px-4 py-3 text-sm disabled:opacity-50">Apply change</button>
             </section>
 
             <section className="grid gap-5 lg:grid-cols-2">
-              <div className="game-panel-soft p-5"><p className="section-kicker">Identity</p><input className="input-dark mt-4 w-full rounded-xl px-3 py-3 text-sm" value={displayName} onChange={(e) => setDisplayName(e.target.value.slice(0, 32))} /><button type="button" disabled={busy} onClick={() => run(() => updateAdminProfile(current.playerId, displayName), 'Identity updated.')} className={`${actionButton} mt-3`}>Save identity</button></div>
+              <div className="game-panel-soft p-5"><p className="section-kicker">Identity</p><input className="input-dark mt-4 w-full rounded-xl px-3 py-3 text-sm" value={displayName} onChange={(event) => setDisplayName(event.target.value.slice(0, 32))} /><button type="button" disabled={busy} onClick={() => run(() => updateAdminProfile(current.playerId, displayName), 'Identity updated.')} className={`${actionButton} mt-3`}>Save identity</button></div>
               <div className="game-panel-soft p-5"><p className="section-kicker">VIP access</p><h3 className="mt-2 text-xl font-black text-white">{detail.vip.active ? detail.vip.label : 'No active VIP'}</h3><p className="mt-2 text-xs text-white/35">Silver 1m 05s, Gold 2m 05s</p><div className="mt-4 grid grid-cols-3 gap-2"><button disabled={busy} onClick={() => run(() => setAdminVip(current.playerId, 'VIP_SILVER'), 'VIP Silver activated.')} className="btn-ghost rounded-xl py-2 text-[10px]">Silver</button><button disabled={busy} onClick={() => run(() => setAdminVip(current.playerId, 'VIP_GOLD'), 'VIP Gold activated.')} className="btn-primary rounded-xl py-2 text-[10px]">Gold</button><button disabled={busy} onClick={() => run(() => setAdminVip(current.playerId, 'NONE'), 'VIP revoked.')} className="rounded-xl border border-red-400/20 text-[10px] text-red-200">Revoke</button></div></div>
             </section>
 
-            <section className="game-panel-soft p-5"><p className="section-kicker">Inventory grant</p><div className="mt-4 grid gap-3 sm:grid-cols-[1fr_120px]"><select className="input-dark rounded-xl px-3 py-3 text-sm" value={itemType} onChange={(e) => setItemType(e.target.value)}>{ITEMS.map((entry) => <option key={entry}>{entry}</option>)}</select><input className="input-dark rounded-xl px-3 py-3 text-sm" type="number" min={1} max={100} value={quantity} onChange={(e) => setQuantity(e.target.value)} /></div><button type="button" disabled={busy} onClick={() => run(() => grantAdminItem(current.playerId, itemType, Number(quantity)), 'Item granted.')} className={`${actionButton} mt-3`}>Grant item</button></section>
+            <section className="game-panel-soft p-5"><p className="section-kicker">Inventory grant</p><div className="mt-4 grid gap-3 sm:grid-cols-[1fr_120px]"><select className="input-dark rounded-xl px-3 py-3 text-sm" value={itemType} onChange={(event) => setItemType(event.target.value)}>{ITEMS.map((entry) => <option key={entry}>{entry}</option>)}</select><input className="input-dark rounded-xl px-3 py-3 text-sm" type="number" min={1} max={100} value={quantity} onChange={(event) => setQuantity(event.target.value)} /></div><button type="button" disabled={busy} onClick={() => run(() => grantAdminItem(current.playerId, itemType, Number(quantity)), 'Item granted.')} className={`${actionButton} mt-3`}>Grant item</button></section>
+
+            <section className="rounded-[22px] border border-rose-300/20 bg-rose-500/[0.045] p-5">
+              <p className="text-[9px] font-black uppercase tracking-[0.18em] text-rose-200/70">Event exclusive</p>
+              <h3 className="mt-2 text-2xl font-black text-white">Grant Mythic gang member</h3>
+              <p className="mt-2 text-xs leading-relaxed text-white/38">Mythic members cannot appear through normal recruitment. The player must already have a synchronized gang with an available member slot.</p>
+              <input className="input-dark mt-4 w-full rounded-xl px-3 py-3 text-sm" placeholder="Optional first name" value={mythicName} onChange={(event) => setMythicName(event.target.value.slice(0, 24))} />
+              <button
+                type="button"
+                disabled={busy || !detail.gang}
+                onClick={() => run(() => grantAdminMythicMember(current.playerId, mythicName), 'Mythic event member granted.')}
+                className="mt-3 w-full rounded-xl border border-rose-300/20 bg-rose-500/15 px-4 py-3 text-sm font-black text-rose-100 disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                {detail.gang ? 'Grant Mythic member' : 'Player has no synchronized gang'}
+              </button>
+            </section>
 
             <AdminPlayerProgress detail={detail} busy={busy} onReset={() => run(() => resetAdminTutorial(current.playerId), 'Tutorial reset.')} />
           </> : null}
