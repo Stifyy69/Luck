@@ -74,7 +74,10 @@ export function calculateTransportResult(participants: GangMember[], maxMembers:
   const netPayout = grossPayout - policePenalty;
   const payoutQuality = clamp(grossPayout / Math.max(1, maximumPayout), 0, 1);
   const safetyQuality = clamp(1 - policeIncidents / count, 0, 1);
-  const quality = payoutQuality * 0.7 + safetyQuality * 0.3;
+  const incidentPenalty = policeIncidents > 0
+    ? Math.min(0.55, policeIncidents / count * 1.5 + 0.15)
+    : 0;
+  const quality = clamp(payoutQuality * 0.75 + safetyQuality * 0.25 - incidentPenalty, 0, 1);
   const loyaltyGain = Math.round(clamp(5 + quality * 10, 5, 15));
   const qualityLabel = loyaltyGain >= 13 ? 'Excellent run' : loyaltyGain >= 9 ? 'Solid run' : 'Risky run';
 
