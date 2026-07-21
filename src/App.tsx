@@ -6,7 +6,7 @@ import AdminPanelV2 from './components/AdminPanelV2';
 import PilotPage from './components/PilotPage';
 import PizzerPage from './components/PizzerPage';
 import FisherPage from './components/FisherPage';
-import GangsPage from './components/GangsPage';
+import GangsPage, { type GangSection } from './components/GangsPage';
 import CNNMarketplace from './components/CNNMarketplace';
 import ShowroomPage from './components/ShowroomPage';
 import InventoryPage from './components/InventoryPage';
@@ -25,11 +25,27 @@ import { CAREER_REQUIREMENTS, careerAccessForPath, readPlayerCityProgress, type 
 import { subscribeCityProgress } from './lib/cityProgressApi';
 import { startGameSync } from './lib/gameSync';
 
-type RoutePath = '/city' | '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher' | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/gangs' | '/leaderboards' | '/adminpanelv2';
+type RoutePath =
+  | '/city' | '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher'
+  | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/leaderboards' | '/adminpanelv2'
+  | '/gangs' | '/gangs/work' | '/gangs/members' | '/gangs/recruitment' | '/gangs/storage' | '/gangs/finance';
 type NavItem = { path: RoutePath; label: string; icon: CityIconName; hint?: string; unlockLevel?: number; vipOnly?: boolean };
 type NavGroup = { label: string; items: NavItem[] };
 
-const VALID_ROUTES: RoutePath[] = ['/city', '/ruleta', '/farmat', '/sleep', '/pilot', '/pizzer', '/fisher', '/showroom', '/inventory', '/owned', '/profile', '/cnn', '/gangs', '/leaderboards', '/adminpanelv2'];
+const GANG_ROUTES: Record<string, GangSection> = {
+  '/gangs': 'overview',
+  '/gangs/work': 'work',
+  '/gangs/members': 'members',
+  '/gangs/recruitment': 'recruitment',
+  '/gangs/storage': 'storage',
+  '/gangs/finance': 'finance',
+};
+
+const VALID_ROUTES: RoutePath[] = [
+  '/city', '/ruleta', '/farmat', '/sleep', '/pilot', '/pizzer', '/fisher', '/showroom', '/inventory', '/owned', '/profile', '/cnn',
+  '/leaderboards', '/adminpanelv2', '/gangs', '/gangs/work', '/gangs/members', '/gangs/recruitment', '/gangs/storage', '/gangs/finance',
+];
+
 const NAV_GROUPS: NavGroup[] = [
   { label: 'Career', items: [
     { path: '/pizzer', label: 'Pizza Courier', icon: 'pizza', unlockLevel: 1 },
@@ -46,7 +62,14 @@ const NAV_GROUPS: NavGroup[] = [
   { label: 'City', items: [
     { path: '/leaderboards', label: 'Rankings', icon: 'leaderboard' },
     { path: '/ruleta', label: 'Roulette', icon: 'roulette' },
-    { path: '/gangs', label: 'Gangs', icon: 'gangs', unlockLevel: 15 },
+  ] },
+  { label: 'Gang', items: [
+    { path: '/gangs', label: 'Overview', icon: 'gangs', unlockLevel: 15 },
+    { path: '/gangs/work', label: 'Work', icon: 'leaf', unlockLevel: 15 },
+    { path: '/gangs/members', label: 'Members', icon: 'profile', unlockLevel: 15 },
+    { path: '/gangs/recruitment', label: 'Recruitment', icon: 'gangs', unlockLevel: 15 },
+    { path: '/gangs/storage', label: 'Storage', icon: 'inventory', unlockLevel: 15 },
+    { path: '/gangs/finance', label: 'Finance', icon: 'market', unlockLevel: 15 },
   ] },
 ];
 
@@ -58,6 +81,10 @@ function normalizePath(pathname: string): RoutePath {
   if (pathname === '/') return '/city';
   if (VALID_ROUTES.includes(pathname as RoutePath)) return pathname as RoutePath;
   return '/city';
+}
+
+function accessPathForRoute(path: RoutePath) {
+  return path.startsWith('/gangs') ? '/gangs' : path;
 }
 
 export default function App() {
@@ -124,10 +151,12 @@ export default function App() {
   }, [path]);
 
   const renderPage = () => {
-    const requirement = CAREER_REQUIREMENTS[path];
-    const access = careerAccessForPath(path, effectiveCityProgress);
+    const accessPath = accessPathForRoute(path);
+    const requirement = CAREER_REQUIREMENTS[accessPath];
+    const access = careerAccessForPath(accessPath, effectiveCityProgress);
     if (requirement && access && !access.unlocked) {
-      const item = NAV_GROUPS.flatMap((group) => group.items).find((candidate) => candidate.path === path);
+      const item = NAV_GROUPS.flatMap((group) => group.items).find((candidate) => candidate.path === path)
+        || NAV_GROUPS.flatMap((group) => group.items).find((candidate) => candidate.path === accessPath);
       return (
         <LockedCareerPage
           label={requirement.label}
@@ -150,7 +179,7 @@ export default function App() {
     if (path === '/showroom') return <ShowroomPage />;
     if (path === '/inventory' || path === '/owned') return <InventoryPage />;
     if (path === '/profile') return <MyProfilePage />;
-    if (path === '/gangs') return <GangsPage />;
+    if (path.startsWith('/gangs')) return <GangsPage section={GANG_ROUTES[path] || 'overview'} />;
     if (path === '/leaderboards') return <LeaderboardsPage />;
     if (path === '/cnn') return <CNNMarketplace />;
     if (path === '/adminpanelv2') return <AdminPanelV2 />;
@@ -173,10 +202,7 @@ export default function App() {
       <aside className={`game-scrollbar fixed inset-y-0 left-0 z-[70] flex w-[270px] flex-col overflow-y-auto border-r border-white/[0.07] bg-[#0b0e13]/[0.97] px-4 pb-5 pt-5 shadow-[30px_0_80px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-transform duration-200 md:left-4 md:top-4 md:h-[calc(100vh-2rem)] md:w-[244px] md:rounded-[24px] md:border ${menuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="flex items-center gap-3 px-2 pb-5">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#d8ff63] text-sm font-black tracking-[-0.08em] text-[#101506]">CF</div>
-          <div className="min-w-0">
-            <p className="truncate text-base font-black tracking-[-0.035em] text-white">CityFlow</p>
-            <p className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-[#d8ff63]/70">No-RP mobile life</p>
-          </div>
+          <div className="min-w-0"><p className="truncate text-base font-black tracking-[-0.035em] text-white">CityFlow</p><p className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-[#d8ff63]/70">No-RP mobile life</p></div>
         </div>
 
         <div className="space-y-1">
@@ -184,7 +210,6 @@ export default function App() {
             <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${path === '/city' ? 'bg-[#d8ff63]/10 text-[#d8ff63]' : 'bg-white/[0.025] text-white/45'}`}><CityIcon name="home" className="h-[18px] w-[18px]" /></span>
             <span className="min-w-0 flex-1"><span className="block text-sm font-extrabold">City Hub</span><span className="block text-[10px] text-white/25">Next move and activity</span></span>
           </button>
-
           <button type="button" onClick={() => goTo('/profile')} className={`game-nav-item flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left ${path === '/profile' ? 'game-nav-item-active' : ''}`}>
             <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${path === '/profile' ? 'bg-[#d8ff63]/10 text-[#d8ff63]' : 'bg-white/[0.025] text-white/45'}`}><CityIcon name="profile" className="h-[18px] w-[18px]" /></span>
             <span className="min-w-0 flex-1"><span className="block text-sm font-extrabold">My Profile</span><span className="block text-[10px] text-white/25">Identity and progress</span></span>
@@ -198,17 +223,13 @@ export default function App() {
               <div className="space-y-1">
                 {group.items.map((item) => {
                   const active = path === item.path;
-                  const access = careerAccessForPath(item.path, effectiveCityProgress);
+                  const access = careerAccessForPath(accessPathForRoute(item.path), effectiveCityProgress);
                   const locked = Boolean(access && !access.unlocked);
                   return (
                     <button key={item.path} type="button" onClick={() => goTo(item.path)} className={`game-nav-item flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left ${active ? 'game-nav-item-active' : ''} ${locked ? 'opacity-55' : ''}`}>
                       <CityIcon name={item.icon} className="h-[17px] w-[17px] shrink-0" />
                       <span className="min-w-0 flex-1 truncate text-xs font-bold">{item.label}</span>
-                      {locked ? (
-                        <span className="rounded-full border border-white/[0.08] bg-black/25 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-white/35">{item.vipOnly ? 'VIP' : `Lv ${item.unlockLevel}`}</span>
-                      ) : item.hint ? (
-                        <span className="rounded-full bg-[#d8ff63]/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-[#d8ff63]">{item.hint}</span>
-                      ) : null}
+                      {locked ? <span className="rounded-full border border-white/[0.08] bg-black/25 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-white/35">{item.vipOnly ? 'VIP' : `Lv ${item.unlockLevel}`}</span> : item.hint ? <span className="rounded-full bg-[#d8ff63]/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] text-[#d8ff63]">{item.hint}</span> : null}
                     </button>
                   );
                 })}
