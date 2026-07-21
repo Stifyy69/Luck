@@ -360,7 +360,7 @@ export default function GangsPage() {
           frunze: current.frunze - 1200 * processUnits,
           white: current.white + 400 * processUnits,
           onlineNow: 0,
-          members: awardMemberActivity(current.members, participantIds, 'tactics', 10),
+          members: awardMemberActivity(current.members, participantIds, null, 10),
         }));
         if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
         pushPopup(`White processing completed with ${participantIds.length} members.`);
@@ -371,7 +371,7 @@ export default function GangsPage() {
           white: current.white - 400 * processUnits,
           blue: current.blue + 800 * processUnits,
           onlineNow: 0,
-          members: awardMemberActivity(current.members, participantIds, 'tactics', 10),
+          members: awardMemberActivity(current.members, participantIds, null, 10),
         }));
         if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
         pushPopup(`Blue processing completed with ${participantIds.length} members.`);
