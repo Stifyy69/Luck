@@ -6,9 +6,11 @@ const {
   advanceTutorialAtLeast,
   awardCityXp,
   getCityProgress,
-  rateLimitedCayoAward,
+  pool,
   updateTutorial,
 } = require('./store.cjs');
+const cookieParser = require('cookie-parser');
+const { requireAuthenticatedPlayer } = require('../security/userAuth.cjs');
 
 const LOCKED_API_PREFIXES = [
   { prefix: '/api/fisher', key: 'fisher', level: 3, label: 'Fisher' },
@@ -17,7 +19,8 @@ const LOCKED_API_PREFIXES = [
 
 function playerIdFromRequest(req, payload = null) {
   return String(
-    req.body?.playerId
+    req.playerId
+      || req.body?.playerId
       || req.query?.playerId
       || payload?.playerId
       || payload?.state?.playerId
@@ -40,6 +43,7 @@ function attachCityResult(payload, result) {
 
 function installCityProgress(app, express) {
   app.use(express.json({ limit: '256kb' }));
+  app.use(cookieParser());
 
   app.use((req, res, next) => {
     const originalJson = res.json.bind(res);
@@ -60,6 +64,9 @@ function installCityProgress(app, express) {
 
     next();
   });
+
+  const requirePlayer = requireAuthenticatedPlayer(pool);
+  app.use('/api/city', requirePlayer);
 
   app.get('/api/city/progress', async (req, res) => {
     try {
@@ -116,39 +123,8 @@ function installCityProgress(app, express) {
     }
   });
 
-  app.post('/api/city/cayo/complete', async (req, res) => {
-    try {
-      const playerId = playerIdFromRequest(req);
-      const stage = String(req.body?.stage || '').toUpperCase();
-      const eventId = String(req.body?.eventId || '').trim();
-      if (!playerId || !eventId) return res.status(400).json({ error: 'playerId and eventId required' });
-
-      const currentProgress = await getCityProgress(playerId);
-      if (currentProgress.level < 10) {
-        return res.status(403).json({ error: 'career locked', requiredLevel: 10, currentLevel: currentProgress.level, cityProgress: currentProgress });
-      }
-
-      const rewardMap = {
-        COLLECT: CITY_XP_REWARDS.CAYO_COLLECT,
-        PROCESS: CITY_XP_REWARDS.CAYO_PROCESS,
-        REFINE: CITY_XP_REWARDS.CAYO_REFINE,
-      };
-      const amount = rewardMap[stage];
-      if (!amount) return res.status(400).json({ error: 'invalid Cayo stage' });
-
-      const result = await rateLimitedCayoAward(
-        playerId,
-        `CAYO_${stage}`,
-        eventId,
-        amount,
-        { stage },
-      );
-      return res.json({ ok: true, progress: result.progress, cityReward: result });
-    } catch (error) {
-      const status = Number(error?.statusCode || 500);
-      return res.status(status).json({ error: error instanceof Error ? error.message : 'Cayo XP award failed' });
-    }
-  });
+  app.use('/api/fisher', requirePlayer);
+  app.use('/api/pilot', requirePlayer);
 
   app.use(async (req, res, next) => {
     const rule = LOCKED_API_PREFIXES.find((candidate) => req.path.startsWith(candidate.prefix));
@@ -178,6 +154,7 @@ async function handleResponse(req, payload) {
   const path = req.path;
   const playerId = playerIdFromRequest(req, payload);
   if (!playerId) return payload;
+  if (payload?.cityReward) return payload;
 
   if (path === '/api/bootstrap' && payload && typeof payload === 'object' && !payload.error) {
     const progress = await getCityProgress(playerId);

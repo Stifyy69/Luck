@@ -1,21 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import RouletteDemo from './components/RouletteDemo';
-import FarmatPage from './components/FarmatPage';
-import SleepPage from './components/SleepPage';
-import AdminPanelV2 from './components/AdminPanelV2';
-import PilotPage from './components/PilotPage';
-import PizzerPage from './components/PizzerPage';
-import FisherPage from './components/FisherPage';
-import GangsPage from './components/GangsPage';
-import CNNMarketplace from './components/CNNMarketplace';
-import ShowroomPage from './components/ShowroomPage';
-import InventoryPage from './components/InventoryPage';
-import MyProfilePage from './components/MyProfilePage';
-import CityHubPage from './components/CityHubPage';
-import LeaderboardsPage from './components/LeaderboardsPage';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import CityProgressHud from './components/city/CityProgressHud';
 import CityTutorialOverlay from './components/city/CityTutorialOverlay';
-import CityCayoProgressBridge from './components/city/CityCayoProgressBridge';
 import GangSyncBridge from './components/city/GangSyncBridge';
 import LockedCareerPage from './components/city/LockedCareerPage';
 import AppSidebar from './components/app/AppSidebar';
@@ -33,6 +18,21 @@ import { usePlayer } from './hooks/usePlayer';
 import { CAREER_REQUIREMENTS, careerAccessForPath, readPlayerCityProgress, type CityProgress } from './lib/cityProgress';
 import { subscribeCityProgress } from './lib/cityProgressApi';
 import { startGameSync } from './lib/gameSync';
+
+const RouletteDemo = lazy(() => import('./components/RouletteDemo'));
+const FarmatPage = lazy(() => import('./components/FarmatPage'));
+const SleepPage = lazy(() => import('./components/SleepPage'));
+const AdminPanelV2 = lazy(() => import('./components/AdminPanelV2'));
+const PilotPage = lazy(() => import('./components/PilotPage'));
+const PizzerPage = lazy(() => import('./components/PizzerPage'));
+const FisherPage = lazy(() => import('./components/FisherPage'));
+const GangsPage = lazy(() => import('./components/GangsPage'));
+const CNNMarketplace = lazy(() => import('./components/CNNMarketplace'));
+const ShowroomPage = lazy(() => import('./components/ShowroomPage'));
+const InventoryPage = lazy(() => import('./components/InventoryPage'));
+const MyProfilePage = lazy(() => import('./components/MyProfilePage'));
+const CityHubPage = lazy(() => import('./components/CityHubPage'));
+const LeaderboardsPage = lazy(() => import('./components/LeaderboardsPage'));
 
 export default function App() {
   const { player } = usePlayer();
@@ -131,7 +131,6 @@ export default function App() {
     <div className="relative min-h-screen">
       <CityProgressHud currentLabel={currentLabel} onNavigate={navigateLoose} />
       <CityTutorialOverlay path={path} onNavigate={navigateLoose} />
-      <CityCayoProgressBridge />
       <GangSyncBridge />
 
       <AppSidebar
@@ -146,8 +145,27 @@ export default function App() {
       <MobileDock path={path} onNavigate={goTo} onOpenMenu={() => setMenuOpen(true)} />
 
       <main className="min-h-screen pb-20 pt-14 md:pb-0 md:pl-[272px] md:pt-0 lg:pl-[280px]">
-        <div className="md:pt-20">{renderPage()}</div>
+        <div className="md:pt-20">
+          <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>
+        </div>
       </main>
+    </div>
+  );
+}
+
+function PageFallback() {
+  return (
+    <div className="mx-auto max-w-7xl p-4 sm:p-6">
+      <div className="game-panel animate-pulse p-6" role="status" aria-live="polite">
+        <div className="h-3 w-24 rounded-full bg-white/10" />
+        <div className="mt-4 h-8 w-64 max-w-full rounded-xl bg-white/10" />
+        <div className="mt-6 grid gap-3 md:grid-cols-3">
+          <div className="h-32 rounded-2xl bg-white/[0.06]" />
+          <div className="h-32 rounded-2xl bg-white/[0.06]" />
+          <div className="h-32 rounded-2xl bg-white/[0.06]" />
+        </div>
+        <span className="sr-only">Loading page</span>
+      </div>
     </div>
   );
 }

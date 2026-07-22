@@ -23,9 +23,14 @@ import type {
   FisherCatchResult,
   PilotStateResponse,
   PilotFlightResult,
+  CayoActionResult,
+  CayoState,
+  SleepActionResult,
+  SleepState,
 } from '../types/game';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
+export type SessionUser = { id: number; username: string; email: string; playerId: string; isGuest?: boolean };
 
 async function resolveApiError(res: Response): Promise<string> {
   try {
@@ -48,6 +53,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -58,7 +64,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
   const url = params ? `${BASE}${path}?${new URLSearchParams(params)}` : `${BASE}${path}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) {
     throw new Error(await resolveApiError(res));
   }
@@ -66,6 +72,19 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
 }
 
 export const api = {
+  ensureSession: async () => {
+    const current = await fetch(`${BASE}/api/auth/me`, { credentials: 'include' });
+    if (current.ok) return (await current.json() as { user: SessionUser }).user;
+    const guest = await fetch(`${BASE}/api/auth/guest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: '{}',
+    });
+    if (!guest.ok) throw new Error(await resolveApiError(guest));
+    return (await guest.json() as { user: SessionUser }).user;
+  },
+
   bootstrap: (playerId: string) =>
     get<PlayerState>('/api/bootstrap', { playerId }),
 
@@ -75,7 +94,7 @@ export const api = {
   showroomBuy: (playerId: string, modelId: number, useVoucher?: boolean) =>
     post<ShowroomBuyResult>('/api/showroom/buy', { playerId, modelId, useVoucher: useVoucher ?? false }),
 
-  rouletteSpin: (playerId: string, costType: 'cash' | 'flowcoins') =>
+  rouletteSpin: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments') =>
     post<SpinResult>('/api/roulette/spin', { playerId, costType }),
 
   mysteryOpen: (playerId: string) =>
@@ -83,6 +102,30 @@ export const api = {
 
   inventoryUse: (playerId: string, itemId: number) =>
     post<InventoryUseResult>('/api/inventory/use', { playerId, itemId }),
+
+  inventoryApplyXenon: (playerId: string, itemId: number, vehicleId: number) =>
+    post<InventoryUseResult>('/api/inventory/xenon/apply', { playerId, itemId, vehicleId }),
+
+  cayoState: (playerId: string) =>
+    get<{ state: CayoState }>('/api/cayo/state', { playerId }),
+
+  cayoAction: (playerId: string, stage: 'COLLECT' | 'PROCESS' | 'REFINE', operationId: string, useCleanForShortfall = false) =>
+    post<CayoActionResult>('/api/cayo/action', { playerId, stage, operationId, useCleanForShortfall }),
+
+  cayoSell: (playerId: string, mode: 'BULK' | 'DELIVERY_100', operationId: string) =>
+    post<CayoActionResult>('/api/cayo/sell', { playerId, mode, operationId }),
+
+  cayoConvert: (playerId: string, operationId: string) =>
+    post<CayoActionResult>('/api/cayo/convert', { playerId, operationId }),
+
+  sleepState: (playerId: string) =>
+    get<{ state: SleepState }>('/api/sleep/state', { playerId }),
+
+  sleepStart: (playerId: string, operationId: string) =>
+    post<SleepActionResult>('/api/sleep/start', { playerId, operationId }),
+
+  sleepClaim: (playerId: string, operationId: string) =>
+    post<SleepActionResult>('/api/sleep/claim', { playerId, operationId }),
 
   // ---------------------------------------------------------------------------
   // Batch B: Marketplace
@@ -150,9 +193,6 @@ export const api = {
   playerRename: (playerId: string, displayName: string) =>
     post<{ ok: boolean; displayName: string }>('/api/player/profile/name', { playerId, displayName }),
 
-  playerCashAdjust: (playerId: string, delta: number) =>
-    post<{ ok: boolean; cleanMoney: number }>('/api/player/cash/adjust', { playerId, delta }),
-
   pizzerState: (playerId: string) =>
     get<PizzerStateResponse>('/api/pizzer/state', { playerId }),
 
@@ -175,16 +215,7 @@ export const api = {
     post<PizzerStateResponse>('/api/pizzer/delivery/report-damage', { playerId, damageDelta }),
 
   pizzerHandover: (playerId: string, handoverVariant: string) =>
-    post<{ state: PizzerStateResponse; result: PizzerDeliveryResult }>('/api/pizzer/delivery/handover', { playerId, handoverVariant }),
-
-  pizzerAdminSetLevel: (playerId: string, level: number) =>
-    post<{ ok: boolean }>('/api/pizzer/admin/set-level', { playerId, level }),
-
-  pizzerAdminAddXp: (playerId: string, xp: number) =>
-    post<{ ok: boolean }>('/api/pizzer/admin/add-xp', { playerId, xp }),
-
-  pizzerAdminReset: (playerId: string) =>
-    post<{ ok: boolean }>('/api/pizzer/admin/reset', { playerId }),
+    post<{ state: PizzerStateResponse; result: PizzerDeliveryResult; cityProgress?: unknown; cityReward?: unknown }>('/api/pizzer/delivery/handover', { playerId, handoverVariant }),
 
   pilotState: (playerId: string) =>
     get<PilotStateResponse>('/api/pilot/state', { playerId }),
@@ -205,7 +236,7 @@ export const api = {
     post<{ state: PilotStateResponse }>('/api/pilot/flight/cancel', { playerId }),
 
   pilotFlightComplete: (playerId: string) =>
-    post<{ state: PilotStateResponse; result: PilotFlightResult }>('/api/pilot/flight/complete', { playerId }),
+    post<{ state: PilotStateResponse; result: PilotFlightResult; cityProgress?: unknown; cityReward?: unknown }>('/api/pilot/flight/complete', { playerId }),
 
   fisherState: (playerId: string) =>
     get<FisherStateResponse>('/api/fisher/state', { playerId }),

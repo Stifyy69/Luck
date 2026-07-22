@@ -31,7 +31,7 @@ function saveState(data: unknown) {
   } catch {}
 }
 
-type User = { id: number; username: string; email: string; playerId?: string };
+type User = { id: number; username: string; email: string; playerId?: string; isGuest?: boolean };
 type AccountHudProps = { embedded?: boolean };
 
 export default function AccountHud({ embedded = false }: AccountHudProps) {
@@ -49,7 +49,7 @@ export default function AccountHud({ embedded = false }: AccountHudProps) {
     const response = await fetch('/api/auth/me', { credentials: 'include' });
     if (!response.ok) return;
     const payload = await response.json();
-    setUser(payload.user);
+    setUser(payload.user?.isGuest ? null : payload.user);
 
     const authPlayerId = String(payload.user?.playerId || '').trim();
     if (authPlayerId) {
@@ -120,6 +120,7 @@ export default function AccountHud({ embedded = false }: AccountHudProps) {
         return;
       }
       await loadMe();
+      window.dispatchEvent(new Event('luck-session-changed'));
       setOpen(false);
       setStatus('');
       setPassword('');
@@ -132,6 +133,7 @@ export default function AccountHud({ embedded = false }: AccountHudProps) {
   const logout = async () => {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
     setUser(null);
+    window.dispatchEvent(new Event('luck-session-changed'));
   };
 
   const accountControl = user ? (

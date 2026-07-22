@@ -1,6 +1,6 @@
 const VIP_DURATION_SECONDS = Object.freeze({
-  VIP_SILVER: 65,
-  VIP_GOLD: 125,
+  VIP_SILVER: 5 * 60,
+  VIP_GOLD: 10 * 60,
 });
 
 const VIP_LABELS = Object.freeze({
@@ -52,7 +52,6 @@ const ADMIN_GRANTABLE_ITEMS = Object.freeze([
   'VOUCHER_SHOWROOM',
   'JOB_BOOST_PILOT',
   'JOB_BOOST_SLEEP',
-  'TAX_EXEMPTION',
   'XENON_VEHICLE',
   'VIP_GOLD',
   'VIP_SILVER',

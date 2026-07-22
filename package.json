@@ -3,16 +3,19 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
-    "check": "tsc --noEmit && node --check server/cityProgress/preload.cjs && node --check server/cityProgress/install.cjs && node --check server/cityProgress/store.cjs && node --check server/cityProgress/constants.cjs && node --check server/platform/install.cjs && node --check server/platform/store.cjs && node --check server/platform/auth.cjs && node --check server/platform/constants.cjs && node --check server/platform/db.cjs && node --check server/platform/vip.cjs && node --check server/platform/gangs.cjs && node --check server/platform/rankings.cjs && node --check server/platform/admin.cjs",
-    "test": "node --test server/platform/*.test.cjs",
-    "start": "node -r ./server/cityProgress/preload.cjs server.cjs"
+    "check": "tsc --noEmit && node --check server.cjs && find server -name '*.cjs' -not -name '*.test.cjs' -exec node --check {} \\;",
+    "test": "node --test server/platform/*.test.cjs server/security/*.test.cjs server/economy/*.test.cjs server/gameplay/*.test.cjs server/contracts/*.test.cjs",
+    "start": "node server.cjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
-    "express": "^4.21.2",
+    "express": "^5.2.1",
     "pg": "^8.13.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -20,11 +23,11 @@
   "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.3",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.16",
+    "@vitejs/plugin-react": "^6.0.4",
+    "autoprefixer": "^10.5.4",
+    "postcss": "^8.5.22",
+    "tailwindcss": "^3.4.19",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^8.1.5"
   }
 }

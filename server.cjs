@@ -3,51 +3,50 @@ const path = require('path');
 const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
+const { installHttpSecurity, createRateLimiter } = require('./server/security/http.cjs');
+const { installCityProgress } = require('./server/cityProgress/install.cjs');
+const { installPlatformSystems } = require('./server/platform/install.cjs');
+const { hashPassword, validatePassword, verifyPassword } = require('./server/security/passwords.cjs');
+const {
+  authenticateUserRequest,
+  clearUserSession,
+  createUserSession,
+  requireAuthenticatedPlayer,
+  userAuthConfigurationReady,
+  verifyUserToken,
+} = require('./server/security/userAuth.cjs');
+const {
+  awardCityXpInTransaction,
+  ensureSchema: ensureCityProgressSchema,
+} = require('./server/cityProgress/store.cjs');
+const { CITY_XP_REWARDS } = require('./server/cityProgress/constants.cjs');
+const { consumeJobBoost, getVipMultiplier } = require('./server/economy/boosts.cjs');
+const { pickWeightedReward, rewardPayout } = require('./server/economy/roulette.cjs');
+const {
+  cayoStateView,
+  convertCayoCash,
+  readCayoState,
+  runCayoAction,
+  sellCayoProduct,
+} = require('./server/gameplay/cayo.cjs');
+const {
+  claimSleepReward,
+  readSleepState,
+  sleepStateView,
+  startSleepCycle,
+} = require('./server/gameplay/sleep.cjs');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const distPath = path.join(__dirname, 'dist');
 
-const ADMIN_USER = 'Stifyy';
-const ADMIN_PASS = 'Fifi23';
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'adminpanelv2-secret';
-const USER_SECRET = process.env.USER_SECRET || 'cityflow-user-secret';
+installHttpSecurity(app);
+installCityProgress(app, express);
+installPlatformSystems(app, express);
 
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 const pool = hasDatabaseUrl ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
 let dbReady = false;
-
-const signAdminToken = (value) => {
-  const sig = crypto.createHmac('sha256', ADMIN_SECRET).update(value).digest('hex');
-  return `${value}.${sig}`;
-};
-
-const verifyAdminToken = (token) => {
-  if (!token) return false;
-  const [value, sig] = token.split('.');
-  if (!value || !sig) return false;
-  const expected = crypto.createHmac('sha256', ADMIN_SECRET).update(value).digest('hex');
-  if (expected !== sig) return false;
-  const [username, expires] = value.split('|');
-  if (username !== ADMIN_USER) return false;
-  return Number(expires) > Date.now();
-};
-
-const signUserToken = (value) => {
-  const sig = crypto.createHmac('sha256', USER_SECRET).update(value).digest('hex');
-  return `${value}.${sig}`;
-};
-
-const verifyUserToken = (token) => {
-  if (!token) return null;
-  const [value, sig] = token.split('.');
-  if (!value || !sig) return null;
-  const expected = crypto.createHmac('sha256', USER_SECRET).update(value).digest('hex');
-  if (expected !== sig) return null;
-  const [userId, expires] = value.split('|');
-  if (!userId || Number(expires) <= Date.now()) return null;
-  return Number(userId);
-};
 
 const getIp = (req) =>
   (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString().split(',')[0].trim();
@@ -58,6 +57,7 @@ const getLocation = (req) => ({
 });
 
 const createPlayerId = () => `player_${crypto.randomBytes(6).toString('hex')}`;
+const authRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
 
 async function initDb() {
   if (!pool) {
@@ -110,6 +110,11 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE owned_vehicles
     ADD COLUMN IF NOT EXISTS purchase_source TEXT NOT NULL DEFAULT 'SHOWROOM';
+  `);
+
+  await pool.query(`
+    ALTER TABLE owned_vehicles
+    ADD COLUMN IF NOT EXISTS xenon_enabled BOOLEAN NOT NULL DEFAULT FALSE;
   `);
 
   await pool.query(`
@@ -379,9 +384,57 @@ async function initDb() {
   `);
 
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS player_id TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_guest BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`UPDATE users SET player_id = COALESCE(player_id, 'player_' || id::text) WHERE player_id IS NULL OR player_id = '';`);
   await pool.query(`ALTER TABLE users ALTER COLUMN player_id SET NOT NULL;`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_player_id_idx ON users(player_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_economy_operations (
+      player_id TEXT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+      operation_id TEXT NOT NULL,
+      operation_type TEXT NOT NULL,
+      result JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (player_id, operation_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_cayo_state (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      leaves BIGINT NOT NULL DEFAULT 0,
+      white_packs BIGINT NOT NULL DEFAULT 0,
+      blue_packs BIGINT NOT NULL DEFAULT 0,
+      dirty_money BIGINT NOT NULL DEFAULT 0,
+      total_earnings BIGINT NOT NULL DEFAULT 0,
+      time_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+      next_action_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_sleep_state (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      active_cycle_id TEXT,
+      sleep_ends_at TIMESTAMPTZ,
+      cooldown_until TIMESTAMPTZ,
+      reward_multiplier INT NOT NULL DEFAULT 1,
+      reward_claimed BOOLEAN NOT NULL DEFAULT TRUE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_career_sessions (
+      player_id TEXT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+      career_type TEXT NOT NULL,
+      session_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (player_id, career_type)
+    );
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_profiles (
@@ -415,21 +468,12 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  await ensureCityProgressSchema();
 }
 
 app.use(cookieParser());
 app.use(express.json({ limit: '256kb' }));
-
-// CORS setup for all origins during development
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
-});
 
 const requireDb = (_req, res, next) => {
   if (!dbReady || !pool) {
@@ -442,11 +486,18 @@ const requireDb = (_req, res, next) => {
 };
 
 const requireUser = async (req, res, next) => {
+  if (req.userId) return next();
   const userId = verifyUserToken(req.cookies.cityflow_user_token);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
   req.userId = userId;
   next();
 };
+
+const requirePlayer = requireAuthenticatedPlayer(pool);
+app.use('/api', (req, res, next) => {
+  if (req.path.startsWith('/auth/') || req.path.startsWith('/adminpanel')) return next();
+  return requirePlayer(req, res, next);
+});
 
 async function withTransaction(work) {
   const client = await pool.connect();
@@ -545,8 +596,6 @@ const PIZZER_CONFIG = {
 
 const PIZZER_PIZZA_TYPES = ['Capriciosa', 'Diavola', 'Margherita', 'Quattro Formaggi', 'Prosciutto Funghi'];
 const PIZZER_DRINK_TYPES = ['LedBul', 'Black Soda', 'Yellow Soda', 'Green Soda'];
-
-const pizzerSessions = new Map();
 
 function pizzerXpForLevel(level) {
   const safeLevel = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(level) || 1));
@@ -698,7 +747,7 @@ function toPizzerProgressView(row) {
     level,
     xp,
     currentLevelXp: xp - currentStart,
-    nextLevelXp: next,
+    nextLevelXp: next === null ? null : Math.max(1, next - currentStart),
     totalDeliveries: Number(row?.pizzer_total_deliveries || 0),
     perfectDeliveries: Number(row?.pizzer_perfect_deliveries || 0),
     bestStreak: Number(row?.pizzer_best_streak || 0),
@@ -706,8 +755,8 @@ function toPizzerProgressView(row) {
   };
 }
 
-function getPizzerSession(playerId) {
-  return pizzerSessions.get(playerId) || {
+function defaultPizzerSession() {
+  return {
     shiftState: 'IDLE',
     streak: 0,
     bestStreakShift: 0,
@@ -722,8 +771,26 @@ function getPizzerSession(playerId) {
   };
 }
 
-function setPizzerSession(playerId, session) {
-  pizzerSessions.set(playerId, session);
+async function getPizzerSession(playerId, db = pool) {
+  await db.query(
+    `INSERT INTO player_career_sessions (player_id, career_type, session_data)
+     VALUES ($1, 'PIZZER', $2::jsonb) ON CONFLICT (player_id, career_type) DO NOTHING`,
+    [playerId, JSON.stringify(defaultPizzerSession())],
+  );
+  const result = await db.query(
+    `SELECT session_data FROM player_career_sessions WHERE player_id = $1 AND career_type = 'PIZZER'${db === pool ? '' : ' FOR UPDATE'}`,
+    [playerId],
+  );
+  return result.rows[0]?.session_data || defaultPizzerSession();
+}
+
+async function setPizzerSession(playerId, session, db = pool) {
+  await db.query(
+    `INSERT INTO player_career_sessions (player_id, career_type, session_data, updated_at)
+     VALUES ($1, 'PIZZER', $2::jsonb, NOW())
+     ON CONFLICT (player_id, career_type) DO UPDATE SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
+    [playerId, JSON.stringify(session)],
+  );
 }
 
 function freshnessForOrder(order, level) {
@@ -882,8 +949,6 @@ const FISHER_CONFIG = {
     },
   },
 };
-
-const fisherSessions = new Map();
 
 function fisherXpForLevel(level) {
   return pizzerXpForLevel(level);
@@ -1075,8 +1140,8 @@ function fisherComputeAutoCatchResult({ session, progressBefore, spot, fishRarit
   };
 }
 
-function getFisherSession(playerId) {
-  return fisherSessions.get(playerId) || {
+function defaultFisherSession() {
+  return {
     shiftState: 'IDLE',
     streak: 0,
     bestStreakShift: 0,
@@ -1099,8 +1164,26 @@ function getFisherSession(playerId) {
   };
 }
 
-function setFisherSession(playerId, session) {
-  fisherSessions.set(playerId, session);
+async function getFisherSession(playerId, db = pool) {
+  await db.query(
+    `INSERT INTO player_career_sessions (player_id, career_type, session_data)
+     VALUES ($1, 'FISHER', $2::jsonb) ON CONFLICT (player_id, career_type) DO NOTHING`,
+    [playerId, JSON.stringify(defaultFisherSession())],
+  );
+  const result = await db.query(
+    `SELECT session_data FROM player_career_sessions WHERE player_id = $1 AND career_type = 'FISHER'${db === pool ? '' : ' FOR UPDATE'}`,
+    [playerId],
+  );
+  return result.rows[0]?.session_data || defaultFisherSession();
+}
+
+async function setFisherSession(playerId, session, db = pool) {
+  await db.query(
+    `INSERT INTO player_career_sessions (player_id, career_type, session_data, updated_at)
+     VALUES ($1, 'FISHER', $2::jsonb, NOW())
+     ON CONFLICT (player_id, career_type) DO UPDATE SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
+    [playerId, JSON.stringify(session)],
+  );
 }
 
 function enforceFisherActionCooldown(session) {
@@ -1206,7 +1289,7 @@ function toFisherProgressView(row) {
     level,
     xp,
     currentLevelXp: xp - currentStart,
-    nextLevelXp: next,
+    nextLevelXp: next === null ? null : Math.max(1, next - currentStart),
     totalCatches: Number(row?.fisher_total_catches || 0),
     perfectCatches: Number(row?.fisher_perfect_catches || 0),
     bestStreak: Number(row?.fisher_best_streak || 0),
@@ -1441,8 +1524,6 @@ const PILOT_CONFIG = {
   ],
 };
 
-const pilotSessions = new Map();
-
 function pilotXpForLevel(level) {
   return pizzerXpForLevel(level);
 }
@@ -1553,7 +1634,7 @@ function toPilotProgressView(row) {
     level,
     xp,
     currentLevelXp: xp - currentStart,
-    nextLevelXp: next,
+    nextLevelXp: next === null ? null : Math.max(1, next - currentStart),
     totalEarnings: Number(row?.pilot_total_earnings || 0),
     streak: Number(row?.pilot_streak || 0),
     bestStreak: Number(row?.pilot_best_streak || 0),
@@ -1566,8 +1647,8 @@ function toPilotProgressView(row) {
   };
 }
 
-function getPilotSession(playerId) {
-  return pilotSessions.get(playerId) || {
+function defaultPilotSession() {
+  return {
     shiftState: 'IDLE',
     selectedRouteId: null,
     activeFlight: null,
@@ -1577,8 +1658,26 @@ function getPilotSession(playerId) {
   };
 }
 
-function setPilotSession(playerId, session) {
-  pilotSessions.set(playerId, session);
+async function getPilotSession(playerId, db = pool) {
+  await db.query(
+    `INSERT INTO player_career_sessions (player_id, career_type, session_data)
+     VALUES ($1, 'PILOT', $2::jsonb) ON CONFLICT (player_id, career_type) DO NOTHING`,
+    [playerId, JSON.stringify(defaultPilotSession())],
+  );
+  const result = await db.query(
+    `SELECT session_data FROM player_career_sessions WHERE player_id = $1 AND career_type = 'PILOT'${db === pool ? '' : ' FOR UPDATE'}`,
+    [playerId],
+  );
+  return result.rows[0]?.session_data || defaultPilotSession();
+}
+
+async function setPilotSession(playerId, session, db = pool) {
+  await db.query(
+    `INSERT INTO player_career_sessions (player_id, career_type, session_data, updated_at)
+     VALUES ($1, 'PILOT', $2::jsonb, NOW())
+     ON CONFLICT (player_id, career_type) DO UPDATE SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
+    [playerId, JSON.stringify(session)],
+  );
 }
 
 function enforcePilotActionCooldown(session) {
@@ -1988,23 +2087,40 @@ async function findActiveListingByHint(db, hint) {
 }
 
 async function settleListingSale(db, listing, buyerPlayerId, salePrice, acceptedOfferId = null) {
+  if (!Number.isSafeInteger(salePrice) || salePrice <= 0 || salePrice > 1_000_000_000_000) {
+    throw new Error('invalid sale price');
+  }
+  const lockedListingResult = await db.query(
+    `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE`,
+    [listing.id],
+  );
+  const lockedListing = lockedListingResult.rows[0];
+  if (!lockedListing) throw new Error('listing unavailable');
+  listing = lockedListing;
+
   if (listing.seller_player_id && listing.seller_player_id === buyerPlayerId) {
     throw new Error('cannot buy your own listing');
   }
 
-  const buyer = await ensurePlayer(db, buyerPlayerId);
-  if (Number(buyer.clean_money) < salePrice) {
-    throw new Error('insufficient funds');
-  }
-
+  await ensurePlayer(db, buyerPlayerId);
   if (listing.seller_player_id) {
     await ensurePlayer(db, listing.seller_player_id);
   }
 
+  const participantIds = [buyerPlayerId, listing.seller_player_id].filter(Boolean).sort();
   await db.query(
-    `UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`,
+    `SELECT player_id FROM players WHERE player_id = ANY($1::text[]) ORDER BY player_id FOR UPDATE`,
+    [participantIds],
+  );
+
+  const debited = await db.query(
+    `UPDATE players
+     SET clean_money = clean_money - $1, updated_at = NOW()
+     WHERE player_id = $2 AND clean_money >= $1
+     RETURNING clean_money`,
     [salePrice, buyerPlayerId],
   );
+  if (!debited.rows[0]) throw new Error('insufficient funds');
 
   if (listing.seller_player_id) {
     await db.query(
@@ -2018,7 +2134,7 @@ async function settleListingSale(db, listing, buyerPlayerId, salePrice, accepted
   await db.query(
     `UPDATE market_listings
      SET status = 'SOLD', updated_at = NOW()
-     WHERE id = $1`,
+     WHERE id = $1 AND status = 'ACTIVE'`,
     [listing.id],
   );
 
@@ -2193,7 +2309,7 @@ async function runNpcAutoBuyerSweep() {
 
 app.post('/api/stats/sync', requireDb, async (req, res) => {
   try {
-    const { playerId, stats = {}, path: currentPath } = req.body || {};
+    const { playerId, path: currentPath } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
     const ip = getIp(req);
@@ -2202,26 +2318,9 @@ app.post('/api/stats/sync', requireDb, async (req, res) => {
 
     await pool.query(
       `
-      INSERT INTO player_stats (
-        player_id, cash_available, roulette_spent, roulette_won, total_net,
-        time_spent, leaves_collected, white_processed, blue_processed, farm_earned,
-        sleep_count, sleep_money, time_pilot, last_seen, path, ip, country, city, user_agent, updated_at
-      ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),$14,$15,$16,$17,$18,NOW()
-      )
+      INSERT INTO player_stats (player_id, last_seen, path, ip, country, city, user_agent, updated_at)
+      VALUES ($1, NOW(), $2, $3, $4, $5, $6, NOW())
       ON CONFLICT (player_id) DO UPDATE SET
-        cash_available = EXCLUDED.cash_available,
-        roulette_spent = EXCLUDED.roulette_spent,
-        roulette_won = EXCLUDED.roulette_won,
-        total_net = EXCLUDED.total_net,
-        time_spent = EXCLUDED.time_spent,
-        leaves_collected = EXCLUDED.leaves_collected,
-        white_processed = EXCLUDED.white_processed,
-        blue_processed = EXCLUDED.blue_processed,
-        farm_earned = EXCLUDED.farm_earned,
-        sleep_count = EXCLUDED.sleep_count,
-        sleep_money = EXCLUDED.sleep_money,
-        time_pilot = EXCLUDED.time_pilot,
         last_seen = NOW(),
         path = EXCLUDED.path,
         ip = EXCLUDED.ip,
@@ -2232,18 +2331,6 @@ app.post('/api/stats/sync', requireDb, async (req, res) => {
       `,
       [
         playerId,
-        Number(stats.cashAvailable || 0),
-        Number(stats.rouletteSpent || 0),
-        Number(stats.rouletteWon || 0),
-        Number(stats.totalNet || 0),
-        Number(stats.timeSpent || 0),
-        Number(stats.leavesCollected || 0),
-        Number(stats.whiteProcessed || 0),
-        Number(stats.blueProcessed || 0),
-        Number(stats.farmEarned || 0),
-        Number(stats.sleepCount || 0),
-        Number(stats.sleepMoney || 0),
-        Number(stats.timePilot || 0),
         currentPath || null,
         ip || null,
         country || null,
@@ -2272,6 +2359,10 @@ app.post('/api/activity/heartbeat', requireDb, async (req, res) => {
       INSERT INTO player_stats (player_id, last_seen, path, ip, country, city, updated_at)
       VALUES ($1, NOW(), $2, $3, $4, $5, NOW())
       ON CONFLICT (player_id) DO UPDATE SET
+        time_spent = player_stats.time_spent + LEAST(
+          1.0 / 60.0,
+          GREATEST(0, EXTRACT(EPOCH FROM (NOW() - COALESCE(player_stats.last_seen, NOW()))) / 3600.0)
+        ),
         last_seen = NOW(),
         path = EXCLUDED.path,
         ip = EXCLUDED.ip,
@@ -2289,84 +2380,108 @@ app.post('/api/activity/heartbeat', requireDb, async (req, res) => {
   }
 });
 
-app.post('/api/adminpanelv2/login', (req, res) => {
-  const { username, password } = req.body || {};
-  if (username !== ADMIN_USER || password !== ADMIN_PASS) {
-    return res.status(401).json({ error: 'invalid credentials' });
-  }
-
-  const expires = Date.now() + 8 * 60 * 60 * 1000;
-  const token = signAdminToken(`${ADMIN_USER}|${expires}`);
-
-  res.cookie('adminpanelv2_token', token, {
-    httpOnly: true,
-    secure: false,
-    sameSite: 'lax',
-    maxAge: 8 * 60 * 60 * 1000,
-  });
-
-  res.json({ ok: true });
-});
-
-app.post('/api/auth/register', requireDb, async (req, res) => {
+app.post('/api/auth/register', authRateLimit, requireDb, async (req, res) => {
   try {
     const { username, email, password, passwordConfirm } = req.body || {};
     if (!username || !email || !password) return res.status(400).json({ error: 'missing fields' });
     if (password !== passwordConfirm) return res.status(400).json({ error: 'password mismatch' });
-    const playerId = createPlayerId();
-
-    const inserted = await pool.query(
-      `INSERT INTO users (username, email, password, player_id) VALUES ($1, $2, $3, $4) RETURNING id, username, email, player_id`,
-      [String(username).trim(), String(email).trim().toLowerCase(), String(password), playerId],
-    );
-    const user = inserted.rows[0];
-    await pool.query(`INSERT INTO user_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [user.id]);
-    await ensurePlayer(pool, user.player_id);
-
-    const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
-    res.cookie('cityflow_user_token', signUserToken(`${user.id}|${expires}`), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: false,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+    const safeUsername = String(username).trim();
+    const safeEmail = String(email).trim().toLowerCase();
+    if (!/^[a-zA-Z0-9_]{3,24}$/.test(safeUsername)) {
+      return res.status(400).json({ error: 'username must contain 3-24 letters, numbers or underscores' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail) || safeEmail.length > 254) {
+      return res.status(400).json({ error: 'invalid email' });
+    }
+    validatePassword(password);
+    const passwordHash = await hashPassword(password);
+    const existingSession = await authenticateUserRequest(req, pool);
+    const playerId = existingSession?.isGuest ? existingSession.playerId : createPlayerId();
+    const user = await withTransaction(async (db) => {
+      if (existingSession?.isGuest) {
+        const upgraded = await db.query(
+          `UPDATE users SET username = $2, email = $3, password = $4, is_guest = FALSE
+           WHERE id = $1 AND is_guest = TRUE
+           RETURNING id, username, email, player_id`,
+          [existingSession.id, safeUsername, safeEmail, passwordHash],
+        );
+        if (!upgraded.rows[0]) throw new Error('guest account upgrade failed');
+        return upgraded.rows[0];
+      }
+      const inserted = await db.query(
+        `INSERT INTO users (username, email, password, player_id, is_guest) VALUES ($1, $2, $3, $4, FALSE) RETURNING id, username, email, player_id`,
+        [safeUsername, safeEmail, passwordHash, playerId],
+      );
+      const created = inserted.rows[0];
+      await db.query(`INSERT INTO user_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [created.id]);
+      await ensurePlayer(db, created.player_id);
+      return created;
     });
 
+    createUserSession(res, Number(user.id));
     return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
   } catch (error) {
-    return res.status(400).json({ error: 'register failed' });
+    if (error?.code === '23505') return res.status(409).json({ error: 'username or email already exists' });
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'register failed' });
   }
 });
 
-app.post('/api/auth/login', requireDb, async (req, res) => {
+app.post('/api/auth/guest', authRateLimit, requireDb, async (req, res) => {
+  try {
+    const existing = await authenticateUserRequest(req, pool);
+    if (existing) return res.json({ ok: true, user: existing });
+
+    const suffix = crypto.randomBytes(12).toString('hex');
+    const playerId = createPlayerId();
+    const passwordHash = await hashPassword(crypto.randomBytes(32).toString('base64url'));
+    const user = await withTransaction(async (db) => {
+      const inserted = await db.query(
+        `INSERT INTO users (username, email, password, player_id, is_guest)
+         VALUES ($1, $2, $3, $4, TRUE)
+         RETURNING id, username, email, player_id, is_guest`,
+        [`guest_${suffix}`, `${suffix}@guest.invalid`, passwordHash, playerId],
+      );
+      await db.query(`INSERT INTO user_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [inserted.rows[0].id]);
+      await ensurePlayer(db, playerId);
+      return inserted.rows[0];
+    });
+    createUserSession(res, Number(user.id));
+    return res.json({ ok: true, user: { id: Number(user.id), username: user.username, email: user.email, playerId: user.player_id, isGuest: true } });
+  } catch (error) {
+    return res.status(500).json({ error: 'guest session failed' });
+  }
+});
+
+app.post('/api/auth/login', authRateLimit, requireDb, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
   const result = await pool.query(`SELECT id, username, email, password, player_id FROM users WHERE username = $1`, [String(username).trim()]);
   const user = result.rows[0];
-  if (!user || user.password !== password) return res.status(401).json({ error: 'invalid credentials' });
+  if (!user) {
+    await hashPassword(String(password).slice(0, 200).padEnd(10, 'x'));
+    return res.status(401).json({ error: 'invalid credentials' });
+  }
+  const passwordResult = await verifyPassword(password, user.password);
+  if (!passwordResult.valid) return res.status(401).json({ error: 'invalid credentials' });
+  if (passwordResult.needsUpgrade) {
+    const upgradedHash = await hashPassword(password);
+    await pool.query(`UPDATE users SET password = $2 WHERE id = $1 AND password = $3`, [user.id, upgradedHash, user.password]);
+  }
 
-  const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  res.cookie('cityflow_user_token', signUserToken(`${user.id}|${expires}`), {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: false,
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
+  createUserSession(res, Number(user.id));
 
   return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
 });
 
 app.post('/api/auth/logout', (_req, res) => {
-  res.clearCookie('cityflow_user_token');
-  res.json({ ok: true });
+  clearUserSession(res);
+  return res.json({ ok: true });
 });
 
 app.get('/api/auth/me', requireDb, async (req, res) => {
-  const userId = verifyUserToken(req.cookies.cityflow_user_token);
-  if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  const result = await pool.query(`SELECT id, username, email, player_id FROM users WHERE id = $1`, [userId]);
-  if (!result.rows[0]) return res.status(401).json({ error: 'unauthorized' });
-  const user = result.rows[0];
-  res.json({ user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
+  const user = await authenticateUserRequest(req, pool);
+  if (!user) return res.status(401).json({ error: 'unauthorized' });
+  return res.json({ user });
 });
 
 app.get('/api/account/state', requireDb, requireUser, async (req, res) => {
@@ -2406,7 +2521,7 @@ app.get('/api/market/posts', requireDb, async (_req, res) => {
 
 app.post('/api/market/buy', requireDb, async (req, res) => {
   try {
-    const { playerId, listingId, listingHint } = req.body || {};
+    const { playerId, listingId } = req.body || {};
     const normalizedListingId = Number(listingId);
     if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0) {
       return res.status(400).json({ error: 'missing fields' });
@@ -2415,13 +2530,10 @@ app.post('/api/market/buy', requireDb, async (req, res) => {
     const soldFor = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
       const listingResult = await db.query(
-        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
+        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE`,
         [normalizedListingId],
       );
-      let listing = listingResult.rows[0];
-      if (!listing) {
-        listing = await findActiveListingByHint(db, listingHint);
-      }
+      const listing = listingResult.rows[0];
       if (!listing) throw new Error('listing unavailable');
 
       await settleListingSale(db, listing, playerId, Number(listing.ask_price));
@@ -2436,27 +2548,24 @@ app.post('/api/market/buy', requireDb, async (req, res) => {
 
 app.post('/api/market/offer', requireDb, async (req, res) => {
   try {
-    const { playerId, listingId, offeredPrice, listingHint } = req.body || {};
+    const { playerId, listingId, offeredPrice } = req.body || {};
     const normalizedListingId = Number(listingId);
     const normalizedOfferPrice = Math.floor(Number(offeredPrice));
-    if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0 || !Number.isFinite(normalizedOfferPrice) || normalizedOfferPrice <= 0) {
+    if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0 || !Number.isSafeInteger(normalizedOfferPrice) || normalizedOfferPrice <= 0 || normalizedOfferPrice > 1_000_000_000_000) {
       return res.status(400).json({ error: 'missing fields' });
     }
 
     const result = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
       const listingResult = await db.query(
-        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
+        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE`,
         [normalizedListingId],
       );
-      let listing = listingResult.rows[0];
-      if (!listing) {
-        listing = await findActiveListingByHint(db, listingHint);
-      }
+      const listing = listingResult.rows[0];
       if (!listing) throw new Error('listing unavailable');
       if (listing.seller_player_id === playerId) throw new Error('cannot offer on your own listing');
 
-      const buyerResult = await db.query(`SELECT clean_money FROM players WHERE player_id = $1`, [playerId]);
+      const buyerResult = await db.query(`SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
       if (Number(buyerResult.rows[0]?.clean_money ?? 0) < normalizedOfferPrice) {
         throw new Error('insufficient funds');
       }
@@ -2587,12 +2696,16 @@ app.post('/api/market/list', requireDb, async (req, res) => {
     const { playerId, assetType, assetRefId, askPrice } = req.body || {};
     const normalizedAssetRefId = Number(assetRefId);
     const normalizedAskPrice = Math.floor(Number(askPrice));
-    if (!playerId || !assetType || !Number.isInteger(normalizedAssetRefId) || normalizedAssetRefId <= 0 || !Number.isFinite(normalizedAskPrice) || normalizedAskPrice <= 0) {
+    if (!playerId || !assetType || !['VEHICLE', 'CLOTHING', 'XENON_VEHICLE'].includes(assetType) || !Number.isInteger(normalizedAssetRefId) || normalizedAssetRefId <= 0 || !Number.isSafeInteger(normalizedAskPrice) || normalizedAskPrice <= 0 || normalizedAskPrice > 1_000_000_000_000) {
       return res.status(400).json({ error: 'missing fields' });
     }
 
     const created = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
+      await db.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`market-listing:${playerId}:${assetType}:${normalizedAssetRefId}`],
+      );
       let assetName = 'Unknown Listing';
       let assetMetadata = {};
 
@@ -2601,7 +2714,8 @@ app.post('/api/market/list', requireDb, async (req, res) => {
           `SELECT ov.id, ov.purchase_price, vm.brand, vm.name
            FROM owned_vehicles ov
            JOIN vehicle_models vm ON vm.id = ov.model_id
-           WHERE ov.id = $1 AND ov.player_id = $2`,
+           WHERE ov.id = $1 AND ov.player_id = $2
+           FOR UPDATE OF ov`,
           [normalizedAssetRefId, playerId],
         );
         const row = vehicle.rows[0];
@@ -2618,7 +2732,8 @@ app.post('/api/market/list', requireDb, async (req, res) => {
         const clothing = await db.query(
           `SELECT id, metadata
            FROM inventory_items
-           WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+           WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0
+           FOR UPDATE`,
           [normalizedAssetRefId, playerId],
         );
         const row = clothing.rows[0];
@@ -2634,7 +2749,8 @@ app.post('/api/market/list', requireDb, async (req, res) => {
         const xenon = await db.query(
           `SELECT id, metadata
            FROM inventory_items
-           WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+           WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0
+           FOR UPDATE`,
           [normalizedAssetRefId, playerId],
         );
         const row = xenon.rows[0];
@@ -2787,11 +2903,11 @@ app.post('/api/market/offer/accept', requireDb, async (req, res) => {
     if (!playerId || !offerId) return res.status(400).json({ error: 'missing fields' });
 
     const soldFor = await withTransaction(async (db) => {
-      const offerResult = await db.query(`SELECT * FROM market_offers WHERE id = $1 AND status = 'PENDING'`, [offerId]);
+      const offerResult = await db.query(`SELECT * FROM market_offers WHERE id = $1 AND status = 'PENDING' FOR UPDATE`, [offerId]);
       const offer = offerResult.rows[0];
       if (!offer) throw new Error('offer not found');
 
-      const listingResult = await db.query(`SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`, [offer.listing_id]);
+      const listingResult = await db.query(`SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE`, [offer.listing_id]);
       const listing = listingResult.rows[0];
       if (!listing || listing.seller_player_id !== playerId) throw new Error('listing not available');
 
@@ -2815,6 +2931,7 @@ app.post('/api/market/offer/reject', requireDb, async (req, res) => {
        SET status = 'REJECTED', updated_at = NOW()
        FROM market_listings ml
        WHERE mo.id = $1 AND mo.listing_id = ml.id AND ml.seller_player_id = $2
+         AND mo.status = 'PENDING'
        RETURNING mo.id`,
       [offerId, playerId],
     );
@@ -2874,12 +2991,11 @@ app.post('/api/market/listing/cancel', requireDb, async (req, res) => {
   }
 });
 
-app.post('/api/market/npc/refresh', async (_req, res) => {
+app.post('/api/market/npc/refresh', createRateLimiter({ windowMs: 60_000, max: 2 }), async (_req, res) => {
   try {
     if (!dbReady || !pool) return res.json({ ok: true });
     await refreshNpcListings();
-    const sold = await runNpcAutoBuyerSweep();
-    res.json({ ok: true, sold });
+    res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: 'npc refresh failed' });
   }
@@ -2905,7 +3021,7 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
 
     // Get owned vehicles
     const vehiclesRes = await pool.query(
-      `SELECT ov.id, ov.model_id, vm.name, vm.brand, ov.purchase_price, ov.purchased_at, ov.purchase_source
+      `SELECT ov.id, ov.model_id, vm.name, vm.brand, ov.purchase_price, ov.purchased_at, ov.purchase_source, ov.xenon_enabled
        FROM owned_vehicles ov
        JOIN vehicle_models vm ON ov.model_id = vm.id
        WHERE ov.player_id = $1`,
@@ -2945,6 +3061,7 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
         purchasePrice: Number(v.purchase_price),
         purchasedAt: v.purchased_at.toISOString(),
         acquisitionSource: v.purchase_source || 'SHOWROOM',
+        xenonEnabled: Boolean(v.xenon_enabled),
       })),
       inventory: inventoryRes.rows.map(i => ({
         id: i.id,
@@ -2992,37 +3109,81 @@ app.post('/api/player/profile/name', requireDb, async (req, res) => {
   }
 });
 
-app.post('/api/player/cash/adjust', requireDb, async (req, res) => {
+const gameplayRateLimit = createRateLimiter({ windowMs: 60_000, max: 40, key: (req) => req.playerId || req.ip });
+
+app.get('/api/cayo/state', requireDb, async (req, res) => {
   try {
-    const { playerId, delta } = req.body || {};
-    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
-
-    const normalizedDelta = Math.floor(Number(delta));
-    if (!Number.isFinite(normalizedDelta)) {
-      return res.status(400).json({ error: 'invalid delta' });
-    }
-
-    const result = await withTransaction(async (db) => {
-      await ensurePlayer(db, playerId);
-      const current = await db.query(
-        `SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`,
-        [playerId],
-      );
-      const currentMoney = Number(current.rows[0]?.clean_money ?? 0);
-      const nextMoney = currentMoney + normalizedDelta;
-      if (nextMoney < 0) throw new Error('insufficient funds');
-
-      const updated = await db.query(
-        `UPDATE players SET clean_money = $2, updated_at = NOW() WHERE player_id = $1 RETURNING clean_money`,
-        [playerId, nextMoney],
-      );
-
-      return Number(updated.rows[0].clean_money);
-    });
-
-    res.json({ ok: true, cleanMoney: result });
+    await ensurePlayer(pool, req.playerId);
+    const state = await readCayoState(pool, req.playerId);
+    return res.json({ state: cayoStateView(state) });
   } catch (error) {
-    res.status(400).json({ error: error.message || 'cash adjust failed' });
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Cayo state failed' });
+  }
+});
+
+app.post('/api/cayo/action', gameplayRateLimit, requireDb, async (req, res) => {
+  try {
+    const result = await withTransaction((db) => runCayoAction(
+      db,
+      req.playerId,
+      req.body?.stage,
+      req.body?.operationId,
+      Boolean(req.body?.useCleanForShortfall),
+    ));
+    return res.json(result);
+  } catch (error) {
+    return res.status(Number(error?.statusCode || 400)).json({ error: error instanceof Error ? error.message : 'Cayo action failed' });
+  }
+});
+
+app.post('/api/cayo/sell', gameplayRateLimit, requireDb, async (req, res) => {
+  try {
+    const result = await withTransaction((db) => sellCayoProduct(
+      db,
+      req.playerId,
+      req.body?.mode,
+      req.body?.operationId,
+    ));
+    return res.json(result);
+  } catch (error) {
+    return res.status(Number(error?.statusCode || 400)).json({ error: error instanceof Error ? error.message : 'Cayo sale failed' });
+  }
+});
+
+app.post('/api/cayo/convert', gameplayRateLimit, requireDb, async (req, res) => {
+  try {
+    const result = await withTransaction((db) => convertCayoCash(db, req.playerId, req.body?.operationId));
+    return res.json(result);
+  } catch (error) {
+    return res.status(Number(error?.statusCode || 400)).json({ error: error instanceof Error ? error.message : 'Cayo conversion failed' });
+  }
+});
+
+app.get('/api/sleep/state', requireDb, async (req, res) => {
+  try {
+    await ensurePlayer(pool, req.playerId);
+    const state = await readSleepState(pool, req.playerId);
+    return res.json({ state: sleepStateView(state) });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Sleep state failed' });
+  }
+});
+
+app.post('/api/sleep/start', gameplayRateLimit, requireDb, async (req, res) => {
+  try {
+    const result = await withTransaction((db) => startSleepCycle(db, req.playerId, req.body?.operationId));
+    return res.json(result);
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Sleep start failed' });
+  }
+});
+
+app.post('/api/sleep/claim', gameplayRateLimit, requireDb, async (req, res) => {
+  try {
+    const result = await withTransaction((db) => claimSleepReward(db, req.playerId, req.body?.operationId));
+    return res.json(result);
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Sleep claim failed' });
   }
 });
 
@@ -3032,8 +3193,8 @@ app.get('/api/pilot/state', requireDb, async (req, res) => {
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
     await ensurePlayer(pool, playerId);
     const progress = await ensurePilotProgress(pool, playerId);
-    const session = getPilotSession(playerId);
-    setPilotSession(playerId, session);
+    const session = await getPilotSession(playerId);
+    await setPilotSession(playerId, session);
     res.json(pilotStateView(session, toPilotProgressView(progress)));
   } catch (error) {
     res.status(500).json({ error: 'pilot state failed' });
@@ -3048,7 +3209,7 @@ app.post('/api/pilot/shift/start', requireDb, async (req, res) => {
     const progress = await ensurePilotProgress(pool, playerId);
     const progressView = toPilotProgressView(progress);
     const now = Date.now();
-    const session = getPilotSession(playerId);
+    const session = await getPilotSession(playerId);
 
     if (session.shiftState !== 'IDLE') {
       return res.status(400).json({ error: 'shift already active' });
@@ -3065,7 +3226,7 @@ app.post('/api/pilot/shift/start', requireDb, async (req, res) => {
       lastResult: null,
       lastActionAt: 0,
     };
-    setPilotSession(playerId, nextSession);
+    await setPilotSession(playerId, nextSession);
     res.json(pilotStateView(nextSession, progressView));
   } catch (error) {
     res.status(500).json({ error: 'start pilot shift failed' });
@@ -3080,7 +3241,7 @@ app.post('/api/pilot/shift/end', requireDb, async (req, res) => {
     const outcome = await withTransaction(async (db) => {
       const progressRow = await ensurePilotProgress(db, playerId);
       const progressBefore = toPilotProgressView(progressRow);
-      const session = getPilotSession(playerId);
+      const session = await getPilotSession(playerId, db);
 
       let nextProgress = progressBefore;
       if (session.activeFlight) {
@@ -3127,7 +3288,7 @@ app.post('/api/pilot/shift/end', requireDb, async (req, res) => {
         };
       }
 
-      setPilotSession(playerId, nextSession);
+      await setPilotSession(playerId, nextSession, db);
       return {
         state: pilotStateView(nextSession, nextProgress),
       };
@@ -3146,7 +3307,7 @@ app.post('/api/pilot/route/select', requireDb, async (req, res) => {
 
     const progress = await ensurePilotProgress(pool, playerId);
     const progressView = toPilotProgressView(progress);
-    const session = getPilotSession(playerId);
+    const session = await getPilotSession(playerId);
 
     if (session.shiftState === 'IDLE') {
       return res.status(400).json({ error: 'shift not active' });
@@ -3167,7 +3328,7 @@ app.post('/api/pilot/route/select', requireDb, async (req, res) => {
     session.selectedRouteId = route.id;
     session.shiftState = 'ROUTE_READY';
     session.lastResult = null;
-    setPilotSession(playerId, session);
+    await setPilotSession(playerId, session);
 
     res.json(pilotStateView(session, progressView));
   } catch (error) {
@@ -3182,7 +3343,7 @@ app.post('/api/pilot/flight/start', requireDb, async (req, res) => {
 
     const progress = await ensurePilotProgress(pool, playerId);
     const progressView = toPilotProgressView(progress);
-    const session = getPilotSession(playerId);
+    const session = await getPilotSession(playerId);
 
     if (session.shiftState !== 'ROUTE_READY') {
       return res.status(400).json({ error: 'route not ready' });
@@ -3210,7 +3371,7 @@ app.post('/api/pilot/flight/start', requireDb, async (req, res) => {
     };
     session.shiftState = 'FLIGHT_STAGE_PROGRESS';
     session.lastResult = null;
-    setPilotSession(playerId, session);
+    await setPilotSession(playerId, session);
 
     res.json({
       state: pilotStateView(session, progressView),
@@ -3234,7 +3395,7 @@ app.post('/api/pilot/flight/cancel', requireDb, async (req, res) => {
     const outcome = await withTransaction(async (db) => {
       const progressRow = await ensurePilotProgress(db, playerId);
       const progressBefore = toPilotProgressView(progressRow);
-      const session = getPilotSession(playerId);
+      const session = await getPilotSession(playerId, db);
 
       if (!session.activeFlight) throw new Error('no active flight');
       await db.query(`UPDATE player_pilot_progress SET pilot_streak = 0, updated_at = NOW() WHERE player_id = $1`, [playerId]);
@@ -3271,7 +3432,7 @@ app.post('/api/pilot/flight/cancel', requireDb, async (req, res) => {
           promotionLabel: null,
         },
       };
-      setPilotSession(playerId, session);
+      await setPilotSession(playerId, session, db);
       return {
         state: pilotStateView(session, progressAfter),
       };
@@ -3288,7 +3449,7 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
     const { playerId } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
-    const session = getPilotSession(playerId);
+    const session = await getPilotSession(playerId);
     if (!session.activeFlight) {
       return res.status(400).json({ error: 'no active flight' });
     }
@@ -3297,12 +3458,12 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
     }
 
     session.activeFlight.completing = true;
-    setPilotSession(playerId, session);
+    await setPilotSession(playerId, session);
 
     const outcome = await withTransaction(async (db) => {
       const progressRow = await ensurePilotProgress(db, playerId);
       const progressBefore = toPilotProgressView(progressRow);
-      const activeSession = getPilotSession(playerId);
+      const activeSession = await getPilotSession(playerId, db);
       const activeFlight = activeSession.activeFlight;
       if (!activeFlight) throw new Error('no active flight');
 
@@ -3331,7 +3492,10 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
       const streakBonus = Math.max(0, Math.floor((baseReward + levelBonus) * (streakMultiplier - 1)));
       const milestoneBonus = Number(PILOT_CONFIG.milestoneBonusCash[String(totalFlightsAfter)] || 0);
       const firstCompletionBonus = routeCompletionsBefore === 0 ? Number(PILOT_CONFIG.firstCompletionBonusCash || 0) : 0;
-      const totalCash = Math.max(0, baseReward + levelBonus + streakBonus + milestoneBonus + firstCompletionBonus);
+      const vipMultiplier = await getVipMultiplier(db, playerId);
+      const jobBoostUsed = await consumeJobBoost(db, playerId, 'JOB_BOOST_PILOT');
+      const rewardMultiplier = vipMultiplier * (jobBoostUsed ? 2 : 1);
+      const totalCash = Math.max(0, baseReward + levelBonus + streakBonus + milestoneBonus + firstCompletionBonus) * rewardMultiplier;
 
       const baseXp = Number(route.baseXp || 0);
       const streakXpBonus = Math.max(0, Math.min(30, currentStreak * 2));
@@ -3397,6 +3561,8 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
           streakBonus,
           milestoneBonus,
           firstCompletionBonus,
+          rewardMultiplier,
+          jobBoostUsed,
           totalCash,
           baseXp,
           streakXpBonus,
@@ -3414,20 +3580,31 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
           promotionLabel,
         },
       };
-      setPilotSession(playerId, activeSession);
+      await setPilotSession(playerId, activeSession, db);
+
+      const cityReward = await awardCityXpInTransaction(
+        db,
+        playerId,
+        'PILOT_FLIGHT',
+        String(totalFlightsAfter),
+        CITY_XP_REWARDS.PILOT_FLIGHT,
+        { routeId: route.id },
+      );
 
       return {
         state: pilotStateView(activeSession, progressAfter),
         result: activeSession.lastResult,
+        cityProgress: cityReward.progress,
+        cityReward,
       };
     });
 
     res.json(outcome);
   } catch (error) {
-    const session = getPilotSession(req.body?.playerId);
+    const session = await getPilotSession(req.body?.playerId);
     if (session?.activeFlight?.completing) {
       session.activeFlight.completing = false;
-      setPilotSession(req.body?.playerId, session);
+      await setPilotSession(req.body?.playerId, session);
     }
     res.status(400).json({ error: error.message || 'complete flight failed' });
   }
@@ -3439,12 +3616,12 @@ app.get('/api/pizzer/state', requireDb, async (req, res) => {
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
     await ensurePlayer(pool, playerId);
     const progress = await ensurePizzerProgress(pool, playerId);
-    const session = getPizzerSession(playerId);
+    const session = await getPizzerSession(playerId);
     if (session.repairUntil && session.repairUntil <= Date.now()) {
       session.repairUntil = 0;
       session.repairLabel = null;
     }
-    setPizzerSession(playerId, session);
+    await setPizzerSession(playerId, session);
     res.json(pizzerStateView(session, toPizzerProgressView(progress)));
   } catch (error) {
     res.status(500).json({ error: 'pizzer state failed' });
@@ -3459,7 +3636,7 @@ app.post('/api/pizzer/shift/start', requireDb, async (req, res) => {
     const progress = await ensurePizzerProgress(pool, playerId);
     const progressView = toPizzerProgressView(progress);
     const now = Date.now();
-    const session = getPizzerSession(playerId);
+    const session = await getPizzerSession(playerId);
     enforcePizzerRepairCooldown(session);
 
     if (session.shiftState !== 'IDLE') {
@@ -3478,7 +3655,7 @@ app.post('/api/pizzer/shift/start', requireDb, async (req, res) => {
       lastResult: null,
       lastActionAt: 0,
     };
-    setPizzerSession(playerId, nextSession);
+    await setPizzerSession(playerId, nextSession);
     res.json(pizzerStateView(nextSession, progressView));
   } catch (error) {
     res.status(500).json({ error: 'start shift failed' });
@@ -3490,7 +3667,7 @@ app.post('/api/pizzer/shift/end', requireDb, async (req, res) => {
     const { playerId } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
     const progress = await ensurePizzerProgress(pool, playerId);
-    const session = getPizzerSession(playerId);
+    const session = await getPizzerSession(playerId);
     const next = {
       ...session,
       shiftState: 'IDLE',
@@ -3498,7 +3675,7 @@ app.post('/api/pizzer/shift/end', requireDb, async (req, res) => {
       activeOrder: null,
       cooldownUntil: Date.now() + PIZZER_CONFIG.startCooldownMs,
     };
-    setPizzerSession(playerId, next);
+    await setPizzerSession(playerId, next);
     res.json(pizzerStateView(next, toPizzerProgressView(progress)));
   } catch (error) {
     res.status(500).json({ error: 'end shift failed' });
@@ -3512,7 +3689,7 @@ app.post('/api/pizzer/orders/options', requireDb, async (req, res) => {
 
     const progress = await ensurePizzerProgress(pool, playerId);
     const view = toPizzerProgressView(progress);
-    const session = getPizzerSession(playerId);
+    const session = await getPizzerSession(playerId);
     enforcePizzerRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_ORDER') {
       return res.status(400).json({ error: 'not ready to pick order' });
@@ -3523,7 +3700,7 @@ app.post('/api/pizzer/orders/options', requireDb, async (req, res) => {
     if (!session.orderOptions.length || now - Number(session.optionsGeneratedAt || 0) > PIZZER_CONFIG.optionsCooldownMs) {
       session.orderOptions = [buildOrderOption(view.level), buildOrderOption(view.level), buildOrderOption(view.level)];
       session.optionsGeneratedAt = now;
-      setPizzerSession(playerId, session);
+      await setPizzerSession(playerId, session);
     }
 
     res.json({
@@ -3551,7 +3728,7 @@ app.post('/api/pizzer/order/select', requireDb, async (req, res) => {
 
     const progress = await ensurePizzerProgress(pool, playerId);
     const view = toPizzerProgressView(progress);
-    const session = getPizzerSession(playerId);
+    const session = await getPizzerSession(playerId);
     enforcePizzerRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_ORDER') return res.status(400).json({ error: 'not selecting order' });
     enforcePizzerActionCooldown(session);
@@ -3573,7 +3750,7 @@ app.post('/api/pizzer/order/select', requireDb, async (req, res) => {
     };
     session.orderOptions = [];
     session.lastResult = null;
-    setPizzerSession(playerId, session);
+    await setPizzerSession(playerId, session);
 
     res.json(pizzerStateView(session, view));
   } catch (error) {
@@ -3588,7 +3765,7 @@ app.post('/api/pizzer/packing/step', requireDb, async (req, res) => {
 
     const progress = await ensurePizzerProgress(pool, playerId);
     const view = toPizzerProgressView(progress);
-    const session = getPizzerSession(playerId);
+    const session = await getPizzerSession(playerId);
     enforcePizzerRepairCooldown(session);
     if (session.shiftState !== 'PACKING_ORDER' || !session.activeOrder) {
       return res.status(400).json({ error: 'no order in packing' });
@@ -3612,7 +3789,7 @@ app.post('/api/pizzer/packing/step', requireDb, async (req, res) => {
       order.deliveryStartedAt = Date.now();
     }
 
-    setPizzerSession(playerId, session);
+    await setPizzerSession(playerId, session);
     res.json(pizzerStateView(session, view));
   } catch (error) {
     res.status(500).json({ error: 'packing step failed' });
@@ -3627,13 +3804,13 @@ app.post('/api/pizzer/delivery/report-damage', requireDb, async (req, res) => {
 
     const progress = await ensurePizzerProgress(pool, playerId);
     const view = toPizzerProgressView(progress);
-    const session = getPizzerSession(playerId);
+    const session = await getPizzerSession(playerId);
     if (session.shiftState !== 'DELIVERY_ACTIVE' || !session.activeOrder) {
       return res.status(400).json({ error: 'no active delivery' });
     }
 
     session.activeOrder.damagePercent = Math.max(0, Math.min(100, Number(session.activeOrder.damagePercent || 0) + delta));
-    setPizzerSession(playerId, session);
+    await setPizzerSession(playerId, session);
     res.json(pizzerStateView(session, view));
   } catch (error) {
     res.status(500).json({ error: 'damage report failed' });
@@ -3648,7 +3825,7 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
     const outcome = await withTransaction(async (db) => {
       const progressRow = await ensurePizzerProgress(db, playerId);
       const progressBefore = toPizzerProgressView(progressRow);
-      const session = getPizzerSession(playerId);
+      const session = await getPizzerSession(playerId, db);
       enforcePizzerRepairCooldown(session);
       enforcePizzerActionCooldown(session);
 
@@ -3703,7 +3880,7 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
             unlockedVehicle: null,
           },
         };
-        setPizzerSession(playerId, session);
+        await setPizzerSession(playerId, session, db);
         return {
           state: pizzerStateView(session, progressBefore),
           result: session.lastResult,
@@ -3732,7 +3909,8 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
       const tipRange = PIZZER_CONFIG.tipRange[order.orderType] || [20, 60];
       const tipPerf = freshness >= 76 && lateSec <= 0 ? 1 : freshness >= 41 ? 0.7 : 0.35;
       const tip = hardFail ? 0 : Math.floor(randomInt(tipRange[0], tipRange[1]) * tipPerf);
-      const totalReward = Math.max(0, preTip + tip);
+      const vipMultiplier = await getVipMultiplier(db, playerId);
+      const totalReward = Math.max(0, preTip + tip) * vipMultiplier;
 
       const baseXp = PIZZER_CONFIG.baseXp[order.orderType] || 18;
       const perfectBonusXp = freshness >= 88 && lateSec <= 0 && damagePercent <= 10 ? 6 : 0;
@@ -3817,76 +3995,30 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
       session.shiftState = 'SELECTING_ORDER';
       session.orderOptions = [];
       session.optionsGeneratedAt = 0;
-      setPizzerSession(playerId, session);
+      await setPizzerSession(playerId, session, db);
+
+      const cityReward = !hardFail
+        ? await awardCityXpInTransaction(
+            db,
+            playerId,
+            'PIZZER_DELIVERY',
+            String(Number(progressBefore.totalDeliveries || 0) + 1),
+            CITY_XP_REWARDS.PIZZER_DELIVERY,
+            { rating },
+          )
+        : null;
 
       return {
         state: pizzerStateView(session, progressAfter),
         result: session.lastResult,
+        cityProgress: cityReward?.progress || null,
+        cityReward,
       };
     });
 
     res.json(outcome);
   } catch (error) {
     res.status(400).json({ error: error.message || 'handover failed' });
-  }
-});
-
-app.post('/api/pizzer/admin/set-level', requireDb, async (req, res) => {
-  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-  try {
-    const { playerId, level } = req.body || {};
-    const safeLevel = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(level || 1)));
-    const xp = levelStartXp(safeLevel);
-    await ensurePlayer(pool, playerId);
-    await ensurePizzerProgress(pool, playerId);
-    await pool.query(
-      `UPDATE player_pizzer_progress SET pizzer_level = $2, pizzer_xp = $3, updated_at = NOW() WHERE player_id = $1`,
-      [playerId, safeLevel, xp],
-    );
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(400).json({ error: 'set-level failed' });
-  }
-});
-
-app.post('/api/pizzer/admin/add-xp', requireDb, async (req, res) => {
-  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-  try {
-    const { playerId, xp } = req.body || {};
-    const add = Math.max(0, Math.floor(Number(xp || 0)));
-    await ensurePlayer(pool, playerId);
-    const progress = await ensurePizzerProgress(pool, playerId);
-    const nextXp = Number(progress.pizzer_xp || 0) + add;
-    const nextLevel = computePizzerLevel(nextXp);
-    await pool.query(
-      `UPDATE player_pizzer_progress SET pizzer_level = $2, pizzer_xp = $3, updated_at = NOW() WHERE player_id = $1`,
-      [playerId, nextLevel, nextXp],
-    );
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(400).json({ error: 'add-xp failed' });
-  }
-});
-
-app.post('/api/pizzer/admin/reset', requireDb, async (req, res) => {
-  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-  try {
-    const { playerId } = req.body || {};
-    await ensurePlayer(pool, playerId);
-    await pool.query(
-      `DELETE FROM player_pizzer_progress WHERE player_id = $1`,
-      [playerId],
-    );
-    pizzerSessions.delete(playerId);
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(400).json({ error: 'reset failed' });
   }
 });
 
@@ -3897,14 +4029,14 @@ app.get('/api/fisher/state', requireDb, async (req, res) => {
     await ensurePlayer(pool, playerId);
     const progress = await ensureFisherProgress(pool, playerId);
     const progressView = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     if (session.repairUntil && session.repairUntil <= Date.now()) {
       session.repairUntil = 0;
       session.repairLabel = null;
     }
     session.carryCapacityKg = Number(progressView.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
     syncFisherSessionTime(session);
-    setFisherSession(playerId, session);
+    await setFisherSession(playerId, session);
     res.json(fisherStateView(session, progressView));
   } catch (error) {
     res.status(500).json({ error: 'fisher state failed' });
@@ -3919,7 +4051,7 @@ app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
     const progress = await ensureFisherProgress(pool, playerId);
     const progressView = toFisherProgressView(progress);
     const now = Date.now();
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
 
     if (session.shiftState !== 'IDLE') {
@@ -3943,7 +4075,7 @@ app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
       currentDockCell: null,
       targetDockCell: null,
     };
-    setFisherSession(playerId, nextSession);
+    await setFisherSession(playerId, nextSession);
     res.json(fisherStateView(nextSession, progressView));
   } catch (error) {
     res.status(500).json({ error: 'start fisher shift failed' });
@@ -3955,7 +4087,7 @@ app.post('/api/fisher/shift/end', requireDb, async (req, res) => {
     const { playerId } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
     const progress = await ensureFisherProgress(pool, playerId);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     const next = {
       ...session,
       shiftState: 'IDLE',
@@ -3967,7 +4099,7 @@ app.post('/api/fisher/shift/end', requireDb, async (req, res) => {
       targetDockCell: null,
       cooldownUntil: Date.now() + FISHER_CONFIG.shiftStartCooldownMs,
     };
-    setFisherSession(playerId, next);
+    await setFisherSession(playerId, next);
     res.json(fisherStateView(next, toFisherProgressView(progress)));
   } catch (error) {
     res.status(500).json({ error: 'end fisher shift failed' });
@@ -3981,7 +4113,7 @@ app.post('/api/fisher/spots/options', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_SPOT') {
       return res.status(400).json({ error: 'not ready to pick spot' });
@@ -4036,7 +4168,7 @@ app.post('/api/fisher/spots/options', requireDb, async (req, res) => {
       }
       session.spotOptions = options;
       session.optionsGeneratedAt = now;
-      setFisherSession(playerId, session);
+      await setFisherSession(playerId, session);
     }
 
     res.json({ options: session.spotOptions });
@@ -4054,7 +4186,7 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_DOCK') {
       return res.status(400).json({ error: 'not ready for dock marker' });
@@ -4099,6 +4231,11 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
     });
 
     const levelOutcome = await withTransaction(async (db) => {
+      const lockedSession = await getFisherSession(playerId, db);
+      if (lockedSession.shiftState !== 'SELECTING_DOCK' || Number(lockedSession.targetDockCell) !== parsedCell) {
+        throw new Error('dock action already completed or expired');
+      }
+      Object.assign(session, lockedSession);
       const progressRow = await ensureFisherProgress(db, playerId);
       const progressBefore = toFisherProgressView(progressRow);
 
@@ -4136,65 +4273,69 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
       await addFarmTimeForCatch(db, playerId, 0.1);
 
       const updatedProgress = await ensureFisherProgress(db, playerId);
-      return {
-        progress: toFisherProgressView(updatedProgress),
-        unlockedTier,
+      const progressAfter = toFisherProgressView(updatedProgress);
+      const nextCarryWeight = Math.min(
+        Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg),
+        Number(session.carryWeightKg || 0) + fishWeightKg,
+      );
+
+      session.streak = nextStreak;
+      session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
+      session.carryWeightKg = Math.round(nextCarryWeight * 10) / 10;
+      session.carryEstimatedValue = Number(session.carryEstimatedValue || 0) + calc.totalReward;
+      session.carriedFish = [
+        ...(session.carriedFish || []),
+        { name: fishName, rarity: fishRarity, size: fishSize, weightKg: fishWeightKg, value: calc.totalReward },
+      ].slice(-25);
+      session.currentDockCell = parsedCell;
+      session.targetDockCell = randomInt(1, 16);
+      session.activeCatch = null;
+      session.shiftState = 'SELECTING_DOCK';
+      session.lastResult = {
+        caught: true,
+        failReason: null,
+        fishName,
+        fishRarity,
+        fishSize,
+        fishWeightKg,
+        breakdown: {
+          baseReward: calc.baseReward,
+          spotMultiplier: calc.spotMultiplier,
+          levelMultiplier: calc.levelMultiplier,
+          qualityMultiplier: calc.qualityMultiplier,
+          streakMultiplier: calc.streakMultiplier,
+          integrityMultiplier: calc.integrityMultiplier,
+          bonusLootValue: calc.bonusLootValue,
+          totalReward: calc.totalReward,
+          xpGained: calc.xpGained,
+          qualityScore: calc.qualityScore,
+        },
+        progression: {
+          levelBefore: view.level,
+          levelAfter: progressAfter.level,
+          xpBefore: view.xp,
+          xpAfter: progressAfter.xp,
+          unlockedTier,
+        },
       };
+      session.spotOptions = [];
+      syncFisherSessionTime(session);
+      await setFisherSession(playerId, session, db);
+      const cityReward = await awardCityXpInTransaction(
+        db,
+        playerId,
+        'FISHER_CATCH',
+        String(progressAfter.totalCatches),
+        CITY_XP_REWARDS.FISHER_CATCH,
+        { rarity: fishRarity },
+      );
+      return { progress: progressAfter, cityReward };
     });
-    const progressAfter = levelOutcome.progress;
-
-    const nextStreak = Number(session.streak || 0) + 1;
-    const nextCarryWeight = Math.min(Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg), Number(session.carryWeightKg || 0) + fishWeightKg);
-
-    session.streak = nextStreak;
-    session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
-    session.carryWeightKg = Math.round(nextCarryWeight * 10) / 10;
-    session.carryEstimatedValue = Number(session.carryEstimatedValue || 0) + calc.totalReward;
-    session.carriedFish = [
-      ...(session.carriedFish || []),
-      {
-        name: fishName,
-        rarity: fishRarity,
-        size: fishSize,
-        weightKg: fishWeightKg,
-        value: calc.totalReward,
-      },
-    ].slice(-25);
-    session.currentDockCell = parsedCell;
-    session.targetDockCell = randomInt(1, 16);
-    session.activeCatch = null;
-    session.shiftState = 'SELECTING_DOCK';
-    session.lastResult = {
-      caught: true,
-      failReason: null,
-      fishName,
-      fishRarity,
-      fishSize,
-      fishWeightKg,
-      breakdown: {
-        baseReward: calc.baseReward,
-        spotMultiplier: calc.spotMultiplier,
-        levelMultiplier: calc.levelMultiplier,
-        qualityMultiplier: calc.qualityMultiplier,
-        streakMultiplier: calc.streakMultiplier,
-        integrityMultiplier: calc.integrityMultiplier,
-        bonusLootValue: calc.bonusLootValue,
-        totalReward: calc.totalReward,
-        xpGained: calc.xpGained,
-        qualityScore: calc.qualityScore,
-      },
-      progression: {
-        levelBefore: view.level,
-        levelAfter: progressAfter.level,
-        xpBefore: view.xp,
-        xpAfter: progressAfter.xp,
-        unlockedTier: levelOutcome.unlockedTier,
-      },
-    };
-    session.spotOptions = [];
-    syncFisherSessionTime(session);
-    setFisherSession(playerId, session);
-    res.json(fisherStateView(session, progressAfter));
+    res.json({
+      ...fisherStateView(session, levelOutcome.progress),
+      cityProgress: levelOutcome.cityReward.progress,
+      cityReward: levelOutcome.cityReward,
+    });
   } catch (error) {
     res.status(400).json({ error: error.message || 'dock select failed' });
   }
@@ -4207,7 +4348,7 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     if (session.shiftState !== 'SELECTING_SPOT') return res.status(400).json({ error: 'not selecting spot' });
     enforceFisherActionCooldown(session);
@@ -4239,7 +4380,7 @@ app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
     session.spotOptions = [];
     session.lastResult = null;
     syncFisherSessionTime(session);
-    setFisherSession(playerId, session);
+    await setFisherSession(playerId, session);
 
     res.json(fisherStateView(session, view));
   } catch (error) {
@@ -4262,7 +4403,7 @@ app.post('/api/fisher/step', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     syncFisherSessionTime(session);
     if (!session.activeCatch) {
@@ -4283,7 +4424,7 @@ app.post('/api/fisher/step', requireDb, async (req, res) => {
 
     active.stepsDone.push('BAIT');
     session.shiftState = 'CAST_STEP';
-    setFisherSession(playerId, session);
+    await setFisherSession(playerId, session);
     res.json(fisherStateView(session, view));
   } catch (error) {
     res.status(500).json({ error: 'fisher step failed' });
@@ -4297,7 +4438,7 @@ app.post('/api/fisher/cast/commit', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     syncFisherSessionTime(session);
     if (session.shiftState !== 'CAST_STEP' || !session.activeCatch) {
@@ -4322,7 +4463,7 @@ app.post('/api/fisher/cast/commit', requireDb, async (req, res) => {
     const waitSec = Math.max(1.8, baseWait + castAdjust);
     active.biteAt = Date.now() + Math.floor(waitSec * 1000);
     session.shiftState = 'WAITING_BITE';
-    setFisherSession(playerId, session);
+    await setFisherSession(playerId, session);
 
     res.json(fisherStateView(session, view));
   } catch (error) {
@@ -4337,7 +4478,7 @@ app.post('/api/fisher/hook/attempt', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     syncFisherSessionTime(session);
     if (!session.activeCatch || session.shiftState !== 'HOOK_WINDOW') {
@@ -4382,7 +4523,7 @@ app.post('/api/fisher/hook/attempt', requireDb, async (req, res) => {
         session.activeCatch = null;
         session.shiftState = 'SELECTING_SPOT';
       }
-      setFisherSession(playerId, session);
+      await setFisherSession(playerId, session);
       return res.json(fisherStateView(session, view));
     }
 
@@ -4396,7 +4537,7 @@ app.post('/api/fisher/hook/attempt', requireDb, async (req, res) => {
     active.reelTicks = 0;
     active.safeTicks = 0;
     active.redTicks = 0;
-    setFisherSession(playerId, session);
+    await setFisherSession(playerId, session);
     res.json(fisherStateView(session, view));
   } catch (error) {
     res.status(500).json({ error: 'hook attempt failed' });
@@ -4410,7 +4551,7 @@ app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     syncFisherSessionTime(session);
     if (!session.activeCatch || session.shiftState !== 'REELING') {
@@ -4501,7 +4642,7 @@ app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
         session.activeCatch = null;
         session.shiftState = 'SELECTING_SPOT';
       }
-      setFisherSession(playerId, session);
+      await setFisherSession(playerId, session);
       return res.json(fisherStateView(session, view));
     }
 
@@ -4510,7 +4651,7 @@ app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
       session.shiftState = 'LANDING';
     }
 
-    setFisherSession(playerId, session);
+    await setFisherSession(playerId, session);
     res.json(fisherStateView(session, view));
   } catch (error) {
     res.status(400).json({ error: error.message || 'reel tick failed' });
@@ -4524,7 +4665,7 @@ app.post('/api/fisher/pull/respond', requireDb, async (req, res) => {
 
     const progress = await ensureFisherProgress(pool, playerId);
     const view = toFisherProgressView(progress);
-    const session = getFisherSession(playerId);
+    const session = await getFisherSession(playerId);
     enforceFisherRepairCooldown(session);
     syncFisherSessionTime(session);
     if (!session.activeCatch || session.shiftState !== 'REELING') {
@@ -4552,7 +4693,7 @@ app.post('/api/fisher/pull/respond', requireDb, async (req, res) => {
       active.qualityPenalty = Number(active.qualityPenalty || 0) + FISHER_CONFIG.randomPullQualityPenalty;
     }
     active.pullPrompt = null;
-    setFisherSession(playerId, session);
+    await setFisherSession(playerId, session);
     res.json(fisherStateView(session, view));
   } catch (error) {
     res.status(400).json({ error: error.message || 'pull respond failed' });
@@ -4567,7 +4708,7 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
     const outcome = await withTransaction(async (db) => {
       const progressRow = await ensureFisherProgress(db, playerId);
       const progressBefore = toFisherProgressView(progressRow);
-      const session = getFisherSession(playerId);
+      const session = await getFisherSession(playerId, db);
       enforceFisherRepairCooldown(session);
       syncFisherSessionTime(session);
       if (!session.activeCatch || session.shiftState !== 'LANDING') {
@@ -4653,7 +4794,7 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
         };
         session.activeCatch = session.activeSpot ? fisherPrepareCatchFromSpot(session.activeSpot, false) : null;
         session.shiftState = session.activeSpot ? 'BAIT_STEP' : 'SELECTING_SPOT';
-        setFisherSession(playerId, session);
+        await setFisherSession(playerId, session, db);
         return {
           state: fisherStateView(session, progressBefore),
           result: session.lastResult,
@@ -4744,11 +4885,22 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
           unlockedTier,
         },
       };
-      setFisherSession(playerId, session);
+      await setFisherSession(playerId, session, db);
+
+      const cityReward = await awardCityXpInTransaction(
+        db,
+        playerId,
+        'FISHER_CATCH',
+        String(progressAfter.totalCatches),
+        CITY_XP_REWARDS.FISHER_CATCH,
+        { rarity: fishRarity },
+      );
 
       return {
         state: fisherStateView(session, progressAfter),
         result: session.lastResult,
+        cityProgress: cityReward.progress,
+        cityReward,
       };
     });
 
@@ -4766,13 +4918,15 @@ app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
     const outcome = await withTransaction(async (db) => {
       const progressRow = await ensureFisherProgress(db, playerId);
       const progressView = toFisherProgressView(progressRow);
-      const session = getFisherSession(playerId);
+      const session = await getFisherSession(playerId, db);
       enforceFisherActionCooldown(session);
 
-      const sellValue = Math.max(0, Math.floor(Number(session.carryEstimatedValue || 0)));
-      if (sellValue <= 0) {
+      const baseSellValue = Math.max(0, Math.floor(Number(session.carryEstimatedValue || 0)));
+      if (baseSellValue <= 0) {
         throw new Error('no fish to sell');
       }
+      const vipMultiplier = await getVipMultiplier(db, playerId);
+      const sellValue = baseSellValue * vipMultiplier;
 
       await db.query(
         `UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`,
@@ -4782,10 +4936,12 @@ app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
       session.carryEstimatedValue = 0;
       session.carryWeightKg = 0;
       session.carriedFish = [];
-      setFisherSession(playerId, session);
+      await setFisherSession(playerId, session, db);
 
       return {
         soldValue: sellValue,
+        baseSoldValue: baseSellValue,
+        vipMultiplier,
         state: fisherStateView(session, progressView),
       };
     });
@@ -4805,15 +4961,17 @@ app.post('/api/fisher/rod/buy', requireDb, async (req, res) => {
 
     const result = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
-      const progress = await ensureFisherProgress(db, playerId);
+      await ensureFisherProgress(db, playerId);
+      const progress = (await db.query(`SELECT * FROM player_fisher_progress WHERE player_id = $1 FOR UPDATE`, [playerId])).rows[0];
       const currentTier = Math.max(1, Math.min(5, Number(progress.fisher_rod_tier || 1)));
       if (targetTier <= currentTier) throw new Error('already unlocked');
 
-      const player = await db.query(`SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
-      const currentMoney = Number(player.rows[0]?.clean_money || 0);
-      if (currentMoney < Number(rod.price || 0)) throw new Error('insufficient funds');
-
-      await db.query(`UPDATE players SET clean_money = clean_money - $2, updated_at = NOW() WHERE player_id = $1`, [playerId, Number(rod.price || 0)]);
+      const debited = await db.query(
+        `UPDATE players SET clean_money = clean_money - $2, updated_at = NOW()
+         WHERE player_id = $1 AND clean_money >= $2 RETURNING clean_money`,
+        [playerId, Number(rod.price || 0)],
+      );
+      if (!debited.rows[0]) throw new Error('insufficient funds');
       await db.query(`UPDATE player_fisher_progress SET fisher_rod_tier = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, targetTier]);
 
       return {
@@ -4824,8 +4982,8 @@ app.post('/api/fisher/rod/buy', requireDb, async (req, res) => {
     });
 
     const nextProgress = await ensureFisherProgress(pool, playerId);
-    const session = getFisherSession(playerId);
-    setFisherSession(playerId, session);
+    const session = await getFisherSession(playerId);
+    await setFisherSession(playerId, session);
     res.json({ ...result, state: fisherStateView(session, toFisherProgressView(nextProgress)) });
   } catch (error) {
     res.status(400).json({ error: error.message || 'rod buy failed' });
@@ -4837,29 +4995,28 @@ app.post('/api/fisher/carry/buy', requireDb, async (req, res) => {
     const { playerId } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
-    const session = getFisherSession(playerId);
-    if (session.shiftState !== 'IDLE') {
-      throw new Error('end shift to buy carry');
-    }
-
     const result = await withTransaction(async (db) => {
       await ensurePlayer(db, playerId);
-      const progress = await ensureFisherProgress(db, playerId);
+      const session = await getFisherSession(playerId, db);
+      if (session.shiftState !== 'IDLE') throw new Error('end shift to buy carry');
+      await ensureFisherProgress(db, playerId);
+      const progress = (await db.query(`SELECT * FROM player_fisher_progress WHERE player_id = $1 FOR UPDATE`, [playerId])).rows[0];
       const currentCapacity = Math.max(FISHER_CONFIG.carryCapacityKg, Math.min(FISHER_CONFIG.carryCapacityMaxKg, Number(progress.fisher_carry_capacity_kg || FISHER_CONFIG.carryCapacityKg)));
       if (currentCapacity >= FISHER_CONFIG.carryCapacityMaxKg) {
         throw new Error('carry already maxed');
       }
 
-      const player = await db.query(`SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
-      const currentMoney = Number(player.rows[0]?.clean_money || 0);
-      if (currentMoney < Number(FISHER_CONFIG.carryUpgradeCost || 0)) {
-        throw new Error('insufficient funds');
-      }
-
       const nextCapacity = Math.min(FISHER_CONFIG.carryCapacityMaxKg, currentCapacity + Number(FISHER_CONFIG.carryUpgradeStepKg || 5));
 
-      await db.query(`UPDATE players SET clean_money = clean_money - $2, updated_at = NOW() WHERE player_id = $1`, [playerId, Number(FISHER_CONFIG.carryUpgradeCost || 0)]);
+      const debited = await db.query(
+        `UPDATE players SET clean_money = clean_money - $2, updated_at = NOW()
+         WHERE player_id = $1 AND clean_money >= $2 RETURNING clean_money`,
+        [playerId, Number(FISHER_CONFIG.carryUpgradeCost || 0)],
+      );
+      if (!debited.rows[0]) throw new Error('insufficient funds');
       await db.query(`UPDATE player_fisher_progress SET fisher_carry_capacity_kg = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, nextCapacity]);
+      session.carryCapacityKg = nextCapacity;
+      await setFisherSession(playerId, session, db);
 
       return {
         previousCapacity: currentCapacity,
@@ -4870,9 +5027,9 @@ app.post('/api/fisher/carry/buy', requireDb, async (req, res) => {
 
     const nextProgressRow = await ensureFisherProgress(pool, playerId);
     const nextProgress = toFisherProgressView(nextProgressRow);
-    const nextSession = getFisherSession(playerId);
+    const nextSession = await getFisherSession(playerId);
     nextSession.carryCapacityKg = Number(nextProgress.carryCapacityKg || nextSession.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
-    setFisherSession(playerId, nextSession);
+    await setFisherSession(playerId, nextSession);
 
     res.json({
       ...result,
@@ -4917,10 +5074,12 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
     if (!playerId || !modelId) return res.status(400).json({ error: 'missing fields' });
 
     const result = await withTransaction(async (db) => {
-      const player = await ensurePlayer(db, playerId);
+      await ensurePlayer(db, playerId);
+      const playerResult = await db.query(`SELECT * FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
+      const player = playerResult.rows[0];
       await ensureVehicleCapacity(db, playerId);
 
-      const vmRes = await db.query(`SELECT * FROM vehicle_models WHERE id = $1`, [modelId]);
+      const vmRes = await db.query(`SELECT * FROM vehicle_models WHERE id = $1 FOR UPDATE`, [modelId]);
       const model = vmRes.rows[0];
       if (!model) throw new Error('vehicle not found');
       if (model.stock <= 0) throw new Error('vehicle out of stock');
@@ -4930,11 +5089,11 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
 
       if (useVoucher) {
         const voucherRes = await db.query(
-          `SELECT id FROM inventory_items WHERE player_id = $1 AND item_type = 'VOUCHER_SHOWROOM' AND quantity > 0 ORDER BY created_at ASC LIMIT 1`,
+          `SELECT id, metadata FROM inventory_items WHERE player_id = $1 AND item_type = 'VOUCHER_SHOWROOM' AND quantity > 0 ORDER BY created_at ASC LIMIT 1 FOR UPDATE`,
           [playerId],
         );
         if (!voucherRes.rows[0]) throw new Error('no vouchers available');
-        discountPct = Math.floor(10 + Math.random() * 25);
+        discountPct = Math.max(10, Math.min(35, Math.floor(Number(voucherRes.rows[0].metadata?.discount || 10))));
         finalPrice = Math.floor(finalPrice * (1 - discountPct / 100));
         await consumeInventoryItem(db, voucherRes.rows[0].id, 1);
       }
@@ -4943,14 +5102,16 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
         throw new Error('insufficient funds');
       }
 
-      await db.query(
-        `UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`,
+      const debited = await db.query(
+        `UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2 AND clean_money >= $1 RETURNING clean_money`,
         [finalPrice, playerId],
       );
-      await db.query(
-        `UPDATE vehicle_models SET stock = stock - 1 WHERE id = $1`,
+      if (!debited.rows[0]) throw new Error('insufficient funds');
+      const stockUpdate = await db.query(
+        `UPDATE vehicle_models SET stock = stock - 1 WHERE id = $1 AND stock > 0 RETURNING stock`,
         [modelId],
       );
+      if (!stockUpdate.rows[0]) throw new Error('vehicle out of stock');
       const inserted = await db.query(
         `INSERT INTO owned_vehicles (player_id, model_id, purchase_price, purchase_source)
          VALUES ($1, $2, $3, 'SHOWROOM')
@@ -4983,78 +5144,71 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
   }
 });
 
-// ========== ROULETTE HELPERS ==========
-
-const ROULETTE_REWARDS = [
-  { name: 'Vehicul Suvenir', tier: 'legendary', itemType: null, valueMin: 2_000_000, valueMax: 5_000_000 },
-  { name: 'VIP Gold', tier: 'epic', itemType: 'VIP_GOLD', valueMin: 0, valueMax: 0 },
-  { name: 'VIP Silver', tier: 'epic', itemType: 'VIP_SILVER', valueMin: 0, valueMax: 0 },
-  { name: 'Mystery Box', tier: 'epic', itemType: 'MYSTERY_BOX', valueMin: 5_000, valueMax: 10_000_000 },
-  { name: 'Fragmente Ruleta', tier: 'rare', itemType: 'ROULETTE_FRAGMENTS', valueMin: 5, valueMax: 5 },
-  { name: 'FlowCoins', tier: 'rare', itemType: null, valueMin: 10, valueMax: 10 },
-  { name: 'Slot Vehicle', tier: 'rare', itemType: 'SLOT_VEHICLE', valueMin: 1, valueMax: 1 },
-  { name: 'Voucher Showroom', tier: 'rare', itemType: 'VOUCHER_SHOWROOM', valueMin: 1, valueMax: 1 },
-  { name: 'Job Boost Pilot', tier: 'uncommon', itemType: 'JOB_BOOST_PILOT', valueMin: 1, valueMax: 1 },
-  { name: 'Scutire Taxe', tier: 'uncommon', itemType: 'TAX_EXEMPTION', valueMin: 1, valueMax: 1 },
-  { name: 'Xenon Vehicul', tier: 'common', itemType: 'XENON_VEHICLE', valueMin: 5_000, valueMax: 150_000 },
-  { name: 'Bani', tier: 'common', itemType: null, valueMin: 25_000, valueMax: 50_000 },
-];
-
-const TIER_WEIGHT = { legendary: 2, epic: 8, rare: 18, uncommon: 30, common: 42 };
-
-function pickWeightedReward() {
-  const totalWeight = Object.values(TIER_WEIGHT).reduce((a, b) => a + b, 0);
-  let roll = Math.random() * totalWeight;
-  for (const reward of ROULETTE_REWARDS) {
-    roll -= TIER_WEIGHT[reward.tier];
-    if (roll <= 0) return reward;
-  }
-  return ROULETTE_REWARDS[ROULETTE_REWARDS.length - 1];
-}
-
 // POST /api/roulette/spin - Spin the roulette
-app.post('/api/roulette/spin', requireDb, async (req, res) => {
+const rouletteRateLimit = createRateLimiter({ windowMs: 60_000, max: 15, key: (req) => req.playerId || req.ip });
+app.post('/api/roulette/spin', rouletteRateLimit, requireDb, async (req, res) => {
   try {
     const { playerId, costType } = req.body || {};
     if (!playerId || !costType) return res.status(400).json({ error: 'missing fields' });
+    if (!['cash', 'flowcoins', 'fragments'].includes(costType)) return res.status(400).json({ error: 'invalid cost type' });
 
     const result = await withTransaction(async (db) => {
-      const player = await ensurePlayer(db, playerId);
-      const cost = costType === 'flowcoins' ? 30 : 100_000;
-      if (costType === 'flowcoins' && player.flow_coins < cost) throw new Error('insufficient flowcoins');
+      await ensurePlayer(db, playerId);
+      const playerResult = await db.query(`SELECT * FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
+      const player = playerResult.rows[0];
+      const cost = costType === 'flowcoins' ? 30 : costType === 'fragments' ? 4 : 100_000;
+      if (costType === 'flowcoins' && Number(player.flow_coins) < cost) throw new Error('insufficient flowcoins');
+      if (costType === 'fragments' && Number(player.roulette_fragments) < cost) throw new Error('insufficient fragments');
       if (costType === 'cash' && Number(player.clean_money) < cost) throw new Error('insufficient funds');
 
       if (costType === 'flowcoins') {
         await db.query(`UPDATE players SET flow_coins = flow_coins - $1 WHERE player_id = $2`, [cost, playerId]);
+      } else if (costType === 'fragments') {
+        await db.query(`UPDATE players SET roulette_fragments = roulette_fragments - $1 WHERE player_id = $2`, [cost, playerId]);
       } else {
         await db.query(`UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`, [cost, playerId]);
       }
 
       const reward = pickWeightedReward();
-      const payout = reward.valueMin === reward.valueMax
-        ? reward.valueMin
-        : Math.floor(reward.valueMin + Math.random() * (reward.valueMax - reward.valueMin));
+      const payout = rewardPayout(reward);
 
-      let rewardType = reward.itemType || 'CASH';
+      const rewardType = reward.rewardType;
       let rewardSubtitle = '';
       let emoji = '🎁';
       let metadata = {};
 
-      if (reward.name === 'Bani') {
+      if (reward.rewardType === 'CASH') {
         await db.query(`UPDATE players SET clean_money = clean_money + $1 WHERE player_id = $2`, [payout, playerId]);
         rewardSubtitle = `+${payout.toLocaleString('ro-RO')} $`;
         emoji = '💵';
-      } else if (reward.name === 'FlowCoins') {
+      } else if (reward.rewardType === 'FLOW_COINS') {
         await db.query(`UPDATE players SET flow_coins = flow_coins + $1 WHERE player_id = $2`, [payout, playerId]);
         rewardSubtitle = `+${payout} FlowCoins`;
         emoji = '🟠';
-      } else if (reward.itemType === 'ROULETTE_FRAGMENTS') {
+      } else if (reward.rewardType === 'ROULETTE_FRAGMENTS') {
         await db.query(`UPDATE players SET roulette_fragments = roulette_fragments + $1 WHERE player_id = $2`, [payout, playerId]);
         rewardSubtitle = `+${payout} fragmente`;
         emoji = '🪙';
-      } else if (reward.itemType) {
-        metadata = reward.itemType === 'VOUCHER_SHOWROOM' ? { discount: randomInt(10, 35) } : {};
-        await addInventoryItem(db, playerId, reward.itemType, payout || 1, metadata);
+      } else if (reward.rewardType === 'SOUVENIR_VEHICLE') {
+        await ensureVehicleCapacity(db, playerId);
+        const modelResult = await db.query(`SELECT * FROM vehicle_models ORDER BY RANDOM() LIMIT 1`);
+        const model = modelResult.rows[0];
+        if (!model) throw new Error('no souvenir vehicle available');
+        const vehicle = await db.query(
+          `INSERT INTO owned_vehicles (player_id, model_id, purchase_price, purchase_source)
+           VALUES ($1, $2, 0, 'ROULETTE') RETURNING id`,
+          [playerId, model.id],
+        );
+        metadata = { vehicleId: vehicle.rows[0].id, modelId: model.id, modelName: model.name, brand: model.brand };
+        rewardSubtitle = model.name;
+        emoji = '🚗';
+      } else {
+        metadata = reward.rewardType === 'VOUCHER_SHOWROOM'
+          ? { discount: randomInt(10, 35) }
+          : reward.rewardType === 'XENON_VEHICLE'
+            ? { marketValue: randomInt(5_000, 150_000) }
+            : {};
+        await addInventoryItem(db, playerId, reward.rewardType, payout, metadata);
         rewardSubtitle = reward.name;
         emoji = {
           VIP_GOLD: '💎',
@@ -5065,8 +5219,18 @@ app.post('/api/roulette/spin', requireDb, async (req, res) => {
           JOB_BOOST_PILOT: '✈️',
           TAX_EXEMPTION: '💸',
           XENON_VEHICLE: '🔩',
-        }[reward.itemType] || '🎁';
+        }[reward.rewardType] || '🎁';
       }
+
+      await db.query(
+        `INSERT INTO player_stats (player_id, roulette_spent, roulette_won, last_seen, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         ON CONFLICT (player_id) DO UPDATE SET
+           roulette_spent = player_stats.roulette_spent + $2,
+           roulette_won = player_stats.roulette_won + $3,
+           last_seen = NOW(), updated_at = NOW()`,
+        [playerId, costType === 'cash' ? cost : 0, reward.rewardType === 'CASH' ? payout : 0],
+      );
 
       const updatedPlayerRes = await db.query(
         `SELECT clean_money, flow_coins, roulette_fragments FROM players WHERE player_id = $1`,
@@ -5144,6 +5308,35 @@ app.post('/api/mystery/open', requireDb, async (req, res) => {
   }
 });
 
+app.post('/api/inventory/xenon/apply', requireDb, async (req, res) => {
+  try {
+    const { playerId, itemId, vehicleId } = req.body || {};
+    if (!playerId || !itemId || !vehicleId) return res.status(400).json({ error: 'missing fields' });
+    const result = await withTransaction(async (db) => {
+      const itemResult = await db.query(
+        `SELECT * FROM inventory_items
+         WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0
+         FOR UPDATE`,
+        [itemId, playerId],
+      );
+      if (!itemResult.rows[0]) throw new Error('xenon kit not found');
+      const vehicleResult = await db.query(
+        `SELECT id, xenon_enabled FROM owned_vehicles WHERE id = $1 AND player_id = $2 FOR UPDATE`,
+        [vehicleId, playerId],
+      );
+      const vehicle = vehicleResult.rows[0];
+      if (!vehicle) throw new Error('vehicle not found');
+      if (vehicle.xenon_enabled) throw new Error('vehicle already has xenon');
+      await consumeInventoryItem(db, itemId, 1);
+      await db.query(`UPDATE owned_vehicles SET xenon_enabled = TRUE WHERE id = $1`, [vehicleId]);
+      return { vehicleId: Number(vehicleId) };
+    });
+    return res.json({ ok: true, effect: 'xenon_applied', metadata: result });
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'xenon apply failed' });
+  }
+});
+
 // POST /api/inventory/use - Use an inventory item
 app.post('/api/inventory/use', requireDb, async (req, res) => {
   try {
@@ -5156,6 +5349,12 @@ app.post('/api/inventory/use', requireDb, async (req, res) => {
       if (!item) throw new Error('item not found');
       if (item.quantity < 1) throw new Error('not enough items');
 
+      if (item.item_type === 'JOB_BOOST_PILOT' || item.item_type === 'JOB_BOOST_SLEEP') {
+        throw new Error('Use this boost from its career page.');
+      }
+      const directlyUsable = new Set(['SLOT_VEHICLE', 'TAX_EXEMPTION', 'VIP_GOLD', 'VIP_SILVER']);
+      if (!directlyUsable.has(item.item_type)) throw new Error('item cannot be used directly');
+
       let effect = 'item_used';
       const metadata = {};
 
@@ -5165,12 +5364,8 @@ app.post('/api/inventory/use', requireDb, async (req, res) => {
         await db.query(`UPDATE players SET vehicle_slots_extra = vehicle_slots_extra + 1 WHERE player_id = $1`, [playerId]);
         effect = 'vehicle_slot_added';
       } else if (item.item_type === 'TAX_EXEMPTION') {
-        await db.query(`UPDATE players SET skip_next_tax = TRUE WHERE player_id = $1`, [playerId]);
-        effect = 'tax_exemption_activated';
-      } else if (item.item_type === 'JOB_BOOST_PILOT') {
-        effect = 'pilot_boost_reserved';
-      } else if (item.item_type === 'JOB_BOOST_SLEEP') {
-        effect = 'sleep_boost_reserved';
+        await db.query(`UPDATE players SET clean_money = clean_money + 100000, updated_at = NOW() WHERE player_id = $1`, [playerId]);
+        effect = 'legacy_tax_exemption_refunded';
       } else if (item.item_type === 'VIP_GOLD') {
         await db.query(
           `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'VIP_GOLD', NOW() + INTERVAL '10 minutes')`,
@@ -5219,69 +5414,8 @@ async function seedBotPosts() {
   }
 }
 
-app.get('/api/adminpanelv2/dashboard', requireDb, async (req, res) => {
-  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-
-  try {
-    const [playersResult, summaryResult] = await Promise.all([
-      pool.query(
-        `
-        SELECT
-          ps.player_id,
-          COALESCE(NULLIF(TRIM(p.display_name), ''), ps.player_id) AS nickname,
-          cash_available,
-          roulette_spent,
-          roulette_won,
-          total_net,
-          time_spent,
-          leaves_collected,
-          white_processed,
-          blue_processed,
-          farm_earned,
-          sleep_count,
-          sleep_money,
-          time_pilot,
-          last_seen,
-          city,
-          country,
-          path
-        FROM player_stats ps
-        LEFT JOIN players p ON p.player_id = ps.player_id
-        ORDER BY ps.updated_at DESC
-        LIMIT 300;
-        `,
-      ),
-      pool.query(
-        `
-        SELECT
-          COUNT(*)::INT AS total_players,
-          COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '90 seconds')::INT AS online_now,
-          COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '15 minutes')::INT AS active_recent
-        FROM player_stats;
-        `,
-      ),
-    ]);
-
-    const summaryRow = summaryResult.rows[0] || { total_players: 0, online_now: 0, active_recent: 0 };
-
-    res.json({
-      summary: {
-        totalPlayers: summaryRow.total_players,
-        onlineNow: summaryRow.online_now,
-        activeRecent: summaryRow.active_recent,
-      },
-      players: playersResult.rows,
-    });
-  } catch (e) {
-    console.error('dashboard error', e);
-    res.status(500).json({ error: 'dashboard failed' });
-  }
-});
-
 app.use(express.static(distPath));
-app.get('*', (_req, res) => {
+app.get('/{*splat}', (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
@@ -5289,7 +5423,6 @@ app.get('*', (_req, res) => {
 
 const VEHICLE_MODELS = [
   { brand: 'DRAVIA', name: 'Dravia Nova', base_price: 100_000, is_jackpot: false, image_path: '/cars/Dravia Nova.png' },
-  { brand: 'DRAVIA', name: 'Dravia Dustera', base_price: 180_000, is_jackpot: false, image_path: '/cars/Dravia Dustera.png' },
   { brand: 'BERVIK', name: 'Bervik M4R', base_price: 650_000, is_jackpot: false, image_path: '/cars/Bervik M4R.png' },
   { brand: 'BERVIK', name: 'Bervik X8', base_price: 900_000, is_jackpot: false, image_path: '/cars/Bervik X8.png' },
   { brand: 'AURON', name: 'Auron RS7', base_price: 1_200_000, is_jackpot: false, image_path: '/cars/Auron RS7.png' },
@@ -5344,10 +5477,21 @@ async function seedNpcSellers() {
 }
 
 async function refreshNpcListings() {
-  await pool.query(`DELETE FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`);
+  return withTransaction(async (db) => {
+  await db.query(`SELECT pg_advisory_xact_lock(hashtextextended('market:npc:refresh', 0))`);
+  await db.query(
+    `UPDATE market_offers
+     SET status = 'REJECTED', updated_at = NOW()
+     WHERE status = 'PENDING'
+       AND listing_id IN (SELECT id FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE')`,
+  );
+  await db.query(
+    `UPDATE market_listings SET status = 'EXPIRED', updated_at = NOW()
+     WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`,
+  );
 
-  const vehicleRows = await pool.query(`SELECT id, brand, name, base_price FROM vehicle_models`);
-  const clothingRows = await pool.query(`SELECT id, name, category, rarity, min_value, max_value FROM clothing_items`);
+  const vehicleRows = await db.query(`SELECT id, brand, name, base_price FROM vehicle_models`);
+  const clothingRows = await db.query(`SELECT id, name, category, rarity, min_value, max_value FROM clothing_items`);
 
   const npcCap = 10;
   const sellers = [...NPC_SELLERS].sort(() => Math.random() - 0.5);
@@ -5366,7 +5510,7 @@ async function refreshNpcListings() {
         marketPrice: Number(vehicle.base_price),
         imagePath: getVehicleImagePath(vehicle.name),
       };
-      await pool.query(
+      await db.query(
         `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
          VALUES ('NPC', $1, 'VEHICLE', $2, $3, $4::jsonb, $5, 'ACTIVE')`,
         [seller.id, vehicle.id, vehicle.name, JSON.stringify(assetMetadata), askPrice],
@@ -5388,7 +5532,7 @@ async function refreshNpcListings() {
         marketPrice: midValue,
         imagePath: getClothingImagePath(clothing.name, clothing.category),
       };
-      await pool.query(
+      await db.query(
         `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
          VALUES ('NPC', $1, 'CLOTHING', $2, $3, $4::jsonb, $5, 'ACTIVE')`,
         [seller.id, clothing.id, clothing.name, JSON.stringify(assetMetadata), askPrice],
@@ -5396,6 +5540,8 @@ async function refreshNpcListings() {
       created += 1;
     }
   }
+  return created;
+  });
 }
 
 async function seedGameData() {
@@ -5441,6 +5587,10 @@ const startServer = () => {
     }
   });
 };
+
+if (!userAuthConfigurationReady()) {
+  throw new Error('USER_SECRET must contain at least 32 characters in production');
+}
 
 if (!pool) {
   console.warn('DATABASE_URL is missing. Starting server in degraded mode.');

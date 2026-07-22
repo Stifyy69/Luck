@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
+import { publishCityProgress } from '../lib/cityProgressApi';
+import type { CityProgress, CityProgressReward } from '../lib/cityProgress';
 import type { PizzerOrderOption, PizzerStateResponse } from '../types/game';
 
 type Popup = { text: string; isError?: boolean } | null;
@@ -168,10 +170,7 @@ export default function PizzerPage() {
   const xpPercent = useMemo(() => {
     if (!progress) return 0;
     if (!progress.nextLevelXp) return 100;
-    const levelStart = Number(progress.currentLevelXp || 0);
-    const levelEnd = Number(progress.nextLevelXp || levelStart + 1);
-    const current = Number(progress.xp || 0);
-    return clampPercent(((current - levelStart) / Math.max(1, levelEnd - levelStart)) * 100);
+    return clampPercent((Number(progress.currentLevelXp || 0) / Math.max(1, Number(progress.nextLevelXp || 1))) * 100);
   }, [progress]);
 
   const scrollToDispatch = useCallback(() => {
@@ -292,6 +291,7 @@ export default function PizzerPage() {
       pushPopup('Completing customer handoff...');
       await wait(800);
       const payload = await api.pizzerHandover(playerId, 'DOOR');
+      if (payload.cityProgress) publishCityProgress(payload.cityProgress as CityProgress, payload.cityReward as CityProgressReward | undefined);
       setState(payload.state);
       setAcceptedOption(null);
       refresh();

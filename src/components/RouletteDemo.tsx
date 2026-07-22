@@ -7,15 +7,14 @@ import SharedStatsPanel from './SharedStatsPanel';
 
 const rewards = [
   { name: 'Vehicul Suvenir', subtitle: 'Editie limitata', tier: 'legendary', emoji: '🚗' },
-  { name: 'VIP Gold', subtitle: '6-12 zile', tier: 'epic', emoji: '💎' },
-  { name: 'VIP Silver', subtitle: '6-12 zile', tier: 'epic', emoji: '💠' },
+  { name: 'VIP Gold', subtitle: 'x2 rewards, 10 minute', tier: 'epic', emoji: '💎' },
+  { name: 'VIP Silver', subtitle: 'x2 rewards, 5 minute', tier: 'epic', emoji: '💠' },
   { name: 'Mystery Box', subtitle: 'Obiecte unice', tier: 'epic', emoji: '📦' },
   { name: 'Fragmente Ruleta', subtitle: 'x5 fragmente', tier: 'rare', emoji: '🪙' },
   { name: 'FlowCoins', subtitle: '10 FlowCoins', tier: 'rare', emoji: '🟠' },
   { name: 'Slot Vehicle', subtitle: '1 slot', tier: 'rare', emoji: '➕' },
   { name: 'Voucher Showroom', subtitle: '1 voucher', tier: 'rare', emoji: '🎟️' },
   { name: 'Job Boost Pilot', subtitle: 'Single run x2', tier: 'uncommon', emoji: '📈' },
-  { name: 'Scutire Taxe', subtitle: 'Skip next tax', tier: 'uncommon', emoji: '💸' },
   { name: 'Xenon Vehicul', subtitle: '1 pachet xenon', tier: 'common', emoji: '🔩' },
   { name: 'Bani', subtitle: 'suma de bani', tier: 'common', emoji: '💵' },
 ];
@@ -68,7 +67,7 @@ export default function RouletteDemo() {
   const [selectedReward, setSelectedReward] = useState(null);
   const [showWinModal, setShowWinModal] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(START_INDEX);
-  const [latestWins, setLatestWins] = useState([rewards[0], rewards[1], rewards[4], rewards[11]]);
+  const [latestWins, setLatestWins] = useState([rewards[0], rewards[1], rewards[4], rewards[10]]);
   const [fragments, setFragments] = useState(0);
   const [flowCoinsBalance, setFlowCoinsBalance] = useState(0);
   const [cashBalance, setCashBalance] = useState(0);
@@ -193,11 +192,12 @@ export default function RouletteDemo() {
     }
   };
 
-  const handleSpin = async (costType) => {
+  const handleSpin = async (costType: 'cash' | 'ogc' | 'fragments') => {
     if (!playerId || !player) return;
     if (isSpinning || !viewportWidth) return;
     if (costType === 'cash' && cashBalance < 100_000) return;
     if (costType === 'ogc' && flowCoinsBalance < 30) return;
+    if (costType === 'fragments' && fragments < 4) return;
 
     clearScheduledTasks();
     setErrorMessage(null);
@@ -209,7 +209,7 @@ export default function RouletteDemo() {
 
     let spinResult;
     try {
-      spinResult = await api.rouletteSpin(playerId, costType === 'cash' ? 'cash' : 'flowcoins');
+      spinResult = await api.rouletteSpin(playerId, costType === 'cash' ? 'cash' : costType === 'ogc' ? 'flowcoins' : 'fragments');
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : 'Spin failed');
       return;
@@ -391,6 +391,14 @@ export default function RouletteDemo() {
               className="w-full rounded-[10px] border border-orange-300/30 bg-gradient-to-r from-orange-500 to-amber-400 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(251,146,60,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
             >
               {isSpinning && activeCost === 'ogc' ? 'Se deschide...' : 'Deschide cu 30 FlowCoins'}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSpin('fragments')}
+              disabled={!player || isSpinning || fragments < 4}
+              className="w-full rounded-[10px] border border-fuchsia-300/30 bg-gradient-to-r from-fuchsia-600 to-violet-500 px-6 py-2.5 text-xs font-bold uppercase tracking-[0.04em] text-white shadow-[0_7px_24px_rgba(192,38,211,0.25)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[176px]"
+            >
+              {isSpinning && activeCost === 'fragments' ? 'Se deschide...' : 'Deschide cu 4 fragmente'}
             </button>
           </div>
 

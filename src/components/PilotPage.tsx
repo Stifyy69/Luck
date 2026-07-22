@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
+import { publishCityProgress } from '../lib/cityProgressApi';
+import type { CityProgress, CityProgressReward } from '../lib/cityProgress';
 import type { PilotRouteView, PilotStateResponse } from '../types/game';
 
 type Popup = { text: string; isError?: boolean } | null;
@@ -162,6 +164,7 @@ export default function PilotPage() {
 
     await wait(500);
     const finished = await api.pilotFlightComplete(playerId);
+    if (finished.cityProgress) publishCityProgress(finished.cityProgress as CityProgress, finished.cityReward as CityProgressReward | undefined);
     setState(finished.state);
     await refresh();
     setOverlayOpen(false);

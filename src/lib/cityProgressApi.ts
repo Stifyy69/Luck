@@ -10,6 +10,7 @@ export type CityProgressEventDetail = {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...options,
+    credentials: options?.credentials || 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(options?.headers || {}),
@@ -54,12 +55,3 @@ export const advanceCityTutorial = (playerId: string, step?: number) => tutorial
 export const completeCityTutorial = (playerId: string) => tutorialAction(playerId, 'complete');
 export const skipCityTutorial = (playerId: string) => tutorialAction(playerId, 'skip');
 export const replayCityTutorial = (playerId: string) => tutorialAction(playerId, 'replay');
-
-export async function awardCayoCityXp(playerId: string, stage: 'COLLECT' | 'PROCESS' | 'REFINE', eventId: string) {
-  const payload = await request<{ progress: CityProgress; cityReward: CityProgressReward }>(`/api/city/cayo/complete`, {
-    method: 'POST',
-    body: JSON.stringify({ playerId, stage, eventId }),
-  });
-  publishCityProgress(payload.progress, payload.cityReward);
-  return payload;
-}

@@ -59,8 +59,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    api
-      .bootstrap(playerId)
+    api.ensureSession()
+      .then(async (session) => {
+        const sessionPlayerId = String(session.playerId || '');
+        if (!sessionPlayerId) throw new Error('Authenticated account has no player profile');
+        if (sessionPlayerId !== playerId) {
+          localStorage.setItem(PLAYER_KEY, sessionPlayerId);
+          setPlayerIdState(sessionPlayerId);
+        }
+        return api.bootstrap(sessionPlayerId);
+      })
       .then((data) => setPlayer(data))
       .catch((e: unknown) =>
         setError(e instanceof Error ? e.message : 'Failed to load player data'),
@@ -74,8 +82,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const syncCityProgress = () => refresh();
+    const syncSession = () => refresh();
+    const syncPlayer = () => refresh();
     window.addEventListener('city-progress-updated', syncCityProgress as EventListener);
-    return () => window.removeEventListener('city-progress-updated', syncCityProgress as EventListener);
+    window.addEventListener('luck-session-changed', syncSession as EventListener);
+    window.addEventListener('cityflow-player-refresh', syncPlayer as EventListener);
+    return () => {
+      window.removeEventListener('city-progress-updated', syncCityProgress as EventListener);
+      window.removeEventListener('luck-session-changed', syncSession as EventListener);
+      window.removeEventListener('cityflow-player-refresh', syncPlayer as EventListener);
+    };
   }, [refresh]);
 
   return (

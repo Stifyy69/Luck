@@ -39,8 +39,8 @@ const ITEM_DESC: Record<string, string> = {
   VOUCHER_SHOWROOM: 'Discount on showroom purchases',
   JOB_BOOST_PILOT: 'x2 Pilot reward (single-use, consumed on Pilot page)',
   JOB_BOOST_SLEEP: 'x2 Sleep reward (single-use, consumed on Sleep page)',
-  TAX_EXEMPTION: 'Skips the next tax collection',
-  XENON_VEHICLE: 'Vehicle xenon package',
+  TAX_EXEMPTION: 'Legacy item: redeem for a 100,000 $ compensation',
+  XENON_VEHICLE: 'Applies xenon to your first eligible vehicle',
   CLOTHING: 'Clothing item from mystery boxes',
   VIP_GOLD: 'x2 reward for 10 minutes',
   VIP_SILVER: 'x2 reward for 5 minutes',
@@ -51,6 +51,7 @@ const USABLE_ITEMS = new Set([
   'TAX_EXEMPTION',
   'VIP_GOLD',
   'VIP_SILVER',
+  'XENON_VEHICLE',
 ]);
 
 const MYSTERY_ITEMS = new Set(['MYSTERY_BOX']);
@@ -112,11 +113,20 @@ export default function InventoryPage() {
         setMysteryResult(result.clothing);
         showPopup(`Opened: ${result.clothing.name}`);
       } else if (USABLE_ITEMS.has(item.itemType)) {
-        const result = await api.inventoryUse(playerId, item.id);
+        const targetVehicle = item.itemType === 'XENON_VEHICLE'
+          ? player?.ownedVehicles.find((vehicle) => !vehicle.xenonEnabled)
+          : null;
+        if (item.itemType === 'XENON_VEHICLE' && !targetVehicle) {
+          throw new Error('No eligible vehicle is available for xenon.');
+        }
+        const result = item.itemType === 'XENON_VEHICLE' && targetVehicle
+          ? await api.inventoryApplyXenon(playerId, item.id, targetVehicle.id)
+          : await api.inventoryUse(playerId, item.id);
         refresh();
         const effectMsg: Record<string, string> = {
           vehicle_slot_added: 'Vehicle slot added.',
-          tax_exemption_activated: 'Tax exemption activated.',
+          legacy_tax_exemption_refunded: 'Legacy tax exemption redeemed for 100,000 $.',
+          xenon_applied: `Xenon applied to ${targetVehicle?.modelName || 'vehicle'}.`,
           pilot_boost_activated: 'Pilot boost activated.',
           vip_gold_activated: 'VIP Gold activated.',
           vip_silver_activated: 'VIP Silver activated.',

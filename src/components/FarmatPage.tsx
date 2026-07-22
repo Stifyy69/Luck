@@ -1,44 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import PageDisclaimer from './PageDisclaimer';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
+import { publishCityProgress } from '../lib/cityProgressApi';
+import type { CityProgress, CityProgressReward } from '../lib/cityProgress';
+import type { CayoActionResult, CayoState } from '../types/game';
 
 type ActionKey = 'collect_leaves' | 'process_pack' | 'refine_pack';
 type PopupType = 'success' | 'danger' | 'info';
-
-const GAME_KEY = 'luck_game_state_v1';
-const GAME_SALT = 'stifyy-ogromania-salt';
 
 const ACTION_ART: Record<ActionKey, string> = {
   collect_leaves: '/jobs/cayo/leaves.svg',
   process_pack: '/jobs/cayo/white-pack.svg',
   refine_pack: '/jobs/cayo/blue-pack.svg',
 };
-
-function signPayload(payload: unknown) {
-  const raw = JSON.stringify(payload) + GAME_SALT;
-  let hash = 0;
-  for (let i = 0; i < raw.length; i += 1) hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
-  return String(hash);
-}
-
-function loadGameState() {
-  try {
-    const raw = localStorage.getItem(GAME_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.data || !parsed?.sig) return null;
-    return signPayload(parsed.data) === parsed.sig ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveGameState(data: unknown) {
-  try {
-    localStorage.setItem(GAME_KEY, JSON.stringify({ data, sig: signPayload(data) }));
-  } catch {}
-}
 
 const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeSpentHours: number; run: string; stage: string }> = {
   collect_leaves: {
@@ -73,158 +48,73 @@ function fmt(value: number) {
 
 export default function FarmatPage() {
   const { player, playerId, refresh } = usePlayer();
-  const saved = typeof window !== 'undefined' ? loadGameState() : null;
-
-  const [frunze, setLeaves] = useState(saved?.frunze ?? 0);
-  const [plicuriAlbe, setPlicuriAlbe] = useState(saved?.plicuriAlbe ?? 0);
-  const [plicuriAlbastre, setPlicuriAlbastre] = useState(saved?.plicuriAlbastre ?? 0);
-  const [baniMurdari, setBaniMurdari] = useState(saved?.baniMurdari ?? 0);
-  const [baniCurati, setBaniCurati] = useState(saved?.cashBalance ?? saved?.baniCurati ?? 1_000_000);
-  const didReconcileCash = useRef(false);
+  const [serverState, setServerState] = useState<CayoState | null>(null);
 
   const [activeAction, setActiveAction] = useState<ActionKey | null>(null);
   const [timer, setTimer] = useState(0);
-
-  const [timeFarm, setTimeFarm] = useState(saved?.timeFarm ?? saved?.timeLostFarm ?? 0);
-  const [timeSleep, setTimeSleep] = useState(saved?.timeSleep ?? 0);
-  const [processedLeaves, setProcessedLeaves] = useState(saved?.processedLeaves ?? 0);
-  const [processedAlbe, setProcessedAlbe] = useState(saved?.processedWhite ?? 0);
-  const [processedAlbastre, setProcessedAlbastre] = useState(saved?.processedBlue ?? 0);
-  const [farmEarned, setFarmEarned] = useState(saved?.farmEarned ?? 0);
-  const [rouletteSpent, setRouletteSpent] = useState(saved?.rouletteSpent ?? 0);
-  const [rouletteWon, setRouletteWon] = useState(saved?.rouletteWon ?? 0);
-
   const [popup, setPopup] = useState<null | { type: PopupType; text: string }>(null);
   const [confirmConvert, setConfirmConvert] = useState<null | { key: ActionKey; needed: number; cleanCost: number }>(null);
   const [isConverting, setIsConverting] = useState(false);
 
   useEffect(() => {
-    const latest = loadGameState();
-    if (!latest) return;
-    setRouletteSpent(latest.rouletteSpent ?? 0);
-    setRouletteWon(latest.rouletteWon ?? 0);
-  }, []);
+    let cancelled = false;
+    api.cayoState(playerId)
+      .then((payload) => { if (!cancelled) setServerState(payload.state); })
+      .catch((error) => { if (!cancelled) setPopup({ type: 'danger', text: error instanceof Error ? error.message : 'Cayo state failed.' }); });
+    return () => { cancelled = true; };
+  }, [playerId]);
 
-  useEffect(() => {
-    if (!player || didReconcileCash.current) return;
-    didReconcileCash.current = true;
-
-    const backendCash = Number(player.cleanMoney ?? 0);
-    const latest = loadGameState() || {};
-    const localCash = Number(latest.cashBalance ?? latest.baniCurati ?? backendCash);
-
-    if (localCash > backendCash) {
-      const delta = localCash - backendCash;
-      api.playerCashAdjust(playerId, delta)
-        .then((result) => {
-          setBaniCurati(Number(result.cleanMoney));
-          const newest = loadGameState() || {};
-          saveGameState({
-            ...newest,
-            cashBalance: Number(result.cleanMoney),
-            baniCurati: Number(result.cleanMoney),
-          });
-          refresh();
-        })
-        .catch(() => {
-          setBaniCurati(backendCash);
-        });
-      return;
-    }
-
-    setBaniCurati(backendCash);
-  }, [player, playerId, refresh]);
-
-  useEffect(() => {
-    const existing = loadGameState() || {};
-    saveGameState({
-      ...existing,
-      frunze,
-      plicuriAlbe,
-      plicuriAlbastre,
-      baniMurdari,
-      baniCurati,
-      timeFarm,
-      timeSleep,
-      processedLeaves,
-      processedWhite: processedAlbe,
-      processedBlue: processedAlbastre,
-      farmEarned,
-      rouletteSpent,
-      rouletteWon,
-      cashBalance: baniCurati,
-      fragments: saved?.fragments ?? 0,
-      ogCoinsBalance: saved?.ogCoinsBalance ?? 0,
-      bonusSpins: saved?.bonusSpins ?? 0,
-    });
-  }, [frunze, plicuriAlbe, plicuriAlbastre, baniMurdari, baniCurati, timeFarm, timeSleep, processedLeaves, processedAlbe, processedAlbastre, farmEarned, rouletteSpent, rouletteWon, saved]);
+  const frunze = serverState?.leaves ?? 0;
+  const plicuriAlbe = serverState?.whitePacks ?? 0;
+  const plicuriAlbastre = serverState?.bluePacks ?? 0;
+  const baniMurdari = serverState?.dirtyMoney ?? 0;
+  const baniCurati = serverState?.cleanMoney ?? player?.cleanMoney ?? 0;
 
   const pushPopup = (type: PopupType, text: string) => {
     setPopup({ type, text });
     window.setTimeout(() => setPopup(null), 3200);
   };
 
-  const canRun = activeAction === null;
+  const canRun = activeAction === null && !isConverting;
 
-  const startAction = (key: ActionKey, options?: { convertedDirtyCost?: number }) => {
+  const operationId = (prefix: string) => {
+    const suffix = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().replace(/-/g, '')
+      : `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+    return `${prefix}_${suffix}`;
+  };
+
+  const applyResult = (result: CayoActionResult) => {
+    setServerState(result.state);
+    if (result.cityProgress) {
+      publishCityProgress(result.cityProgress as CityProgress, (result.cityReward || null) as CityProgressReward | null);
+    }
+    refresh();
+  };
+
+  const startAction = async (key: ActionKey, useCleanForShortfall = false) => {
     const action = actions[key];
-    const convertedDirtyCost = options?.convertedDirtyCost ?? 0;
-    const dirtyCost = key === 'process_pack' ? 900_000 : key === 'refine_pack' ? 100_000 : 0;
-    const dirtyDebit = Math.max(0, dirtyCost - convertedDirtyCost);
-
     setActiveAction(key);
     setTimer(action.duration);
-
-    let remaining = action.duration;
-    const interval = window.setInterval(() => {
-      remaining -= 1;
-      setTimer(remaining);
-
-      if (remaining <= 0) {
-        window.clearInterval(interval);
-
-        const caught = Math.random() < action.risk / 100;
-        setTimeFarm((current) => current + action.timeSpentHours);
-
-        if (caught) {
-          if (key === 'process_pack') {
-            setLeaves((current) => Math.max(0, current - 1200));
-            if (dirtyDebit > 0) setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
-          }
-          if (key === 'refine_pack') {
-            setPlicuriAlbe((current) => Math.max(0, current - 400));
-            if (dirtyDebit > 0) setBaniMurdari((current) => Math.max(0, current - dirtyDebit));
-          }
-          pushPopup('danger', 'POLICE RAID!!!');
-          setActiveAction(null);
-          return;
-        }
-
-        if (key === 'collect_leaves') {
-          setLeaves((current) => current + 1200);
-          setProcessedLeaves((current) => current + 1200);
-          pushPopup('success', '+1200 leaves.');
-        }
-
-        if (key === 'process_pack') {
-          setLeaves((current) => current - 1200);
-          setPlicuriAlbe((current) => current + 400);
-          if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
-          setProcessedAlbe((current) => current + 400);
-          pushPopup('success', 'Conversion complete: 1200 leaves -> 400 white packs.');
-        }
-
-        if (key === 'refine_pack') {
-          setPlicuriAlbe((current) => current - 400);
-          setPlicuriAlbastre((current) => current + 800);
-          if (dirtyDebit > 0) setBaniMurdari((current) => current - dirtyDebit);
-          setProcessedAlbastre((current) => current + 800);
-          pushPopup('success', 'Conversion complete: 400 white packs -> 800 blue packs.');
-        }
-
-        setActiveAction(null);
+    try {
+      const stage = key === 'collect_leaves' ? 'COLLECT' : key === 'process_pack' ? 'PROCESS' : 'REFINE';
+      const request = api.cayoAction(playerId, stage, operationId(`cayo_${stage.toLowerCase()}`), useCleanForShortfall);
+      for (let remaining = action.duration - 1; remaining >= 0; remaining -= 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        setTimer(remaining);
       }
-    }, 1000);
+      const result = await request;
+      applyResult(result);
+      if (result.raided) pushPopup('danger', 'POLICE RAID! The server removed the current run supplies.');
+      else if (key === 'collect_leaves') pushPopup('success', '+1200 leaves.');
+      else if (key === 'process_pack') pushPopup('success', 'Conversion complete: 1200 leaves -> 400 white packs.');
+      else pushPopup('success', 'Conversion complete: 400 white packs -> 800 blue packs.');
+    } catch (error) {
+      pushPopup('danger', error instanceof Error ? error.message : 'Cayo action failed.');
+    } finally {
+      setActiveAction(null);
+      setTimer(0);
+    }
   };
 
   const runAction = (key: ActionKey) => {
@@ -262,90 +152,62 @@ export default function FarmatPage() {
       return;
     }
 
-    startAction(key);
+    void startAction(key);
   };
 
   const confirmConvertAndRun = async () => {
     if (!confirmConvert || isConverting) return;
     setIsConverting(true);
     try {
-      const adjusted = await api.playerCashAdjust(playerId, -confirmConvert.cleanCost);
-      setBaniCurati(Number(adjusted.cleanMoney));
-      const latest = loadGameState() || {};
-      saveGameState({
-        ...latest,
-        cashBalance: Number(adjusted.cleanMoney),
-        baniCurati: Number(adjusted.cleanMoney),
-      });
-      refresh();
-    } catch {
-      pushPopup('danger', 'You do not have enough clean money for materials.');
+      const actionKey = confirmConvert.key;
+      setConfirmConvert(null);
+      await startAction(actionKey, true);
+    } finally {
       setIsConverting(false);
-      return;
     }
-
-    const actionKey = confirmConvert.key;
-    const convertedDirtyCost = confirmConvert.needed;
-    setConfirmConvert(null);
-    window.setTimeout(() => {
-      startAction(actionKey, { convertedDirtyCost });
-      setIsConverting(false);
-    }, 0);
   };
 
   const convertDirtyToClean = async () => {
     if (activeAction) return;
     if (baniMurdari <= 0) return;
-    const gainClean = Math.floor(baniMurdari * 0.65);
     try {
-      const adjusted = await api.playerCashAdjust(playerId, gainClean);
-      setBaniMurdari(0);
-      setBaniCurati(Number(adjusted.cleanMoney));
-      const latest = loadGameState() || {};
-      saveGameState({
-        ...latest,
-        cashBalance: Number(adjusted.cleanMoney),
-        baniCurati: Number(adjusted.cleanMoney),
-      });
-      refresh();
-      pushPopup('success', `Conversion successful: +${fmt(gainClean)} clean money.`);
+      const result = await api.cayoConvert(playerId, operationId('cayo_convert'));
+      applyResult(result);
+      pushPopup('success', `Conversion successful: +${fmt(Number(result.cleanGained || 0))} clean money.`);
     } catch {
       pushPopup('danger', 'Could not sync conversion with server.');
     }
   };
 
-  const sellBulk = () => {
+  const sellBulk = async () => {
     if (!plicuriAlbastre) {
       pushPopup('danger', 'You do not have goods for bulk sale.');
       return;
     }
-
-    const payout = plicuriAlbastre * 2300;
-    setBaniMurdari((current) => current + payout);
-    setFarmEarned((current) => current + payout);
-    setPlicuriAlbastre(0);
-    pushPopup('success', `Bulk sale: +${fmt(payout)} dirty cash.`);
+    try {
+      const result = await api.cayoSell(playerId, 'BULK', operationId('cayo_bulk'));
+      applyResult(result);
+      pushPopup('success', `Bulk sale: +${fmt(Number(result.payout || 0))} dirty cash.`);
+    } catch (error) {
+      pushPopup('danger', error instanceof Error ? error.message : 'Bulk sale failed.');
+    }
   };
 
-  const deliver100 = () => {
+  const deliver100 = async () => {
     if (plicuriAlbastre < 100) {
       pushPopup('danger', 'You need at least 100 blue packs.');
       return;
     }
 
-    const caught = Math.random() < 0.1;
-    if (caught) {
-      setPlicuriAlbastre((current) => current - 100);
-      pushPopup('danger', 'POLICE RAID!!! You lost 100 units.');
-      return;
+    try {
+      const result = await api.cayoSell(playerId, 'DELIVERY_100', operationId('cayo_delivery'));
+      applyResult(result);
+      pushPopup(result.raided ? 'danger' : 'success', result.raided
+        ? 'POLICE RAID! You lost 100 units.'
+        : `Delivery successful: +${fmt(Number(result.payout || 0))} dirty cash.`);
+    } catch (error) {
+      pushPopup('danger', error instanceof Error ? error.message : 'Delivery failed.');
     }
-
-    const payout = 100 * 3179;
-    setPlicuriAlbastre((current) => current - 100);
-    setBaniMurdari((current) => current + payout);
-    setFarmEarned((current) => current + payout);
-    setTimeFarm((current) => current + 0.25);
-    pushPopup('success', `Delivery successful: +${fmt(payout)} dirty cash.`);
   };
 
   return (

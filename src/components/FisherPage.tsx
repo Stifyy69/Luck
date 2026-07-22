@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
+import { publishCityProgress } from '../lib/cityProgressApi';
+import type { CityProgress, CityProgressReward } from '../lib/cityProgress';
 import type { FisherSpotOption, FisherStateResponse } from '../types/game';
 
 type Popup = { text: string; isError?: boolean } | null;
@@ -189,12 +191,13 @@ export default function FisherPage() {
         await wait(1200);
       }
       const next = await api.fisherDockSelect(playerId, cellId);
+      if (next.cityProgress) publishCityProgress(next.cityProgress as CityProgress, next.cityReward as CityProgressReward | undefined);
       setState(next);
       if (next?.lastResult?.caught) {
         await wait(350);
         const fish = next.lastResult.fishName || 'Fish';
         const reward = Number(next.lastResult.breakdown?.totalReward || 0);
-        pushPopup(`Caught ${fish} (+${fmt(reward)} $)`);
+        pushPopup(`Caught ${fish}. Estimated sale value: ${fmt(reward)} $.`);
       }
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Dock select failed', true);

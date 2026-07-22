@@ -220,71 +220,56 @@ async function getCityProgress(playerId) {
 
 async function awardCityXp(playerId, sourceType, sourceId, xpAmount, metadata = {}) {
   await ensureSchema();
+  return withTransaction((db) => awardCityXpInTransaction(db, playerId, sourceType, sourceId, xpAmount, metadata));
+}
+
+async function awardCityXpInTransaction(db, playerId, sourceType, sourceId, xpAmount, metadata = {}) {
   const safeAmount = Math.max(0, Math.min(1000, Math.floor(Number(xpAmount || 0))));
   if (!safeAmount) {
-    const progress = await getCityProgress(playerId);
+    let row = await ensureProgressRow(db, playerId);
+    const vipActive = await getVipActive(db, playerId);
+    const progress = buildProgressView(row, vipActive);
     return { progress, awardedXp: 0, levelUp: null, duplicate: false };
   }
 
-  return withTransaction(async (db) => {
-    let row = await ensureProgressRow(db, playerId);
-    const vipActive = await getVipActive(db, playerId);
-    const before = buildProgressView(row, vipActive);
+  let row = await ensureProgressRow(db, playerId);
+  const vipActive = await getVipActive(db, playerId);
+  const before = buildProgressView(row, vipActive);
 
-    const inserted = await db.query(
-      `
-        INSERT INTO player_city_xp_events (player_id, source_type, source_id, xp_amount, metadata)
-        VALUES ($1, $2, $3, $4, $5::jsonb)
-        ON CONFLICT (player_id, source_type, source_id) DO NOTHING
-        RETURNING id
-      `,
-      [playerId, String(sourceType), String(sourceId), safeAmount, JSON.stringify(metadata || {})],
-    );
-
-    if (!inserted.rows[0]) {
-      return { progress: before, awardedXp: 0, levelUp: null, duplicate: true };
-    }
-
-    const updated = await db.query(
-      `
-        UPDATE player_city_progress
-        SET city_xp = city_xp + $2, updated_at = NOW()
-        WHERE player_id = $1
-        RETURNING *
-      `,
-      [playerId, safeAmount],
-    );
-    row = updated.rows[0];
-    const after = buildProgressView(row, vipActive);
-    const levelUp = after.level > before.level
-      ? {
-          fromLevel: before.level,
-          toLevel: after.level,
-          unlocks: unlocksBetweenLevels(before.level, after.level),
-        }
-      : null;
-
-    return { progress: after, awardedXp: safeAmount, levelUp, duplicate: false };
-  });
-}
-
-async function rateLimitedCayoAward(playerId, sourceType, sourceId, xpAmount, metadata = {}) {
-  await ensureSchema();
-  const recent = await pool.query(
+  const inserted = await db.query(
     `
-      SELECT 1
-      FROM player_city_xp_events
-      WHERE player_id = $1 AND source_type = $2 AND created_at > NOW() - INTERVAL '4 seconds'
-      LIMIT 1
+      INSERT INTO player_city_xp_events (player_id, source_type, source_id, xp_amount, metadata)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+      ON CONFLICT (player_id, source_type, source_id) DO NOTHING
+      RETURNING id
     `,
-    [playerId, sourceType],
+    [playerId, String(sourceType), String(sourceId), safeAmount, JSON.stringify(metadata || {})],
   );
-  if (recent.rows[0]) {
-    const error = new Error('Cayo action completed too quickly');
-    error.statusCode = 429;
-    throw error;
+
+  if (!inserted.rows[0]) {
+    return { progress: before, awardedXp: 0, levelUp: null, duplicate: true };
   }
-  return awardCityXp(playerId, sourceType, sourceId, xpAmount, metadata);
+
+  const updated = await db.query(
+    `
+      UPDATE player_city_progress
+      SET city_xp = city_xp + $2, updated_at = NOW()
+      WHERE player_id = $1
+      RETURNING *
+    `,
+    [playerId, safeAmount],
+  );
+  row = updated.rows[0];
+  const after = buildProgressView(row, vipActive);
+  const levelUp = after.level > before.level
+    ? {
+        fromLevel: before.level,
+        toLevel: after.level,
+        unlocks: unlocksBetweenLevels(before.level, after.level),
+      }
+    : null;
+
+  return { progress: after, awardedXp: safeAmount, levelUp, duplicate: false };
 }
 
 async function updateTutorial(playerId, action, requestedStep = null) {
@@ -362,8 +347,9 @@ async function advanceTutorialAtLeast(playerId, minimumStep) {
 module.exports = {
   advanceTutorialAtLeast,
   awardCityXp,
+  awardCityXpInTransaction,
   ensureSchema,
   getCityProgress,
-  rateLimitedCayoAward,
+  pool,
   updateTutorial,
 };
