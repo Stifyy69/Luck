@@ -19,8 +19,10 @@ const {
   grantAdminItem,
   grantAdminMythicMember,
   normalizeLatestVipActivation,
+  processGangMaterial,
   resetAdminTutorial,
   setAdminVip,
+  sellGangMaterial,
   syncGang,
   updateAdminDisplayName,
   updateAdminNumericField,
@@ -120,6 +122,26 @@ function installPlatformSystems(app, express) {
       return res.json({ ok: true, gang: await syncGang(playerId, req.body?.gangData || {}) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : 'gang sync failed' });
+    }
+  });
+
+  app.post('/api/gangs/sell', async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json(await sellGangMaterial(playerId, req.body?.material, req.body?.quantity, req.body?.operationId));
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang sell failed' });
+    }
+  });
+
+  app.post('/api/gangs/process', async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json(await processGangMaterial(playerId, req.body?.recipe, req.body?.batches, req.body?.operationId));
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang processing failed' });
     }
   });
 

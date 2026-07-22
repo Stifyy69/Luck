@@ -118,7 +118,7 @@ export default function RouletteDemo() {
 
   const getAudioContext = () => {
     if (typeof window === 'undefined') return null;
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextClass) return null;
 
     if (!audioContextRef.current) {
@@ -134,7 +134,7 @@ export default function RouletteDemo() {
     duration = 0.08,
     volume = 0.02,
     type = 'triangle',
-  }) => {
+  }: { frequency?: number; sweepTo?: number; duration?: number; volume?: number; type?: OscillatorType }) => {
     const context = getAudioContext();
     if (!context) return;
 

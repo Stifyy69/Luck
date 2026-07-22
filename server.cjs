@@ -3,10 +3,6 @@ const path = require('path');
 const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
-const { bootstrapGang, readGang } = require('./server/platform/gangOperations.cjs');
-const { sellGangStock } = require('./server/platform/gangSell.cjs');
-const { processGangStock } = require('./server/platform/gangProcessing.cjs');
-const { upgradeGang } = require('./server/platform/gangUpgrade.cjs');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -61,11 +57,161 @@ const getLocation = (req) => ({
   city: req.headers['x-vercel-ip-city'] || null,
 });
 
+const createPlayerId = () => `player_${crypto.randomBytes(6).toString('hex')}`;
+
 async function initDb() {
   if (!pool) {
     throw new Error('DATABASE_URL is not configured');
   }
 
+  // Batch A: Players, Vehicles, Inventory models
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS players (
+      player_id TEXT PRIMARY KEY,
+      display_name TEXT,
+      clean_money BIGINT NOT NULL DEFAULT 1000000,
+      flow_coins INT NOT NULL DEFAULT 0,
+      roulette_fragments INT NOT NULL DEFAULT 0,
+      vehicle_slots_base INT NOT NULL DEFAULT 5,
+      vehicle_slots_extra INT NOT NULL DEFAULT 0,
+      next_tax_collection_at TIMESTAMPTZ,
+      skip_next_tax BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE players
+    ADD COLUMN IF NOT EXISTS display_name TEXT;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vehicle_models (
+      id SERIAL PRIMARY KEY,
+      brand TEXT NOT NULL,
+      name TEXT UNIQUE NOT NULL,
+      base_price BIGINT NOT NULL,
+      is_jackpot BOOLEAN NOT NULL DEFAULT FALSE,
+      stock INT NOT NULL DEFAULT 10
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS owned_vehicles (
+      id SERIAL PRIMARY KEY,
+      player_id TEXT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+      model_id INT NOT NULL REFERENCES vehicle_models(id),
+      purchase_price BIGINT NOT NULL,
+      purchased_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      purchase_source TEXT NOT NULL DEFAULT 'SHOWROOM'
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE owned_vehicles
+    ADD COLUMN IF NOT EXISTS purchase_source TEXT NOT NULL DEFAULT 'SHOWROOM';
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS clothing_items (
+      id SERIAL PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      category TEXT NOT NULL,
+      rarity TEXT NOT NULL,
+      min_value BIGINT NOT NULL,
+      max_value BIGINT NOT NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_items (
+      id SERIAL PRIMARY KEY,
+      player_id TEXT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+      item_type TEXT NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}',
+      quantity INT NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS active_boosts (
+      id SERIAL PRIMARY KEY,
+      player_id TEXT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+      boost_type TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // Batch B: Marketplace models
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS market_listings (
+      id SERIAL PRIMARY KEY,
+      seller_type TEXT NOT NULL DEFAULT 'PLAYER',
+      seller_player_id TEXT,
+      seller_npc_id TEXT,
+      asset_type TEXT NOT NULL,
+      asset_ref_id INT,
+      asset_name TEXT NOT NULL DEFAULT 'Unknown Listing',
+      asset_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ask_price BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS seller_type TEXT;`);
+  await pool.query(`ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS asset_name TEXT;`);
+  await pool.query(`ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS asset_metadata JSONB;`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN seller_type SET DEFAULT 'PLAYER';`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_name SET DEFAULT 'Unknown Listing';`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_metadata SET DEFAULT '{}'::jsonb;`);
+  await pool.query(`
+    UPDATE market_listings
+    SET seller_type = CASE WHEN seller_npc_id IS NOT NULL THEN 'NPC' ELSE 'PLAYER' END
+    WHERE seller_type IS NULL OR seller_type = '';
+  `);
+  await pool.query(`
+    UPDATE market_listings
+    SET asset_name = CASE
+      WHEN asset_type = 'VEHICLE' THEN 'Vehicle Listing'
+      WHEN asset_type = 'CLOTHING' THEN 'Clothing Listing'
+      WHEN asset_type = 'XENON_VEHICLE' THEN 'Xenon Vehicle'
+      ELSE 'Unknown Listing'
+    END
+    WHERE asset_name IS NULL OR asset_name = '';
+  `);
+  await pool.query(`
+    UPDATE market_listings
+    SET asset_metadata = '{}'::jsonb
+    WHERE asset_metadata IS NULL;
+  `);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_name SET NOT NULL;`);
+  await pool.query(`ALTER TABLE market_listings ALTER COLUMN asset_metadata SET NOT NULL;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS market_offers (
+      id SERIAL PRIMARY KEY,
+      listing_id INT NOT NULL REFERENCES market_listings(id),
+      buyer_player_id TEXT NOT NULL,
+      offered_price BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS npc_sellers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      emoji TEXT NOT NULL
+    );
+  `);
+
+  // Player stats analytics
   await pool.query(`
     CREATE TABLE IF NOT EXISTS player_stats (
       player_id TEXT PRIMARY KEY,
@@ -91,6 +237,119 @@ async function initDb() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_pizzer_progress (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      pizzer_level INT NOT NULL DEFAULT 1,
+      pizzer_xp INT NOT NULL DEFAULT 0,
+      pizzer_total_deliveries INT NOT NULL DEFAULT 0,
+      pizzer_perfect_deliveries INT NOT NULL DEFAULT 0,
+      pizzer_best_streak INT NOT NULL DEFAULT 0,
+      pizzer_total_earnings BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_fisher_progress (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      fisher_level INT NOT NULL DEFAULT 1,
+      fisher_xp INT NOT NULL DEFAULT 0,
+      fisher_rod_tier INT NOT NULL DEFAULT 1,
+      fisher_carry_capacity_kg INT NOT NULL DEFAULT 20,
+      fisher_total_catches INT NOT NULL DEFAULT 0,
+      fisher_perfect_catches INT NOT NULL DEFAULT 0,
+      fisher_best_streak INT NOT NULL DEFAULT 0,
+      fisher_total_earnings BIGINT NOT NULL DEFAULT 0,
+      fisher_rare_catches INT NOT NULL DEFAULT 0,
+      fisher_legendary_catches INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_pilot_progress (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      pilot_level INT NOT NULL DEFAULT 1,
+      pilot_xp INT NOT NULL DEFAULT 0,
+      pilot_total_earnings BIGINT NOT NULL DEFAULT 0,
+      pilot_streak INT NOT NULL DEFAULT 0,
+      pilot_best_streak INT NOT NULL DEFAULT 0,
+      pilot_total_flights INT NOT NULL DEFAULT 0,
+      route_1_completions INT NOT NULL DEFAULT 0,
+      route_2_completions INT NOT NULL DEFAULT 0,
+      route_3_completions INT NOT NULL DEFAULT 0,
+      route_4_completions INT NOT NULL DEFAULT 0,
+      route_5_completions INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_fisher_progress
+    ADD COLUMN IF NOT EXISTS fisher_rod_tier INT NOT NULL DEFAULT 1;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_fisher_progress
+    ADD COLUMN IF NOT EXISTS fisher_carry_capacity_kg INT NOT NULL DEFAULT 20;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_level INT NOT NULL DEFAULT 1;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_xp INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_total_earnings BIGINT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_streak INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_best_streak INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_total_flights INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_1_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_2_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_3_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_4_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS route_5_completions INT NOT NULL DEFAULT 0;
+  `);
+
   const requiredColumns = [
     ['farm_earned', "BIGINT NOT NULL DEFAULT 0"],
     ['time_pilot', "DOUBLE PRECISION NOT NULL DEFAULT 0"],
@@ -114,9 +373,15 @@ async function initDb() {
       username TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
+      player_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS player_id TEXT;`);
+  await pool.query(`UPDATE users SET player_id = COALESCE(player_id, 'player_' || id::text) WHERE player_id IS NULL OR player_id = '';`);
+  await pool.query(`ALTER TABLE users ALTER COLUMN player_id SET NOT NULL;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_player_id_idx ON users(player_id);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_profiles (
@@ -150,30 +415,21 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS player_gangs (
-      player_id TEXT PRIMARY KEY,
-      state JSONB NOT NULL DEFAULT '{}'::jsonb,
-      state_version BIGINT NOT NULL DEFAULT 1,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS player_gang_operations (
-      player_id TEXT NOT NULL REFERENCES player_gangs(player_id) ON DELETE CASCADE,
-      operation_id TEXT NOT NULL,
-      operation_type TEXT NOT NULL,
-      result JSONB NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (player_id, operation_id)
-    );
-  `);
 }
 
 app.use(cookieParser());
 app.use(express.json({ limit: '256kb' }));
+
+// CORS setup for all origins during development
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 const requireDb = (_req, res, next) => {
   if (!dbReady || !pool) {
@@ -191,6 +447,1749 @@ const requireUser = async (req, res, next) => {
   req.userId = userId;
   next();
 };
+
+async function withTransaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function asIso(value) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function getVehicleImagePath(name) {
+  return `/cars/${name}.png`;
+}
+
+function normalizeNpcId(value) {
+  return String(value ?? '');
+}
+
+function getClothingFolder(category) {
+  if (category === 'PANTS') return 'pants';
+  if (category === 'SHOES') return 'shoes';
+  return 'tshirt';
+}
+
+function getClothingImagePath(name, category) {
+  return `/Clothes/${getClothingFolder(category)}/${name}.png`;
+}
+
+function randomInt(min, max) {
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+const PIZZER_MAX_LEVEL = 50;
+
+const PIZZER_CONFIG = {
+  startCooldownMs: 15000,
+  optionsCooldownMs: 10000,
+  actionCooldownMs: 500,
+  repairCooldownMs: 10000,
+  hardLateGraceSec: 120,
+  freshDecayPerSecond: 0.18,
+  freshDecayLevel8Factor: 0.86,
+  damagePenaltyMax: 0.25,
+  streakBonusPerStep: 0.05,
+  streakBonusMax: 0.15,
+  baseRewardDistanceFactor: 0.08,
+  orderTypeMultipliers: {
+    STANDARD: 1.0,
+    URGENTA: 1.25,
+    VIP: 1.45,
+  },
+  baseXp: {
+    STANDARD: 18,
+    URGENTA: 25,
+    VIP: 35,
+  },
+  tipRange: {
+    STANDARD: [20, 60],
+    URGENTA: [40, 100],
+    VIP: [80, 180],
+  },
+  vehicles: {
+    BICICLETA: { levelMin: 1, levelMax: 16, label: 'Bicycle Courier', distanceMin: 450, distanceMax: 1700 },
+    SCUTER: { levelMin: 17, levelMax: 33, label: 'Scooter Courier', distanceMin: 1200, distanceMax: 3000 },
+    MASINA: { levelMin: 34, levelMax: 50, label: 'Delivery Car', distanceMin: 2200, distanceMax: 5000 },
+  },
+  orderTypeLevelMin: {
+    STANDARD: 1,
+    URGENTA: 8,
+    VIP: 20,
+  },
+  accidentChanceByVehicle: {
+    BICICLETA: 0.05,
+    SCUTER: 0.045,
+    MASINA: 0.04,
+  },
+  deliveryLocations: [
+    { label: 'Pillbox Apartments', handovers: ['gate', 'entry', 'door'] },
+    { label: 'Morningwood Residence', handovers: ['gate', 'entry', 'door'] },
+    { label: 'Mirror Park Home', handovers: ['street', 'entry', 'door'] },
+    { label: 'Del Perro Flat', handovers: ['street', 'entry', 'door'] },
+    { label: 'Vespucci Court', handovers: ['gate', 'street', 'door'] },
+    { label: 'Rockford Hills Villa', handovers: ['gate', 'street', 'door'] },
+  ],
+};
+
+const PIZZER_PIZZA_TYPES = ['Capriciosa', 'Diavola', 'Margherita', 'Quattro Formaggi', 'Prosciutto Funghi'];
+const PIZZER_DRINK_TYPES = ['LedBul', 'Black Soda', 'Yellow Soda', 'Green Soda'];
+
+const pizzerSessions = new Map();
+
+function pizzerXpForLevel(level) {
+  const safeLevel = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(level) || 1));
+  if (safeLevel <= 1) return 0;
+  const x = safeLevel - 1;
+  return Math.floor(120 * Math.pow(x, 1.32) + x * 40);
+}
+
+function computePizzerLevel(xp) {
+  const safeXp = Math.max(0, Math.floor(Number(xp) || 0));
+  let level = 1;
+  for (let i = 2; i <= PIZZER_MAX_LEVEL; i += 1) {
+    if (safeXp >= pizzerXpForLevel(i)) level = i;
+  }
+  return Math.min(PIZZER_MAX_LEVEL, level);
+}
+
+function levelStartXp(level) {
+  return pizzerXpForLevel(level);
+}
+
+function nextLevelXp(level) {
+  if (level >= PIZZER_MAX_LEVEL) return null;
+  return pizzerXpForLevel(level + 1);
+}
+
+function pizzerVehicleKeyForLevel(level) {
+  if (level >= PIZZER_CONFIG.vehicles.MASINA.levelMin) return 'MASINA';
+  if (level >= PIZZER_CONFIG.vehicles.SCUTER.levelMin) return 'SCUTER';
+  return 'BICICLETA';
+}
+
+function pizzerVehicleForLevel(level) {
+  const key = pizzerVehicleKeyForLevel(level);
+  return { key, ...PIZZER_CONFIG.vehicles[key] };
+}
+
+function pizzerOrderTypesForLevel(level) {
+  const result = ['STANDARD'];
+  if (level >= PIZZER_CONFIG.orderTypeLevelMin.URGENTA) result.push('URGENTA');
+  if (level >= PIZZER_CONFIG.orderTypeLevelMin.VIP) result.push('VIP');
+  return result;
+}
+
+function levelPayoutMultiplier(level) {
+  return Math.min(2.2, 1 + (Math.max(1, level) - 1) * 0.025);
+}
+
+function pickUniqueRandom(list, count) {
+  const pool = [...list];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = randomInt(0, i);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, Math.max(1, Math.min(pool.length, count)));
+}
+
+function distributeCounts(names, totalCount) {
+  let remaining = Math.max(names.length, totalCount);
+  return names.map((name, index) => {
+    const leftSlots = names.length - index - 1;
+    const maxHere = remaining - leftSlots;
+    const qty = index === names.length - 1 ? remaining : randomInt(1, Math.max(1, maxHere));
+    remaining -= qty;
+    return { name, quantity: qty };
+  });
+}
+
+function buildOrderBasket(orderType) {
+  const pizzaTotal = orderType === 'VIP' ? randomInt(4, 7) : orderType === 'URGENTA' ? randomInt(3, 5) : randomInt(2, 4);
+  const drinkTotal = orderType === 'VIP' ? randomInt(2, 4) : orderType === 'URGENTA' ? randomInt(1, 3) : randomInt(1, 2);
+
+  const pizzaKinds = pickUniqueRandom(PIZZER_PIZZA_TYPES, randomInt(2, Math.min(5, PIZZER_PIZZA_TYPES.length)));
+  const drinkKinds = pickUniqueRandom(PIZZER_DRINK_TYPES, randomInt(1, Math.min(3, PIZZER_DRINK_TYPES.length)));
+
+  return {
+    pizzas: distributeCounts(pizzaKinds, pizzaTotal),
+    drinks: distributeCounts(drinkKinds, drinkTotal),
+  };
+}
+
+function buildOrderOption(level) {
+  const vehicle = pizzerVehicleForLevel(level);
+  const availableTypes = pizzerOrderTypesForLevel(level);
+
+  const weights = availableTypes.map((type) => {
+    if (type === 'VIP') return 0.2 + Math.max(0, level - 6) * 0.08;
+    if (type === 'URGENTA') return 0.9;
+    return 1.4;
+  });
+
+  const total = weights.reduce((acc, value) => acc + value, 0);
+  let roll = Math.random() * total;
+  let orderType = availableTypes[0];
+  for (let i = 0; i < availableTypes.length; i += 1) {
+    roll -= weights[i];
+    if (roll <= 0) {
+      orderType = availableTypes[i];
+      break;
+    }
+  }
+
+  const baseDistance = randomInt(vehicle.distanceMin, vehicle.distanceMax);
+  const difficulty = orderType === 'VIP' ? 'HARD' : orderType === 'URGENTA' ? 'MEDIUM' : 'EASY';
+  const timePenalty = orderType === 'VIP' ? 0.85 : orderType === 'URGENTA' ? 0.92 : 1;
+  const estimatedTimeSec = Math.max(120, Math.floor((baseDistance / 11) * timePenalty));
+  const baseReward = 120 + Math.floor(baseDistance * PIZZER_CONFIG.baseRewardDistanceFactor);
+  const estimatedReward = Math.floor(
+    baseReward *
+      PIZZER_CONFIG.orderTypeMultipliers[orderType] *
+      levelPayoutMultiplier(level),
+  );
+  const estimatedXp = PIZZER_CONFIG.baseXp[orderType] + (orderType === 'VIP' ? 4 : orderType === 'URGENTA' ? 2 : 0);
+  const location = PIZZER_CONFIG.deliveryLocations[randomInt(0, PIZZER_CONFIG.deliveryLocations.length - 1)];
+  const basket = buildOrderBasket(orderType);
+
+  return {
+    orderId: crypto.randomBytes(6).toString('hex'),
+    orderType,
+    distanceMeters: baseDistance,
+    estimatedReward,
+    estimatedXp,
+    estimatedTimeSec,
+    difficulty,
+    targetLabel: location.label,
+    handovers: location.handovers,
+    pizzas: basket.pizzas,
+    drinks: basket.drinks,
+  };
+}
+
+async function ensurePizzerProgress(db, playerId) {
+  await db.query(
+    `INSERT INTO player_pizzer_progress (player_id)
+     VALUES ($1)
+     ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM player_pizzer_progress WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+function toPizzerProgressView(row) {
+  const xp = Number(row?.pizzer_xp || 0);
+  const level = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(row?.pizzer_level || computePizzerLevel(xp))));
+  const currentStart = levelStartXp(level);
+  const next = nextLevelXp(level);
+  return {
+    level,
+    xp,
+    currentLevelXp: xp - currentStart,
+    nextLevelXp: next,
+    totalDeliveries: Number(row?.pizzer_total_deliveries || 0),
+    perfectDeliveries: Number(row?.pizzer_perfect_deliveries || 0),
+    bestStreak: Number(row?.pizzer_best_streak || 0),
+    totalEarnings: Number(row?.pizzer_total_earnings || 0),
+  };
+}
+
+function getPizzerSession(playerId) {
+  return pizzerSessions.get(playerId) || {
+    shiftState: 'IDLE',
+    streak: 0,
+    bestStreakShift: 0,
+    orderOptions: [],
+    optionsGeneratedAt: 0,
+    activeOrder: null,
+    lastResult: null,
+    cooldownUntil: 0,
+    lastActionAt: 0,
+    repairUntil: 0,
+    repairLabel: null,
+  };
+}
+
+function setPizzerSession(playerId, session) {
+  pizzerSessions.set(playerId, session);
+}
+
+function freshnessForOrder(order, level) {
+  if (!order) return 100;
+  const now = Date.now();
+  const elapsedSec = Math.max(0, (now - order.deliveryStartedAt) / 1000);
+  const decay = PIZZER_CONFIG.freshDecayPerSecond * (level >= 8 ? PIZZER_CONFIG.freshDecayLevel8Factor : 1);
+  return Math.max(0, Math.floor(100 - elapsedSec * decay));
+}
+
+function pizzerStateView(session, progressView) {
+  const vehicle = pizzerVehicleForLevel(progressView.level);
+  const now = Date.now();
+  const repairSecondsLeft = Math.max(0, Math.ceil((Number(session.repairUntil || 0) - now) / 1000));
+  const activeOrder = session.activeOrder
+    ? {
+        orderId: session.activeOrder.orderId,
+        orderType: session.activeOrder.orderType,
+        distanceMeters: session.activeOrder.distanceMeters,
+        targetLabel: session.activeOrder.targetLabel,
+        etaSec: session.activeOrder.etaSec,
+        timeLeftSec: Math.max(0, session.activeOrder.etaSec - Math.floor((Date.now() - session.activeOrder.deliveryStartedAt) / 1000)),
+        freshness: freshnessForOrder(session.activeOrder, progressView.level),
+        damagePercent: session.activeOrder.damagePercent,
+        packingStepsDone: [...session.activeOrder.packingStepsDone],
+        packingStepsRequired: [...session.activeOrder.packingStepsRequired],
+        nextPackingStep:
+          session.activeOrder.packingStepsRequired.find((step) => !session.activeOrder.packingStepsDone.includes(step)) || null,
+        pizzas: session.activeOrder.pizzas || [],
+        drinks: session.activeOrder.drinks || [],
+      }
+    : null;
+
+  return {
+    progress: progressView,
+    shiftState: session.shiftState,
+    vehicleLabel: vehicle.label,
+    streak: session.streak,
+    repairSecondsLeft,
+    repairLabel: session.repairLabel || null,
+    activeOrder,
+    lastResult: session.lastResult || null,
+  };
+}
+
+function enforcePizzerRepairCooldown(session) {
+  const now = Date.now();
+  if (Number(session.repairUntil || 0) > now) {
+    const left = Math.max(1, Math.ceil((session.repairUntil - now) / 1000));
+    throw new Error(`vehicle repair in progress (${left}s)`);
+  }
+  if (session.repairUntil && session.repairUntil <= now) {
+    session.repairUntil = 0;
+    session.repairLabel = null;
+  }
+}
+
+function enforcePizzerActionCooldown(session) {
+  const now = Date.now();
+  if (now - Number(session.lastActionAt || 0) < PIZZER_CONFIG.actionCooldownMs) {
+    throw new Error('wait 0.5s between actions');
+  }
+  session.lastActionAt = now;
+}
+
+const FISHER_CONFIG = {
+  shiftStartCooldownMs: 15000,
+  optionsCooldownMs: 10000,
+  actionCooldownMs: 500,
+  reelTickCooldownMs: 300,
+  repairCooldownMs: 12000,
+  hookWindowMs: 3200,
+  castVisualDelayMs: 900,
+  hookVisualDelayMs: 900,
+  landVisualDelayMs: 950,
+  streakBonusPerStep: 0.05,
+  streakBonusMax: 0.2,
+  lineIntegrityPenaltyPerMiss: 12,
+  tensionRedThreshold: 92,
+  tensionFailThreshold: 100,
+  maxRedTicksBeforeSnap: 5,
+  randomPullEveryTicks: [3, 6],
+  randomPullWindowMs: 1700,
+  randomPullTensionPenalty: 12,
+  randomPullQualityPenalty: 0.08,
+  carryCapacityKg: 20,
+  carryUpgradeStepKg: 5,
+  carryUpgradeCost: 50000,
+  carryCapacityMaxKg: 100,
+  kgBasePrice: {
+    NORMAL: 1000,
+    BIG: 2000,
+    GIANT: 3000,
+  },
+  rodShop: [
+    { tier: 1, name: 'Street Rod', price: 10000, sizeBonus: { NORMAL: 0, BIG: 0, GIANT: 0 }, payoutMultiplier: 1.0 },
+    { tier: 2, name: 'Lake Rod', price: 50000, sizeBonus: { NORMAL: -0.05, BIG: 0.04, GIANT: 0.01 }, payoutMultiplier: 1.05 },
+    { tier: 3, name: 'Pro River Rod', price: 150000, sizeBonus: { NORMAL: -0.09, BIG: 0.07, GIANT: 0.02 }, payoutMultiplier: 1.12 },
+    { tier: 4, name: 'Deep Master Rod', price: 300000, sizeBonus: { NORMAL: -0.12, BIG: 0.08, GIANT: 0.04 }, payoutMultiplier: 1.2 },
+    { tier: 5, name: 'Legend Hunter Rod', price: 500000, sizeBonus: { NORMAL: -0.16, BIG: 0.1, GIANT: 0.06 }, payoutMultiplier: 1.3 },
+  ],
+  fishRarityRewardBase: {
+    COMMON: 220,
+    UNCOMMON: 360,
+    RARE: 680,
+    LEGENDARY: 1250,
+  },
+  fishRarityXpBase: {
+    COMMON: 22,
+    UNCOMMON: 34,
+    RARE: 52,
+    LEGENDARY: 80,
+  },
+  spots: {
+    COMMON: {
+      tier: 'COMMON',
+      label: 'Shore / Common Spot',
+      levelMin: 1,
+      difficulty: 'EASY',
+      castDifficulty: 'LOW',
+      reelDifficulty: 'LOW',
+      risk: 'LOW',
+      travelSecRange: [6, 12],
+      waitBiteSecRange: [2, 5],
+      spotMultiplier: 1,
+      rarityWeights: { COMMON: 0.7, UNCOMMON: 0.23, RARE: 0.06, LEGENDARY: 0.01 },
+      fishPool: ['Shore Bass', 'Silver Mackerel', 'Striped Carp'],
+    },
+    BETTER: {
+      tier: 'BETTER',
+      label: 'River / Better Spot',
+      levelMin: 17,
+      difficulty: 'MEDIUM',
+      castDifficulty: 'MEDIUM',
+      reelDifficulty: 'MEDIUM',
+      risk: 'MEDIUM',
+      travelSecRange: [8, 14],
+      waitBiteSecRange: [3, 6],
+      spotMultiplier: 1.28,
+      rarityWeights: { COMMON: 0.45, UNCOMMON: 0.34, RARE: 0.17, LEGENDARY: 0.04 },
+      fishPool: ['River Pike', 'Rainbow Trout', 'Lake Perch'],
+    },
+    PREMIUM: {
+      tier: 'PREMIUM',
+      label: 'Deep / Premium Spot',
+      levelMin: 34,
+      difficulty: 'HARD',
+      castDifficulty: 'HIGH',
+      reelDifficulty: 'HIGH',
+      risk: 'HIGH',
+      travelSecRange: [10, 18],
+      waitBiteSecRange: [4, 7],
+      spotMultiplier: 1.65,
+      rarityWeights: { COMMON: 0.24, UNCOMMON: 0.32, RARE: 0.29, LEGENDARY: 0.15 },
+      fishPool: ['Deep Catfish', 'Bluefin Tuna', 'Golden Relic Fish'],
+    },
+  },
+};
+
+const fisherSessions = new Map();
+
+function fisherXpForLevel(level) {
+  return pizzerXpForLevel(level);
+}
+
+function computeFisherLevel(xp) {
+  const safeXp = Math.max(0, Math.floor(Number(xp) || 0));
+  let level = 1;
+  for (let i = 2; i <= PIZZER_MAX_LEVEL; i += 1) {
+    if (safeXp >= fisherXpForLevel(i)) level = i;
+  }
+  return Math.min(PIZZER_MAX_LEVEL, level);
+}
+
+function fisherLevelStartXp(level) {
+  return fisherXpForLevel(level);
+}
+
+function fisherNextLevelXp(level) {
+  if (level >= PIZZER_MAX_LEVEL) return null;
+  return fisherXpForLevel(level + 1);
+}
+
+function fisherTierForLevel(level) {
+  if (level >= FISHER_CONFIG.spots.PREMIUM.levelMin) return 'PREMIUM';
+  if (level >= FISHER_CONFIG.spots.BETTER.levelMin) return 'BETTER';
+  return 'COMMON';
+}
+
+function fisherRodLabelForLevel(level) {
+  const tier = fisherTierForLevel(level);
+  if (tier === 'PREMIUM') return 'Pro Rod + Premium Bait';
+  if (tier === 'BETTER') return 'Improved Rod + Better Bait';
+  return 'Basic Rod + Common Bait';
+}
+
+function fisherRodTierModel(tier) {
+  const safeTier = Math.max(1, Math.min(5, Math.floor(Number(tier) || 1)));
+  return FISHER_CONFIG.rodShop.find((entry) => entry.tier === safeTier) || FISHER_CONFIG.rodShop[0];
+}
+
+function fisherAvailableSpotTiers(level) {
+  const result = ['COMMON'];
+  if (level >= FISHER_CONFIG.spots.BETTER.levelMin) result.push('BETTER');
+  if (level >= FISHER_CONFIG.spots.PREMIUM.levelMin) result.push('PREMIUM');
+  return result;
+}
+
+function fisherPickRarity(weights) {
+  const entries = Object.entries(weights);
+  const total = entries.reduce((acc, [, value]) => acc + Number(value), 0);
+  let roll = Math.random() * total;
+  for (const [key, value] of entries) {
+    roll -= Number(value);
+    if (roll <= 0) return key;
+  }
+  return entries[entries.length - 1][0];
+}
+
+function fisherCastScoreFromMeter(meter) {
+  const safe = Math.max(0, Math.min(100, Number(meter) || 0));
+  const distance = Math.abs(50 - safe);
+  if (distance <= 6) return { quality: 'PERFECT', score: 1, meter: safe };
+  if (distance <= 18) return { quality: 'GOOD', score: 0.78, meter: safe };
+  return { quality: 'BAD', score: 0.52, meter: safe };
+}
+
+function fisherFishSizeRoll(castMeter, rodTier = 1) {
+  const safe = Math.max(0, Math.min(100, Number(castMeter) || 0));
+  const distance = Math.abs(50 - safe);
+  let normal = 0.75;
+  let big = 0.2;
+  let giant = 0.05;
+  const rod = fisherRodTierModel(rodTier);
+  normal += Number(rod.sizeBonus.NORMAL || 0);
+  big += Number(rod.sizeBonus.BIG || 0);
+  giant += Number(rod.sizeBonus.GIANT || 0);
+
+  if (distance <= 8) {
+    normal -= 0.15;
+    big += 0.1;
+    giant += 0.05;
+  } else if (distance <= 18) {
+    normal -= 0.07;
+    big += 0.05;
+    giant += 0.02;
+  }
+
+  if (normal < 0.3) normal = 0.3;
+  if (big < 0.05) big = 0.05;
+  if (giant < 0.02) giant = 0.02;
+  const total = normal + big + giant;
+  normal /= total;
+  big /= total;
+  giant /= total;
+
+  const roll = Math.random();
+  if (roll <= normal) return 'NORMAL';
+  if (roll <= normal + big) return 'BIG';
+  return 'GIANT';
+}
+
+function fisherFishWeightKg(spotTier, fishSize) {
+  const ranges = {
+    COMMON: {
+      NORMAL: [0.7, 2.4],
+      BIG: [2.5, 4.8],
+      GIANT: [4.9, 7.5],
+    },
+    BETTER: {
+      NORMAL: [1.2, 3.4],
+      BIG: [3.5, 6.8],
+      GIANT: [6.9, 9.8],
+    },
+    PREMIUM: {
+      NORMAL: [2.0, 4.8],
+      BIG: [4.9, 8.5],
+      GIANT: [8.6, 12.0],
+    },
+  };
+  const [min, max] = ranges[spotTier]?.[fishSize] || ranges.COMMON.NORMAL;
+  const raw = min + Math.random() * (max - min);
+  return Math.round(raw * 10) / 10;
+}
+
+function fisherPrepareCatchFromSpot(spot, withTravel) {
+  const now = Date.now();
+  return {
+    spotId: spot.spotId,
+    spotTier: spot.tier,
+    spotName: spot.name,
+    travelEndsAt: withTravel ? now + Number(spot.travelSec || 0) * 1000 : now,
+    biteAt: 0,
+    hookWindowEndsAt: 0,
+    castQuality: null,
+    castScore: 0.5,
+    castMeter: 0,
+    hookQuality: null,
+    hookScore: 0,
+    catchProgress: 0,
+    tension: 22,
+    lineIntegrity: 100,
+    pullPrompt: null,
+    pullHits: 0,
+    pullMisses: 0,
+    reelTicks: 0,
+    safeTicks: 0,
+    redTicks: 0,
+    qualityPenalty: 0,
+    stepsRequired: ['BAIT', 'CAST', 'WAIT_BITE', 'HOOK', 'REEL', 'LAND'],
+    stepsDone: [],
+  };
+}
+
+function fisherComputeAutoCatchResult({ session, progressBefore, spot, fishRarity, fishSize, fishWeightKg, qualityScore }) {
+  const rodTier = Math.max(1, Math.min(5, Number(progressBefore.rodTier || 1)));
+  const rodModel = fisherRodTierModel(rodTier);
+
+  const kgPrice = Number(FISHER_CONFIG.kgBasePrice[fishSize] || 1000);
+  const baseReward = Math.max(0, Math.floor(fishWeightKg * kgPrice));
+  const baseXp = Number(FISHER_CONFIG.fishRarityXpBase[fishRarity] || 20);
+  const spotMultiplier = Number(spot.spotMultiplier || 1);
+  const levelMultiplier = levelPayoutMultiplier(progressBefore.level) * Number(rodModel.payoutMultiplier || 1);
+  const qualityMultiplier = 0.7 + qualityScore * 0.65;
+  const streakMultiplier = 1 + Math.min(4, Number(session.streak || 0)) * FISHER_CONFIG.streakBonusPerStep;
+  const integrityMultiplier = 1;
+  const bonusLootValue = fishRarity === 'LEGENDARY' ? randomInt(120, 300) : fishRarity === 'RARE' ? randomInt(45, 120) : 0;
+
+  const totalReward = Math.max(
+    0,
+    Math.floor(baseReward * spotMultiplier * levelMultiplier * qualityMultiplier * streakMultiplier * integrityMultiplier) + bonusLootValue,
+  );
+
+  const qualityXpBonus = qualityScore >= 0.9 ? 12 : qualityScore >= 0.75 ? 7 : qualityScore >= 0.6 ? 3 : 0;
+  const streakXpBonus = Math.min(10, Number(session.streak || 0) * 2);
+  const xpGained = Math.max(0, Math.floor(baseXp + qualityXpBonus + streakXpBonus));
+
+  return {
+    baseReward,
+    spotMultiplier,
+    levelMultiplier,
+    qualityMultiplier,
+    streakMultiplier,
+    integrityMultiplier,
+    bonusLootValue,
+    totalReward,
+    xpGained,
+    qualityScore,
+  };
+}
+
+function getFisherSession(playerId) {
+  return fisherSessions.get(playerId) || {
+    shiftState: 'IDLE',
+    streak: 0,
+    bestStreakShift: 0,
+    spotOptions: [],
+    optionsGeneratedAt: 0,
+    activeSpot: null,
+    activeCatch: null,
+    lastResult: null,
+    cooldownUntil: 0,
+    lastActionAt: 0,
+    lastReelTickAt: 0,
+    repairUntil: 0,
+    repairLabel: null,
+    carryCapacityKg: FISHER_CONFIG.carryCapacityKg,
+    carryWeightKg: 0,
+    carryEstimatedValue: 0,
+    carriedFish: [],
+    currentDockCell: null,
+    targetDockCell: null,
+  };
+}
+
+function setFisherSession(playerId, session) {
+  fisherSessions.set(playerId, session);
+}
+
+function enforceFisherActionCooldown(session) {
+  const now = Date.now();
+  if (now - Number(session.lastActionAt || 0) < FISHER_CONFIG.actionCooldownMs) {
+    throw new Error('wait 0.5s between actions');
+  }
+  session.lastActionAt = now;
+}
+
+function enforceFisherReelTickCooldown(session) {
+  const now = Date.now();
+  if (now - Number(session.lastReelTickAt || 0) < FISHER_CONFIG.reelTickCooldownMs) {
+    throw new Error('reel tick too fast');
+  }
+  session.lastReelTickAt = now;
+}
+
+function enforceFisherRepairCooldown(session) {
+  const now = Date.now();
+  if (Number(session.repairUntil || 0) > now) {
+    const left = Math.max(1, Math.ceil((session.repairUntil - now) / 1000));
+    throw new Error(`line repair in progress (${left}s)`);
+  }
+  if (session.repairUntil && session.repairUntil <= now) {
+    session.repairUntil = 0;
+    session.repairLabel = null;
+  }
+}
+
+function fisherBuildSpotOption(level, tierKey = null) {
+  const available = fisherAvailableSpotTiers(level);
+  const chosenTier = tierKey || available[randomInt(0, available.length - 1)];
+  const spot = FISHER_CONFIG.spots[chosenTier];
+  const travelSec = randomInt(spot.travelSecRange[0], spot.travelSecRange[1]);
+  const waitBiteSec = randomInt(spot.waitBiteSecRange[0], spot.waitBiteSecRange[1]);
+  const rarity = fisherPickRarity(spot.rarityWeights);
+  const rarityReward = Number(FISHER_CONFIG.fishRarityRewardBase[rarity] || 220);
+  const rarityXp = Number(FISHER_CONFIG.fishRarityXpBase[rarity] || 22);
+  const estimatedReward = Math.floor(rarityReward * spot.spotMultiplier * levelPayoutMultiplier(level));
+  const estimatedXp = Math.floor(rarityXp + Math.max(0, level - 1) * 0.3);
+
+  return {
+    spotId: crypto.randomBytes(6).toString('hex'),
+    tier: chosenTier,
+    name: spot.label,
+    difficulty: spot.difficulty,
+    fishPool: [...spot.fishPool],
+    estimatedReward,
+    estimatedXp,
+    castDifficulty: spot.castDifficulty,
+    reelDifficulty: spot.reelDifficulty,
+    waitBiteEstimateSec: waitBiteSec,
+    failRisk: spot.risk,
+    travelSec,
+    rarityHint: rarity,
+  };
+}
+
+function fisherChooseFishName(rarity, tier) {
+  const common = ['crucian carp', 'perch', 'mackerel'];
+  const uncommon = ['pike', 'trout', 'asp'];
+  const rare = ['catfish', 'tuna', 'sturgeon'];
+  const legendary = ['golden fish', 'old relic catch', 'trophy monster'];
+  const pool = rarity === 'LEGENDARY' ? legendary : rarity === 'RARE' ? rare : rarity === 'UNCOMMON' ? uncommon : common;
+  const prefix = tier === 'PREMIUM' ? 'Deep' : tier === 'BETTER' ? 'River' : 'Shore';
+  return `${prefix} ${pool[randomInt(0, pool.length - 1)]}`;
+}
+
+async function addFarmTimeForCatch(db, playerId, hours = 0.1) {
+  const value = Number(hours || 0);
+  if (value <= 0) return;
+  await db.query(
+    `
+    INSERT INTO player_stats (player_id, time_spent, last_seen, updated_at)
+    VALUES ($1, $2, NOW(), NOW())
+    ON CONFLICT (player_id) DO UPDATE SET
+      time_spent = player_stats.time_spent + $2,
+      last_seen = NOW(),
+      updated_at = NOW()
+    `,
+    [playerId, value],
+  );
+}
+
+async function ensureFisherProgress(db, playerId) {
+  await db.query(
+    `INSERT INTO player_fisher_progress (player_id)
+     VALUES ($1)
+     ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM player_fisher_progress WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+function toFisherProgressView(row) {
+  const xp = Number(row?.fisher_xp || 0);
+  const level = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(row?.fisher_level || computeFisherLevel(xp))));
+  const currentStart = fisherLevelStartXp(level);
+  const next = fisherNextLevelXp(level);
+  return {
+    level,
+    xp,
+    currentLevelXp: xp - currentStart,
+    nextLevelXp: next,
+    totalCatches: Number(row?.fisher_total_catches || 0),
+    perfectCatches: Number(row?.fisher_perfect_catches || 0),
+    bestStreak: Number(row?.fisher_best_streak || 0),
+    totalEarnings: Number(row?.fisher_total_earnings || 0),
+    rareCatches: Number(row?.fisher_rare_catches || 0),
+    legendaryCatches: Number(row?.fisher_legendary_catches || 0),
+    rodTier: Math.max(1, Math.min(5, Number(row?.fisher_rod_tier || 1))),
+    carryCapacityKg: Math.max(FISHER_CONFIG.carryCapacityKg, Math.min(FISHER_CONFIG.carryCapacityMaxKg, Number(row?.fisher_carry_capacity_kg || FISHER_CONFIG.carryCapacityKg))),
+  };
+}
+
+function syncFisherSessionTime(session) {
+  const now = Date.now();
+  if (session.shiftState === 'TRAVEL_TO_SPOT' && session.activeCatch && now >= Number(session.activeCatch.travelEndsAt || 0)) {
+    session.shiftState = 'BAIT_STEP';
+    session.activeCatch.stepsDone = [];
+  }
+
+  if (session.shiftState === 'WAITING_BITE' && session.activeCatch && now >= Number(session.activeCatch.biteAt || 0)) {
+    session.shiftState = 'HOOK_WINDOW';
+    session.activeCatch.hookWindowEndsAt = now + FISHER_CONFIG.hookWindowMs;
+  }
+}
+
+function fisherStateView(session, progressView) {
+  syncFisherSessionTime(session);
+  const now = Date.now();
+  const repairSecondsLeft = Math.max(0, Math.ceil((Number(session.repairUntil || 0) - now) / 1000));
+  const activeCatch = session.activeCatch
+    ? {
+        spotId: session.activeCatch.spotId,
+        spotTier: session.activeCatch.spotTier,
+        spotName: session.activeCatch.spotName,
+        travelLeftSec: Math.max(0, Math.ceil((Number(session.activeCatch.travelEndsAt || 0) - now) / 1000)),
+        waitBiteLeftSec: Math.max(0, Math.ceil((Number(session.activeCatch.biteAt || 0) - now) / 1000)),
+        hookWindowLeftMs: Math.max(0, Number(session.activeCatch.hookWindowEndsAt || 0) - now),
+        castQuality: session.activeCatch.castQuality || null,
+        castMeter: Number(session.activeCatch.castMeter || 0),
+        hookQuality: session.activeCatch.hookQuality || null,
+        tension: Math.max(0, Math.min(100, Number(session.activeCatch.tension || 0))),
+        catchProgress: Math.max(0, Math.min(100, Number(session.activeCatch.catchProgress || 0))),
+        lineIntegrity: Math.max(0, Math.min(100, Number(session.activeCatch.lineIntegrity || 0))),
+        stepsRequired: [...(session.activeCatch.stepsRequired || [])],
+        stepsDone: [...(session.activeCatch.stepsDone || [])],
+        nextStep: (session.activeCatch.stepsRequired || []).find((step) => !(session.activeCatch.stepsDone || []).includes(step)) || null,
+        pullPrompt: session.activeCatch.pullPrompt
+          ? {
+              direction: session.activeCatch.pullPrompt.direction,
+              expiresInMs: Math.max(0, Number(session.activeCatch.pullPrompt.expiresAt || 0) - now),
+            }
+          : null,
+      }
+    : null;
+
+  return {
+    progress: {
+      ...progressView,
+      rodTierLabel: fisherRodTierModel(progressView.rodTier).name,
+      unlockedSpotTier: fisherTierForLevel(progressView.level),
+    },
+    shiftState: session.shiftState,
+    streak: Number(session.streak || 0),
+    carryCapacityKg: Number(session.carryCapacityKg || progressView.carryCapacityKg || FISHER_CONFIG.carryCapacityKg),
+    carryWeightKg: Number(session.carryWeightKg || 0),
+    carryEstimatedValue: Number(session.carryEstimatedValue || 0),
+    carriedFish: [...(session.carriedFish || [])],
+    activeSpotName: session.activeSpot?.name || null,
+    currentDockCell: session.currentDockCell,
+    targetDockCell: session.targetDockCell || null,
+    dockPrompt:
+      session.shiftState === 'SELECTING_DOCK'
+        ? `Go to spot ${session.activeSpot?.name || ''} and click the green 4x4 square marker.`.trim()
+        : null,
+    repairSecondsLeft,
+    repairLabel: session.repairLabel || null,
+    activeCatch,
+    lastResult: session.lastResult || null,
+  };
+}
+
+function fisherSetRepair(session, label) {
+  session.repairUntil = Date.now() + FISHER_CONFIG.repairCooldownMs;
+  session.repairLabel = label;
+}
+
+const PILOT_MAX_LEVEL = 50;
+
+const PILOT_CONFIG = {
+  startCooldownMs: 15000,
+  actionCooldownMs: 500,
+  completionGraceMs: 250,
+  streakBonusPerStep: 0.015,
+  streakBonusMax: 0.12,
+  firstCompletionBonusCash: 2500,
+  firstCompletionBonusXp: 25,
+  milestoneBonusCash: {
+    5: 2500,
+    10: 5000,
+    25: 10000,
+  },
+  milestoneBonusXp: {
+    5: 15,
+    10: 30,
+    25: 60,
+  },
+  routes: [
+    {
+      id: 'ROUTE_1',
+      index: 1,
+      name: 'Route 1',
+      theme: 'Skydivers',
+      routePath: 'Sandy Airport -> Paleto Airport',
+      durationSeconds: 5,
+      baseReward: 20000,
+      baseXp: 120,
+      unlockLevel: 1,
+      requiredPreviousRouteId: null,
+      requiredPreviousCompletions: 0,
+      progressionCompletions: 25,
+      stages: [
+        'Preparing aircraft for skydiving mission',
+        'Boarding skydivers',
+        'Taking off from Sandy Airport',
+        'En route to Paleto Airport',
+        'Arrived at Paleto Airport',
+        'Skydivers deployed',
+        'Mission confirmed',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_2',
+      index: 2,
+      name: 'Route 2',
+      theme: 'Farm Fertilizer Spraying',
+      routePath: 'Paleto Airport -> Farm Airport',
+      durationSeconds: 7,
+      baseReward: 20000,
+      baseXp: 170,
+      unlockLevel: 10,
+      requiredPreviousRouteId: 'ROUTE_1',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'Refueling crop-dusting aircraft',
+        'Loading fertilizer tanks',
+        'Taking off from Paleto Airport',
+        'Flying to Farm Airport',
+        'Spraying fertilizer over the fields',
+        'Operation complete',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_3',
+      index: 3,
+      name: 'Route 3',
+      theme: 'Military Transport',
+      routePath: 'Military Base -> Los Santos Airport',
+      durationSeconds: 10,
+      baseReward: 35000,
+      baseXp: 240,
+      unlockLevel: 20,
+      requiredPreviousRouteId: 'ROUTE_2',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'Military authorization check',
+        'Loading military cargo',
+        'Taking off from Military Base',
+        'Secure flight in progress',
+        'Landing at Los Santos Airport',
+        'Unloading military cargo',
+        'Mission confirmed',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_4',
+      index: 4,
+      name: 'Route 4',
+      theme: 'Passenger Transport',
+      routePath: 'Los Santos Airport -> Cayo Airport -> Sandy Airport -> Paleto Airport',
+      durationSeconds: 12,
+      baseReward: 50000,
+      baseXp: 320,
+      unlockLevel: 30,
+      requiredPreviousRouteId: 'ROUTE_3',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'Passenger check-in at Los Santos Airport',
+        'Taking off from Los Santos Airport',
+        'Landing at Cayo Airport',
+        'Passenger transfer at Cayo',
+        'Departing to Sandy Airport',
+        'Landing at Sandy Airport',
+        'Passenger transfer at Sandy',
+        'Departing to Paleto Airport',
+        'Final arrival at Paleto Airport',
+        'Passenger transport complete',
+        'Flight completed',
+      ],
+    },
+    {
+      id: 'ROUTE_5',
+      index: 5,
+      name: 'Route 5',
+      theme: 'NASA Mission',
+      routePath: 'Military Base Airport -> Los Santos -> Paleto -> Sandy -> NASA Airport',
+      durationSeconds: 15,
+      baseReward: 75000,
+      baseXp: 450,
+      unlockLevel: 40,
+      requiredPreviousRouteId: 'ROUTE_4',
+      requiredPreviousCompletions: 25,
+      progressionCompletions: 25,
+      stages: [
+        'NASA mission briefing',
+        'Loading special equipment',
+        'Taking off from Military Base Airport',
+        'Stopover at Los Santos',
+        'Stopover at Paleto',
+        'Stopover at Sandy',
+        'Final approach to NASA Airport',
+        'NASA landing clearance approved',
+        'Unloading mission equipment',
+        'Special mission confirmed',
+        'Flight completed',
+      ],
+    },
+  ],
+};
+
+const pilotSessions = new Map();
+
+function pilotXpForLevel(level) {
+  return pizzerXpForLevel(level);
+}
+
+function computePilotLevel(xp) {
+  const safeXp = Math.max(0, Math.floor(Number(xp) || 0));
+  let level = 1;
+  for (let i = 2; i <= PILOT_MAX_LEVEL; i += 1) {
+    if (safeXp >= pilotXpForLevel(i)) level = i;
+  }
+  return Math.min(PILOT_MAX_LEVEL, level);
+}
+
+function pilotLevelStartXp(level) {
+  return pilotXpForLevel(level);
+}
+
+function pilotNextLevelXp(level) {
+  if (level >= PILOT_MAX_LEVEL) return null;
+  return pilotXpForLevel(level + 1);
+}
+
+function pilotCompletionColumnByRoute(routeId) {
+  if (routeId === 'ROUTE_1') return 'route_1_completions';
+  if (routeId === 'ROUTE_2') return 'route_2_completions';
+  if (routeId === 'ROUTE_3') return 'route_3_completions';
+  if (routeId === 'ROUTE_4') return 'route_4_completions';
+  return 'route_5_completions';
+}
+
+function pilotCompletionsByRoute(progressView, routeId) {
+  if (routeId === 'ROUTE_1') return Number(progressView.route1Completions || 0);
+  if (routeId === 'ROUTE_2') return Number(progressView.route2Completions || 0);
+  if (routeId === 'ROUTE_3') return Number(progressView.route3Completions || 0);
+  if (routeId === 'ROUTE_4') return Number(progressView.route4Completions || 0);
+  return Number(progressView.route5Completions || 0);
+}
+
+function pilotRouteById(routeId) {
+  return PILOT_CONFIG.routes.find((route) => route.id === routeId) || null;
+}
+
+function pilotRouteLockReasons(route, progressView) {
+  const reasons = [];
+  if (Number(progressView.level || 1) < Number(route.unlockLevel || 1)) {
+    reasons.push(`Requires Level ${route.unlockLevel}`);
+  }
+  if (route.requiredPreviousRouteId && Number(route.requiredPreviousCompletions || 0) > 0) {
+    const currentPrev = pilotCompletionsByRoute(progressView, route.requiredPreviousRouteId);
+    if (currentPrev < Number(route.requiredPreviousCompletions || 0)) {
+      const prevRoute = pilotRouteById(route.requiredPreviousRouteId);
+      reasons.push(`Requires ${route.requiredPreviousCompletions} completions of ${prevRoute?.name || route.requiredPreviousRouteId}`);
+    }
+  }
+  return reasons;
+}
+
+function pilotBuildRouteView(route, progressView) {
+  const completions = pilotCompletionsByRoute(progressView, route.id);
+  const lockReasons = pilotRouteLockReasons(route, progressView);
+  const stageCount = Math.max(1, Number(route.stages?.length || 1));
+  const stageDurationMs = Math.floor((Number(route.durationSeconds || 1) * 1000) / stageCount);
+  return {
+    id: route.id,
+    index: route.index,
+    name: route.name,
+    theme: route.theme,
+    routePath: route.routePath,
+    durationSeconds: route.durationSeconds,
+    baseReward: route.baseReward,
+    baseXp: route.baseXp,
+    unlockLevel: route.unlockLevel,
+    requiredPreviousRouteId: route.requiredPreviousRouteId,
+    requiredPreviousCompletions: route.requiredPreviousCompletions,
+    progressionCompletions: route.progressionCompletions,
+    completions,
+    progressLabel: `${completions}/${route.progressionCompletions}`,
+    locked: lockReasons.length > 0,
+    lockReasons,
+    stageDurationMs,
+    stages: [...route.stages],
+  };
+}
+
+function pilotUnlockedRouteIds(progressView) {
+  return PILOT_CONFIG.routes
+    .filter((route) => pilotRouteLockReasons(route, progressView).length === 0)
+    .map((route) => route.id);
+}
+
+async function ensurePilotProgress(db, playerId) {
+  await db.query(
+    `INSERT INTO player_pilot_progress (player_id)
+     VALUES ($1)
+     ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM player_pilot_progress WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+function toPilotProgressView(row) {
+  const xp = Number(row?.pilot_xp || 0);
+  const level = Math.max(1, Math.min(PILOT_MAX_LEVEL, Number(row?.pilot_level || computePilotLevel(xp))));
+  const currentStart = pilotLevelStartXp(level);
+  const next = pilotNextLevelXp(level);
+  return {
+    level,
+    xp,
+    currentLevelXp: xp - currentStart,
+    nextLevelXp: next,
+    totalEarnings: Number(row?.pilot_total_earnings || 0),
+    streak: Number(row?.pilot_streak || 0),
+    bestStreak: Number(row?.pilot_best_streak || 0),
+    totalFlights: Number(row?.pilot_total_flights || 0),
+    route1Completions: Number(row?.route_1_completions || 0),
+    route2Completions: Number(row?.route_2_completions || 0),
+    route3Completions: Number(row?.route_3_completions || 0),
+    route4Completions: Number(row?.route_4_completions || 0),
+    route5Completions: Number(row?.route_5_completions || 0),
+  };
+}
+
+function getPilotSession(playerId) {
+  return pilotSessions.get(playerId) || {
+    shiftState: 'IDLE',
+    selectedRouteId: null,
+    activeFlight: null,
+    lastResult: null,
+    cooldownUntil: 0,
+    lastActionAt: 0,
+  };
+}
+
+function setPilotSession(playerId, session) {
+  pilotSessions.set(playerId, session);
+}
+
+function enforcePilotActionCooldown(session) {
+  const now = Date.now();
+  if (now - Number(session.lastActionAt || 0) < PILOT_CONFIG.actionCooldownMs) {
+    throw new Error('wait 0.5s between actions');
+  }
+  session.lastActionAt = now;
+}
+
+function pilotStateView(session, progressView) {
+  const now = Date.now();
+  const activeFlight = session.activeFlight
+    ? {
+        sessionId: session.activeFlight.sessionId,
+        routeId: session.activeFlight.routeId,
+        startedAt: session.activeFlight.startedAt,
+        minFinishAt: session.activeFlight.minFinishAt,
+        elapsedMs: Math.max(0, now - Number(session.activeFlight.startedAt || 0)),
+        remainingMs: Math.max(0, Number(session.activeFlight.minFinishAt || 0) - now),
+      }
+    : null;
+
+  return {
+    progress: progressView,
+    shiftState: session.shiftState,
+    selectedRouteId: session.selectedRouteId || null,
+    streak: Number(progressView.streak || 0),
+    routes: PILOT_CONFIG.routes.map((route) => pilotBuildRouteView(route, progressView)),
+    activeFlight,
+    lastResult: session.lastResult || null,
+  };
+}
+
+async function addPilotTimeForFlight(db, playerId, hoursToAdd) {
+  const safeHours = Math.max(0, Number(hoursToAdd || 0));
+  if (safeHours <= 0) return;
+  await db.query(
+    `
+    INSERT INTO player_stats (player_id, time_pilot, last_seen, updated_at)
+    VALUES ($1, $2, NOW(), NOW())
+    ON CONFLICT (player_id) DO UPDATE SET
+      time_pilot = player_stats.time_pilot + $2,
+      last_seen = NOW(),
+      updated_at = NOW()
+    `,
+    [playerId, safeHours],
+  );
+}
+
+const NPC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+
+function getNpcDynamicMultiplier() {
+  // Common pricing swings: -20% to +40%, with rare hype spikes up to +200%.
+  if (Math.random() < 0.04) {
+    return 1 + Math.random() * 2;
+  }
+  return 0.8 + Math.random() * 0.6;
+}
+
+function toDynamicNpcPrice(basePrice) {
+  return Math.max(1, Math.floor(Number(basePrice) * getNpcDynamicMultiplier()));
+}
+
+async function ensurePlayer(db, playerId) {
+  await db.query(
+    `INSERT INTO players (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
+  const result = await db.query(`SELECT * FROM players WHERE player_id = $1`, [playerId]);
+  return result.rows[0];
+}
+
+async function addInventoryItem(db, playerId, itemType, quantity = 1, metadata = {}) {
+  if (itemType === 'CLOTHING') {
+    const inserted = await db.query(
+      `INSERT INTO inventory_items (player_id, item_type, quantity, metadata)
+       VALUES ($1, $2, $3, $4::jsonb)
+       RETURNING id, item_type, quantity, metadata`,
+      [playerId, itemType, quantity, JSON.stringify(metadata)],
+    );
+    return inserted.rows[0];
+  }
+
+  const existing = await db.query(
+    `SELECT id, quantity FROM inventory_items
+     WHERE player_id = $1 AND item_type = $2 AND metadata = $3::jsonb
+     LIMIT 1`,
+    [playerId, itemType, JSON.stringify(metadata)],
+  );
+
+  if (existing.rows[0]) {
+    const updated = await db.query(
+      `UPDATE inventory_items
+       SET quantity = quantity + $2
+       WHERE id = $1
+       RETURNING id, item_type, quantity, metadata`,
+      [existing.rows[0].id, quantity],
+    );
+    return updated.rows[0];
+  }
+
+  const inserted = await db.query(
+    `INSERT INTO inventory_items (player_id, item_type, quantity, metadata)
+     VALUES ($1, $2, $3, $4::jsonb)
+     RETURNING id, item_type, quantity, metadata`,
+    [playerId, itemType, quantity, JSON.stringify(metadata)],
+  );
+  return inserted.rows[0];
+}
+
+async function consumeInventoryItem(db, itemId, amount = 1) {
+  const updated = await db.query(
+    `UPDATE inventory_items
+     SET quantity = quantity - $2
+     WHERE id = $1 AND quantity >= $2
+     RETURNING id, player_id, item_type, quantity, metadata`,
+    [itemId, amount],
+  );
+
+  if (!updated.rows[0]) {
+    throw new Error('item missing or insufficient quantity');
+  }
+
+  if (updated.rows[0].quantity <= 0) {
+    await db.query(`DELETE FROM inventory_items WHERE id = $1`, [itemId]);
+  }
+
+  return updated.rows[0];
+}
+
+async function ensureVehicleCapacity(db, playerId) {
+  const [playerResult, vehiclesResult] = await Promise.all([
+    db.query(`SELECT vehicle_slots_base, vehicle_slots_extra FROM players WHERE player_id = $1`, [playerId]),
+    db.query(`SELECT COUNT(*)::INT AS count FROM owned_vehicles WHERE player_id = $1`, [playerId]),
+  ]);
+
+  const player = playerResult.rows[0];
+  const usedSlots = vehiclesResult.rows[0]?.count ?? 0;
+  const totalSlots = (player?.vehicle_slots_base ?? 0) + (player?.vehicle_slots_extra ?? 0);
+  if (usedSlots >= totalSlots) {
+    throw new Error('no vehicle slots available');
+  }
+}
+
+function findVehicleSeedByName(name) {
+  return VEHICLE_MODELS.find((vehicle) => vehicle.name === name) ?? null;
+}
+
+function findClothingSeedByName(name) {
+  return CLOTHING_ITEMS.find((item) => item.name === name) ?? null;
+}
+
+async function resolveListingAsset(db, listing) {
+  if (listing.asset_type === 'VEHICLE') {
+    if (listing.seller_npc_id) {
+      const result = await db.query(
+        `SELECT id, brand, name, base_price, is_jackpot FROM vehicle_models WHERE id = $1`,
+        [listing.asset_ref_id],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        assetName: row.name,
+        assetMetadata: {
+          id: row.id,
+          brand: row.brand,
+          basePrice: Number(row.base_price),
+          marketPrice: Number(row.base_price),
+          isJackpot: row.is_jackpot,
+          imagePath: getVehicleImagePath(row.name),
+        },
+      };
+    }
+
+    const result = await db.query(
+      `SELECT ov.id, ov.purchase_price, vm.brand, vm.name
+       FROM owned_vehicles ov
+       JOIN vehicle_models vm ON vm.id = ov.model_id
+       WHERE ov.id = $1`,
+      [listing.asset_ref_id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      assetName: row.name,
+      assetMetadata: {
+        id: row.id,
+        brand: row.brand,
+        purchasePrice: Number(row.purchase_price),
+        marketPrice: Number(row.purchase_price),
+        imagePath: getVehicleImagePath(row.name),
+      },
+    };
+  }
+
+  if (listing.asset_type === 'CLOTHING') {
+    if (listing.seller_npc_id) {
+      const result = await db.query(
+        `SELECT id, name, category, rarity, min_value, max_value FROM clothing_items WHERE id = $1`,
+        [listing.asset_ref_id],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        assetName: row.name,
+        assetMetadata: {
+          id: row.id,
+          name: row.name,
+          category: row.category,
+          rarity: row.rarity,
+          marketValue: Math.round((Number(row.min_value) + Number(row.max_value)) / 2),
+          marketPrice: Math.round((Number(row.min_value) + Number(row.max_value)) / 2),
+          imagePath: getClothingImagePath(row.name, row.category),
+        },
+      };
+    }
+
+    const result = await db.query(
+      `SELECT id, metadata FROM inventory_items WHERE id = $1 AND item_type = 'CLOTHING'`,
+      [listing.asset_ref_id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const metadata = row.metadata || {};
+    return {
+      assetName: metadata.name || 'Clothing',
+      assetMetadata: {
+        ...metadata,
+        id: row.id,
+        imagePath: getClothingImagePath(metadata.name || 'Like Basic Tee', metadata.category || 'TSHIRT'),
+      },
+    };
+  }
+
+  const result = await db.query(
+    `SELECT id, metadata FROM inventory_items WHERE id = $1 AND item_type = 'XENON_VEHICLE'`,
+    [listing.asset_ref_id],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    assetName: 'Xenon Vehicle',
+    assetMetadata: {
+      id: row.id,
+      ...row.metadata,
+    },
+  };
+}
+
+async function transferListingAsset(db, listing, buyerPlayerId) {
+  if (listing.asset_type === 'VEHICLE') {
+    await ensureVehicleCapacity(db, buyerPlayerId);
+
+    if (listing.seller_npc_id) {
+      const result = await db.query(`SELECT id, name, base_price FROM vehicle_models WHERE id = $1`, [listing.asset_ref_id]);
+      const model = result.rows[0];
+      if (!model) throw new Error('vehicle not found');
+      const inserted = await db.query(
+        `INSERT INTO owned_vehicles (player_id, model_id, purchase_price)
+         VALUES ($1, $2, $3)
+         RETURNING id`,
+        [buyerPlayerId, model.id, Number(model.base_price)],
+      );
+      await db.query(`UPDATE owned_vehicles SET purchase_source = 'CNN' WHERE id = $1`, [inserted.rows[0].id]);
+      return inserted.rows[0].id;
+    }
+
+    const updated = await db.query(
+      `UPDATE owned_vehicles
+       SET player_id = $1, purchase_source = 'CNN'
+       WHERE id = $2 AND player_id = $3
+       RETURNING id`,
+      [buyerPlayerId, listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!updated.rows[0]) throw new Error('vehicle transfer failed');
+    return updated.rows[0].id;
+  }
+
+  if (listing.asset_type === 'CLOTHING') {
+    if (listing.seller_npc_id) {
+      const result = await db.query(
+        `SELECT name, category, rarity, min_value, max_value FROM clothing_items WHERE id = $1`,
+        [listing.asset_ref_id],
+      );
+      const item = result.rows[0];
+      if (!item) throw new Error('clothing not found');
+      const marketValue = randomInt(Number(item.min_value), Number(item.max_value));
+      const inserted = await addInventoryItem(db, buyerPlayerId, 'CLOTHING', 1, {
+        name: item.name,
+        category: item.category,
+        rarity: item.rarity,
+        marketValue,
+        source: 'CNN',
+        imagePath: getClothingImagePath(item.name, item.category),
+      });
+      return inserted.id;
+    }
+
+    const result = await db.query(
+      `SELECT id, player_id, metadata FROM inventory_items
+       WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    const item = result.rows[0];
+    if (!item) throw new Error('clothing transfer failed');
+    await consumeInventoryItem(db, item.id, 1);
+    const inserted = await addInventoryItem(db, buyerPlayerId, 'CLOTHING', 1, {
+      ...(item.metadata || {}),
+      source: 'CNN',
+    });
+    return inserted.id;
+  }
+
+  if (listing.seller_npc_id) {
+    const inserted = await addInventoryItem(db, buyerPlayerId, 'XENON_VEHICLE', 1, {});
+    return inserted.id;
+  }
+
+  const result = await db.query(
+    `SELECT id, player_id, metadata FROM inventory_items
+     WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+    [listing.asset_ref_id, listing.seller_player_id],
+  );
+  const item = result.rows[0];
+  if (!item) throw new Error('xenon transfer failed');
+  await consumeInventoryItem(db, item.id, 1);
+  const inserted = await addInventoryItem(db, buyerPlayerId, 'XENON_VEHICLE', 1, item.metadata || {});
+  return inserted.id;
+}
+
+async function buildMarketListingView(db, listing, viewerPlayerId) {
+  const asset = await resolveListingAsset(db, listing);
+  if (!asset) return null;
+
+  let sellerName = listing.seller_player_id;
+  let sellerEmoji = '👤';
+  let sellerType = 'PLAYER';
+
+  if (listing.seller_npc_id) {
+    const npc = NPC_SELLERS.find((entry) => normalizeNpcId(entry.id) === normalizeNpcId(listing.seller_npc_id));
+    sellerName = npc?.name || 'NPC Seller';
+    sellerEmoji = npc?.emoji || '🕵️';
+    sellerType = 'NPC';
+  } else if (listing.seller_player_id) {
+    const sellerResult = await db.query(
+      `SELECT display_name FROM players WHERE player_id = $1`,
+      [listing.seller_player_id],
+    );
+    const displayName = String(sellerResult.rows[0]?.display_name || '').trim();
+    sellerName = displayName || listing.seller_player_id;
+  }
+
+  return {
+    id: listing.id,
+    sellerType,
+    sellerPlayerId: listing.seller_player_id,
+    sellerName,
+    sellerEmoji,
+    assetType: listing.asset_type,
+    assetRefId: listing.asset_ref_id,
+    assetName: asset.assetName,
+    assetMetadata: asset.assetMetadata,
+    askPrice: Number(listing.ask_price),
+    isOwn: listing.seller_player_id === viewerPlayerId,
+    createdAt: asIso(listing.created_at),
+  };
+}
+
+async function findActiveListingByHint(db, hint) {
+  if (!hint) return null;
+
+  const assetType = String(hint.assetType || '');
+  const assetRefId = Number(hint.assetRefId);
+  if (!assetType || !Number.isInteger(assetRefId) || assetRefId <= 0) return null;
+
+  if (String(hint.sellerType || '').toUpperCase() === 'NPC') {
+    const npcMatch = await db.query(
+      `SELECT *
+       FROM market_listings
+       WHERE status = 'ACTIVE'
+         AND seller_npc_id IS NOT NULL
+         AND asset_type = $1
+         AND asset_ref_id = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [assetType, assetRefId],
+    );
+    return npcMatch.rows[0] || null;
+  }
+
+  const sellerPlayerId = String(hint.sellerPlayerId || '');
+  if (!sellerPlayerId) return null;
+
+  const playerMatch = await db.query(
+    `SELECT *
+     FROM market_listings
+     WHERE status = 'ACTIVE'
+       AND seller_player_id = $1
+       AND asset_type = $2
+       AND asset_ref_id = $3
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [sellerPlayerId, assetType, assetRefId],
+  );
+  return playerMatch.rows[0] || null;
+}
+
+async function settleListingSale(db, listing, buyerPlayerId, salePrice, acceptedOfferId = null) {
+  if (listing.seller_player_id && listing.seller_player_id === buyerPlayerId) {
+    throw new Error('cannot buy your own listing');
+  }
+
+  const buyer = await ensurePlayer(db, buyerPlayerId);
+  if (Number(buyer.clean_money) < salePrice) {
+    throw new Error('insufficient funds');
+  }
+
+  if (listing.seller_player_id) {
+    await ensurePlayer(db, listing.seller_player_id);
+  }
+
+  await db.query(
+    `UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`,
+    [salePrice, buyerPlayerId],
+  );
+
+  if (listing.seller_player_id) {
+    await db.query(
+      `UPDATE players SET clean_money = clean_money + $1 WHERE player_id = $2`,
+      [salePrice, listing.seller_player_id],
+    );
+  }
+
+  await transferListingAsset(db, listing, buyerPlayerId);
+
+  await db.query(
+    `UPDATE market_listings
+     SET status = 'SOLD', updated_at = NOW()
+     WHERE id = $1`,
+    [listing.id],
+  );
+
+  await db.query(
+    `UPDATE market_offers
+     SET status = CASE WHEN id = $2 THEN 'ACCEPTED' ELSE 'REJECTED' END,
+         updated_at = NOW()
+     WHERE listing_id = $1 AND status = 'PENDING'`,
+    [listing.id, acceptedOfferId],
+  );
+}
+
+async function estimatePlayerListingMarketPrice(db, listing) {
+  if (listing.asset_type === 'VEHICLE') {
+    const vehicle = await db.query(
+      `SELECT vm.base_price
+       FROM owned_vehicles ov
+       JOIN vehicle_models vm ON vm.id = ov.model_id
+       WHERE ov.id = $1 AND ov.player_id = $2`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!vehicle.rows[0]) return null;
+    return Number(vehicle.rows[0].base_price);
+  }
+
+  if (listing.asset_type === 'CLOTHING') {
+    const item = await db.query(
+      `SELECT metadata
+       FROM inventory_items
+       WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    const row = item.rows[0];
+    if (!row) return null;
+    const meta = row.metadata || {};
+    const marketValue = Number(meta.marketValue || 0);
+    if (marketValue > 0) return marketValue;
+
+    const byCatalog = await db.query(
+      `SELECT min_value, max_value
+       FROM clothing_items
+       WHERE name = $1
+       LIMIT 1`,
+      [meta.name || ''],
+    );
+    if (byCatalog.rows[0]) {
+      return Math.round((Number(byCatalog.rows[0].min_value) + Number(byCatalog.rows[0].max_value)) / 2);
+    }
+    return null;
+  }
+
+  if (listing.asset_type === 'XENON_VEHICLE') {
+    const item = await db.query(
+      `SELECT metadata
+       FROM inventory_items
+       WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    const row = item.rows[0];
+    if (!row) return null;
+    const meta = row.metadata || {};
+    const inferred = Number(meta.marketPrice || meta.marketValue || 0);
+    return inferred > 0 ? inferred : 250000;
+  }
+
+  return null;
+}
+
+async function settleNpcPurchaseOfPlayerListing(db, listing, salePrice) {
+  if (!listing.seller_player_id) {
+    throw new Error('player listing required');
+  }
+
+  await db.query(
+    `UPDATE players SET clean_money = clean_money + $1, updated_at = NOW() WHERE player_id = $2`,
+    [salePrice, listing.seller_player_id],
+  );
+
+  if (listing.asset_type === 'VEHICLE') {
+    const removed = await db.query(
+      `DELETE FROM owned_vehicles
+       WHERE id = $1 AND player_id = $2
+       RETURNING id`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!removed.rows[0]) throw new Error('vehicle asset unavailable');
+  } else {
+    const removed = await db.query(
+      `UPDATE inventory_items
+       SET quantity = quantity - 1
+       WHERE id = $1 AND player_id = $2 AND quantity > 0
+       RETURNING id, quantity`,
+      [listing.asset_ref_id, listing.seller_player_id],
+    );
+    if (!removed.rows[0]) throw new Error('inventory asset unavailable');
+    if (removed.rows[0].quantity <= 0) {
+      await db.query(`DELETE FROM inventory_items WHERE id = $1`, [listing.asset_ref_id]);
+    }
+  }
+
+  await db.query(
+    `UPDATE market_listings
+     SET status = 'SOLD', updated_at = NOW()
+     WHERE id = $1`,
+    [listing.id],
+  );
+
+  await db.query(
+    `UPDATE market_offers
+     SET status = 'REJECTED', updated_at = NOW()
+     WHERE listing_id = $1 AND status = 'PENDING'`,
+    [listing.id],
+  );
+}
+
+async function runNpcAutoBuyerSweep() {
+  const soldCount = await withTransaction(async (db) => {
+    const listings = await db.query(
+      `SELECT ml.*
+       FROM market_listings ml
+       WHERE ml.status = 'ACTIVE' AND ml.seller_player_id IS NOT NULL
+       ORDER BY ml.created_at ASC
+       LIMIT 30
+       FOR UPDATE SKIP LOCKED`,
+    );
+
+    const candidates = [];
+    for (const listing of listings.rows) {
+      const marketPrice = await estimatePlayerListingMarketPrice(db, listing);
+      if (!marketPrice || marketPrice <= 0) continue;
+
+      const askPrice = Number(listing.ask_price);
+      if (askPrice <= 0) continue;
+
+      const ratio = askPrice / marketPrice;
+      let chance = 0;
+      if (ratio <= 0.75) chance = 0.58;
+      else if (ratio <= 0.9) chance = 0.4;
+      else if (ratio <= 1.0) chance = 0.26;
+      else if (ratio <= 1.1) chance = 0.12;
+
+      if (chance > 0 && Math.random() < chance) {
+        candidates.push({ listing, ratio });
+      }
+    }
+
+    if (candidates.length === 0) return 0;
+
+    candidates.sort((a, b) => a.ratio - b.ratio);
+    const maxBuys = Math.min(2, candidates.length);
+    const buysThisCycle = Math.max(1, randomInt(1, maxBuys));
+    let sold = 0;
+
+    for (let i = 0; i < buysThisCycle; i += 1) {
+      const picked = candidates[i];
+      try {
+        await settleNpcPurchaseOfPlayerListing(db, picked.listing, Number(picked.listing.ask_price));
+        sold += 1;
+      } catch {
+        await db.query(
+          `UPDATE market_listings SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+          [picked.listing.id],
+        );
+      }
+    }
+
+    return sold;
+  });
+
+  return soldCount;
+}
 
 app.post('/api/stats/sync', requireDb, async (req, res) => {
   try {
@@ -290,60 +2289,6 @@ app.post('/api/activity/heartbeat', requireDb, async (req, res) => {
   }
 });
 
-function gangError(res, error) {
-  const message = error instanceof Error ? error.message : 'Operația gang a eșuat.';
-  const status = /inexistent/.test(message) ? 404 : 400;
-  return res.status(status).json({ error: message });
-}
-
-function gangPlayerId(req, fallback) {
-  const accountId = verifyUserToken(req.cookies.cityflow_user_token);
-  return accountId ? `user_${accountId}` : fallback;
-}
-
-app.get('/api/gangs/state/:playerId', requireDb, async (req, res) => {
-  try {
-    const state = await readGang(pool, gangPlayerId(req, req.params.playerId));
-    if (!state) return res.status(404).json({ error: 'Gang inexistent.' });
-    return res.json({ state, stateVersion: state.stateVersion });
-  } catch (error) {
-    return gangError(res, error);
-  }
-});
-
-app.post('/api/gangs/bootstrap', requireDb, async (req, res) => {
-  try {
-    const state = await bootstrapGang(pool, gangPlayerId(req, req.body?.playerId), req.body?.state);
-    return res.json({ state, stateVersion: state.stateVersion });
-  } catch (error) {
-    return gangError(res, error);
-  }
-});
-
-app.post('/api/gangs/sell', requireDb, async (req, res) => {
-  try {
-    return res.json(await sellGangStock(pool, { ...(req.body || {}), playerId: gangPlayerId(req, req.body?.playerId) }));
-  } catch (error) {
-    return gangError(res, error);
-  }
-});
-
-app.post('/api/gangs/process', requireDb, async (req, res) => {
-  try {
-    return res.json(await processGangStock(pool, { ...(req.body || {}), playerId: gangPlayerId(req, req.body?.playerId) }));
-  } catch (error) {
-    return gangError(res, error);
-  }
-});
-
-app.post('/api/gangs/upgrade', requireDb, async (req, res) => {
-  try {
-    return res.json(await upgradeGang(pool, { ...(req.body || {}), playerId: gangPlayerId(req, req.body?.playerId) }));
-  } catch (error) {
-    return gangError(res, error);
-  }
-});
-
 app.post('/api/adminpanelv2/login', (req, res) => {
   const { username, password } = req.body || {};
   if (username !== ADMIN_USER || password !== ADMIN_PASS) {
@@ -368,13 +2313,15 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
     const { username, email, password, passwordConfirm } = req.body || {};
     if (!username || !email || !password) return res.status(400).json({ error: 'missing fields' });
     if (password !== passwordConfirm) return res.status(400).json({ error: 'password mismatch' });
+    const playerId = createPlayerId();
 
     const inserted = await pool.query(
-      `INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email`,
-      [String(username).trim(), String(email).trim().toLowerCase(), String(password)],
+      `INSERT INTO users (username, email, password, player_id) VALUES ($1, $2, $3, $4) RETURNING id, username, email, player_id`,
+      [String(username).trim(), String(email).trim().toLowerCase(), String(password), playerId],
     );
     const user = inserted.rows[0];
     await pool.query(`INSERT INTO user_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [user.id]);
+    await ensurePlayer(pool, user.player_id);
 
     const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
     res.cookie('cityflow_user_token', signUserToken(`${user.id}|${expires}`), {
@@ -384,7 +2331,7 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    return res.json({ ok: true, user });
+    return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
   } catch (error) {
     return res.status(400).json({ error: 'register failed' });
   }
@@ -393,7 +2340,7 @@ app.post('/api/auth/register', requireDb, async (req, res) => {
 app.post('/api/auth/login', requireDb, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
-  const result = await pool.query(`SELECT id, username, email, password FROM users WHERE username = $1`, [String(username).trim()]);
+  const result = await pool.query(`SELECT id, username, email, password, player_id FROM users WHERE username = $1`, [String(username).trim()]);
   const user = result.rows[0];
   if (!user || user.password !== password) return res.status(401).json({ error: 'invalid credentials' });
 
@@ -405,7 +2352,7 @@ app.post('/api/auth/login', requireDb, async (req, res) => {
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 
-  return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email } });
+  return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
 });
 
 app.post('/api/auth/logout', (_req, res) => {
@@ -416,9 +2363,10 @@ app.post('/api/auth/logout', (_req, res) => {
 app.get('/api/auth/me', requireDb, async (req, res) => {
   const userId = verifyUserToken(req.cookies.cityflow_user_token);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  const result = await pool.query(`SELECT id, username, email FROM users WHERE id = $1`, [userId]);
+  const result = await pool.query(`SELECT id, username, email, player_id FROM users WHERE id = $1`, [userId]);
   if (!result.rows[0]) return res.status(401).json({ error: 'unauthorized' });
-  res.json({ user: result.rows[0] });
+  const user = result.rows[0];
+  res.json({ user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
 });
 
 app.get('/api/account/state', requireDb, requireUser, async (req, res) => {
@@ -456,43 +2404,2795 @@ app.get('/api/market/posts', requireDb, async (_req, res) => {
   res.json({ posts: result.rows });
 });
 
-app.post('/api/market/buy', requireDb, requireUser, async (req, res) => {
-  const { postId } = req.body || {};
-  const postResult = await pool.query(`SELECT * FROM market_posts WHERE id = $1 AND active = TRUE`, [postId]);
-  const post = postResult.rows[0];
-  if (!post) return res.status(404).json({ error: 'post missing' });
+app.post('/api/market/buy', requireDb, async (req, res) => {
+  try {
+    const { playerId, listingId, listingHint } = req.body || {};
+    const normalizedListingId = Number(listingId);
+    if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0) {
+      return res.status(400).json({ error: 'missing fields' });
+    }
 
-  await pool.query(
-    `INSERT INTO user_inventory (user_id, item_key, item_name, item_type, quantity)
-     VALUES ($1, $2, $3, $4, 1)
-     ON CONFLICT (user_id, item_key)
-     DO UPDATE SET quantity = user_inventory.quantity + 1`,
-    [req.userId, post.item_key, post.item_name, post.item_type],
-  );
-  await pool.query(`UPDATE market_posts SET active = FALSE WHERE id = $1`, [post.id]);
-  res.json({ ok: true, item: post });
+    const soldFor = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const listingResult = await db.query(
+        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
+        [normalizedListingId],
+      );
+      let listing = listingResult.rows[0];
+      if (!listing) {
+        listing = await findActiveListingByHint(db, listingHint);
+      }
+      if (!listing) throw new Error('listing unavailable');
+
+      await settleListingSale(db, listing, playerId, Number(listing.ask_price));
+      return Number(listing.ask_price);
+    });
+
+    res.json({ ok: true, boughtFor: soldFor });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'market buy failed' });
+  }
 });
 
-app.post('/api/market/offer', requireDb, requireUser, async (req, res) => {
-  const { postId, offerPrice } = req.body || {};
-  const postResult = await pool.query(`SELECT * FROM market_posts WHERE id = $1 AND active = TRUE`, [postId]);
-  const post = postResult.rows[0];
-  if (!post) return res.status(404).json({ error: 'post missing' });
+app.post('/api/market/offer', requireDb, async (req, res) => {
+  try {
+    const { playerId, listingId, offeredPrice, listingHint } = req.body || {};
+    const normalizedListingId = Number(listingId);
+    const normalizedOfferPrice = Math.floor(Number(offeredPrice));
+    if (!playerId || !Number.isInteger(normalizedListingId) || normalizedListingId <= 0 || !Number.isFinite(normalizedOfferPrice) || normalizedOfferPrice <= 0) {
+      return res.status(400).json({ error: 'missing fields' });
+    }
 
-  const offer = Number(offerPrice || 0);
-  const threshold = Number(post.price) * (0.78 + Math.random() * 0.22);
-  const accepted = offer >= threshold;
-  if (!accepted) return res.json({ accepted: false, message: 'NPC a refuzat oferta.' });
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const listingResult = await db.query(
+        `SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`,
+        [normalizedListingId],
+      );
+      let listing = listingResult.rows[0];
+      if (!listing) {
+        listing = await findActiveListingByHint(db, listingHint);
+      }
+      if (!listing) throw new Error('listing unavailable');
+      if (listing.seller_player_id === playerId) throw new Error('cannot offer on your own listing');
 
-  await pool.query(
-    `INSERT INTO user_inventory (user_id, item_key, item_name, item_type, quantity)
-     VALUES ($1, $2, $3, $4, 1)
-     ON CONFLICT (user_id, item_key)
-     DO UPDATE SET quantity = user_inventory.quantity + 1`,
-    [req.userId, post.item_key, post.item_name, post.item_type],
-  );
-  await pool.query(`UPDATE market_posts SET active = FALSE WHERE id = $1`, [post.id]);
-  return res.json({ accepted: true, message: 'NPC a acceptat oferta.', item: post });
+      const buyerResult = await db.query(`SELECT clean_money FROM players WHERE player_id = $1`, [playerId]);
+      if (Number(buyerResult.rows[0]?.clean_money ?? 0) < normalizedOfferPrice) {
+        throw new Error('insufficient funds');
+      }
+
+      let existingNpcAttempts = 0;
+      if (listing.seller_npc_id) {
+        const existingAttemptsResult = await db.query(
+          `SELECT COUNT(*)::INT AS count
+           FROM market_offers
+           WHERE listing_id = $1 AND buyer_player_id = $2`,
+          [normalizedListingId, playerId],
+        );
+        existingNpcAttempts = existingAttemptsResult.rows[0]?.count ?? 0;
+        if (existingNpcAttempts >= 3) {
+          throw new Error('npc negotiation attempts exhausted');
+        }
+      }
+
+      const inserted = await db.query(
+        `INSERT INTO market_offers (listing_id, buyer_player_id, offered_price, status)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, created_at`,
+        [normalizedListingId, playerId, normalizedOfferPrice, listing.seller_npc_id ? 'REJECTED' : 'PENDING'],
+      );
+
+      if (listing.seller_npc_id) {
+        const attemptNo = existingNpcAttempts + 1;
+        const attemptsLeft = Math.max(0, 3 - attemptNo);
+
+        const accepted = normalizedOfferPrice >= Math.floor(Number(listing.ask_price) * 0.9);
+        if (accepted) {
+          await db.query(
+            `UPDATE market_offers SET status = 'ACCEPTED', updated_at = NOW() WHERE id = $1`,
+            [inserted.rows[0].id],
+          );
+          await settleListingSale(db, listing, playerId, normalizedOfferPrice, inserted.rows[0].id);
+          return {
+            ...inserted.rows[0],
+            negotiation: {
+              isNpc: true,
+              signal: 'ACCEPT',
+              attemptNo,
+              attemptsLeft,
+              askPrice: Number(listing.ask_price),
+            },
+          };
+        }
+
+        const canCounter = attemptNo < 3 && normalizedOfferPrice >= Math.floor(Number(listing.ask_price) * 0.45);
+        const willCounter = canCounter && Math.random() < 0.7;
+        if (willCounter) {
+          const ask = Number(listing.ask_price);
+          const floorPrice = Math.floor(ask * 0.82);
+          const midpoint = Math.floor((ask + normalizedOfferPrice) / 2);
+          const counterAsk = Math.max(floorPrice, midpoint);
+          await db.query(
+            `UPDATE market_listings SET ask_price = $2, updated_at = NOW() WHERE id = $1`,
+            [normalizedListingId, counterAsk],
+          );
+          return {
+            ...inserted.rows[0],
+            negotiation: {
+              isNpc: true,
+              signal: 'COUNTER',
+              attemptNo,
+              attemptsLeft,
+              askPrice: ask,
+              counterAskPrice: counterAsk,
+            },
+          };
+        }
+
+        return {
+          ...inserted.rows[0],
+          negotiation: {
+            isNpc: true,
+            signal: 'REJECT',
+            attemptNo,
+            attemptsLeft,
+            askPrice: Number(listing.ask_price),
+          },
+        };
+      }
+
+      return {
+        ...inserted.rows[0],
+        negotiation: null,
+      };
+    });
+
+    res.json({
+      ok: true,
+      offerId: result.id,
+      createdAt: asIso(result.created_at),
+      negotiation: result.negotiation ?? null,
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'market offer failed' });
+  }
+});
+
+app.get('/api/market/listings', async (req, res) => {
+  try {
+    if (!dbReady || !pool) return res.json({ listings: [] });
+    const { playerId } = req.query;
+    const npcCount = await pool.query(
+      `SELECT COUNT(*)::INT AS count FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`,
+    );
+    const activeNpcCount = npcCount.rows[0]?.count ?? 0;
+    if (activeNpcCount === 0 || activeNpcCount > 10) {
+      await refreshNpcListings();
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM market_listings WHERE status = 'ACTIVE' ORDER BY created_at DESC LIMIT 100`,
+    );
+    const listings = (
+      await Promise.all(result.rows.map((listing) => buildMarketListingView(pool, listing, playerId || null)))
+    ).filter(Boolean);
+    res.json({ listings });
+  } catch (error) {
+    res.status(500).json({ error: 'market listings failed' });
+  }
+});
+
+app.post('/api/market/list', requireDb, async (req, res) => {
+  try {
+    const { playerId, assetType, assetRefId, askPrice } = req.body || {};
+    const normalizedAssetRefId = Number(assetRefId);
+    const normalizedAskPrice = Math.floor(Number(askPrice));
+    if (!playerId || !assetType || !Number.isInteger(normalizedAssetRefId) || normalizedAssetRefId <= 0 || !Number.isFinite(normalizedAskPrice) || normalizedAskPrice <= 0) {
+      return res.status(400).json({ error: 'missing fields' });
+    }
+
+    const created = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      let assetName = 'Unknown Listing';
+      let assetMetadata = {};
+
+      if (assetType === 'VEHICLE') {
+        const vehicle = await db.query(
+          `SELECT ov.id, ov.purchase_price, vm.brand, vm.name
+           FROM owned_vehicles ov
+           JOIN vehicle_models vm ON vm.id = ov.model_id
+           WHERE ov.id = $1 AND ov.player_id = $2`,
+          [normalizedAssetRefId, playerId],
+        );
+        const row = vehicle.rows[0];
+        if (!row) throw new Error('vehicle not owned');
+        assetName = row.name;
+        assetMetadata = {
+          id: row.id,
+          brand: row.brand,
+          purchasePrice: Number(row.purchase_price),
+          marketPrice: Number(row.purchase_price),
+          imagePath: getVehicleImagePath(row.name),
+        };
+      } else if (assetType === 'CLOTHING') {
+        const clothing = await db.query(
+          `SELECT id, metadata
+           FROM inventory_items
+           WHERE id = $1 AND player_id = $2 AND item_type = 'CLOTHING' AND quantity > 0`,
+          [normalizedAssetRefId, playerId],
+        );
+        const row = clothing.rows[0];
+        if (!row) throw new Error('clothing not owned');
+        const meta = row.metadata || {};
+        assetName = String(meta.name || 'Clothing');
+        assetMetadata = {
+          ...meta,
+          id: row.id,
+          imagePath: getClothingImagePath(String(meta.name || 'Like Basic Tee'), String(meta.category || 'TSHIRT')),
+        };
+      } else if (assetType === 'XENON_VEHICLE') {
+        const xenon = await db.query(
+          `SELECT id, metadata
+           FROM inventory_items
+           WHERE id = $1 AND player_id = $2 AND item_type = 'XENON_VEHICLE' AND quantity > 0`,
+          [normalizedAssetRefId, playerId],
+        );
+        const row = xenon.rows[0];
+        if (!row) throw new Error('xenon not owned');
+        assetName = 'Xenon Vehicle';
+        assetMetadata = {
+          id: row.id,
+          ...(row.metadata || {}),
+        };
+      }
+
+      const existing = await db.query(
+        `SELECT id FROM market_listings
+         WHERE seller_player_id = $1 AND asset_type = $2 AND asset_ref_id = $3 AND status = 'ACTIVE'`,
+        [playerId, assetType, normalizedAssetRefId],
+      );
+      if (existing.rows[0]) throw new Error('asset already listed');
+
+      const inserted = await db.query(
+        `INSERT INTO market_listings (seller_type, seller_player_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
+         VALUES ('PLAYER', $1, $2, $3, $4, $5::jsonb, $6, 'ACTIVE')
+         RETURNING id, created_at`,
+        [playerId, assetType, normalizedAssetRefId, assetName, JSON.stringify(assetMetadata), normalizedAskPrice],
+      );
+      return inserted.rows[0];
+    });
+
+    res.json({ ok: true, listingId: created.id, createdAt: asIso(created.created_at) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'market list failed' });
+  }
+});
+
+app.get('/api/market/seller', async (req, res) => {
+  try {
+    if (!dbReady || !pool) return res.json({ listings: [], incomingOffers: [] });
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const listingsResult = await pool.query(
+      `SELECT * FROM market_listings WHERE seller_player_id = $1 ORDER BY created_at DESC`,
+      [playerId],
+    );
+    const listings = (
+      await Promise.all(listingsResult.rows.map(async (listing) => {
+        const asset = await resolveListingAsset(pool, listing);
+        if (!asset) return null;
+        return {
+          id: listing.id,
+          assetType: listing.asset_type,
+          assetName: asset.assetName,
+          assetMetadata: asset.assetMetadata,
+          askPrice: Number(listing.ask_price),
+          status: listing.status,
+          createdAt: asIso(listing.created_at),
+        };
+      }))
+    ).filter(Boolean);
+
+    const offersResult = await pool.query(
+      `SELECT mo.*, ml.asset_type, ml.ask_price
+       FROM market_offers mo
+       JOIN market_listings ml ON ml.id = mo.listing_id
+       WHERE ml.seller_player_id = $1
+       ORDER BY mo.created_at DESC`,
+      [playerId],
+    );
+
+    const incomingOffers = (
+      await Promise.all(offersResult.rows.map(async (offer) => {
+        const listing = listingsResult.rows.find((entry) => entry.id === offer.listing_id);
+        const asset = listing ? await resolveListingAsset(pool, listing) : null;
+        if (!asset) return null;
+        return {
+          id: offer.id,
+          listingId: offer.listing_id,
+          buyerPlayerId: offer.buyer_player_id,
+          buyerDisplayName: String((await pool.query(`SELECT display_name FROM players WHERE player_id = $1`, [offer.buyer_player_id])).rows[0]?.display_name || '').trim() || offer.buyer_player_id,
+          offeredPrice: Number(offer.offered_price),
+          status: offer.status,
+          createdAt: asIso(offer.created_at),
+          assetName: asset.assetName,
+          assetType: offer.asset_type,
+          askPrice: Number(offer.ask_price),
+        };
+      }))
+    ).filter(Boolean);
+
+    res.json({ listings, incomingOffers });
+  } catch (error) {
+    res.status(500).json({ error: 'market seller failed' });
+  }
+});
+
+app.get('/api/market/buyer', async (req, res) => {
+  try {
+    if (!dbReady || !pool) return res.json({ offers: [] });
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const offersResult = await pool.query(
+      `SELECT mo.*, ml.asset_type, ml.ask_price, ml.status AS listing_status
+       FROM market_offers mo
+       JOIN market_listings ml ON ml.id = mo.listing_id
+       WHERE mo.buyer_player_id = $1
+       ORDER BY mo.created_at DESC`,
+      [playerId],
+    );
+
+    const offers = (
+      await Promise.all(offersResult.rows.map(async (offer) => {
+        const listingResult = await pool.query(`SELECT * FROM market_listings WHERE id = $1`, [offer.listing_id]);
+        const listing = listingResult.rows[0];
+        const asset = listing ? await resolveListingAsset(pool, listing) : null;
+        if (!asset) return null;
+        const sellerType = listing?.seller_npc_id ? 'NPC' : 'PLAYER';
+        let sellerName = listing?.seller_player_id;
+        if (listing?.seller_npc_id) {
+          sellerName = NPC_SELLERS.find((entry) => normalizeNpcId(entry.id) === normalizeNpcId(listing.seller_npc_id))?.name || 'NPC Seller';
+        } else if (listing?.seller_player_id) {
+          const seller = await pool.query(`SELECT display_name FROM players WHERE player_id = $1`, [listing.seller_player_id]);
+          sellerName = String(seller.rows[0]?.display_name || '').trim() || listing.seller_player_id;
+        }
+        return {
+          id: offer.id,
+          listingId: offer.listing_id,
+          offeredPrice: Number(offer.offered_price),
+          status: offer.status,
+          createdAt: asIso(offer.created_at),
+          assetName: asset.assetName,
+          assetMetadata: asset.assetMetadata,
+          assetType: offer.asset_type,
+          askPrice: Number(offer.ask_price),
+          listingStatus: offer.listing_status,
+          sellerType,
+          sellerName,
+        };
+      }))
+    ).filter(Boolean);
+
+    res.json({ offers });
+  } catch (error) {
+    res.status(500).json({ error: 'market buyer failed' });
+  }
+});
+
+app.post('/api/market/offer/accept', requireDb, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'missing fields' });
+
+    const soldFor = await withTransaction(async (db) => {
+      const offerResult = await db.query(`SELECT * FROM market_offers WHERE id = $1 AND status = 'PENDING'`, [offerId]);
+      const offer = offerResult.rows[0];
+      if (!offer) throw new Error('offer not found');
+
+      const listingResult = await db.query(`SELECT * FROM market_listings WHERE id = $1 AND status = 'ACTIVE'`, [offer.listing_id]);
+      const listing = listingResult.rows[0];
+      if (!listing || listing.seller_player_id !== playerId) throw new Error('listing not available');
+
+      await settleListingSale(db, listing, offer.buyer_player_id, Number(offer.offered_price), offer.id);
+      return Number(offer.offered_price);
+    });
+
+    res.json({ ok: true, soldFor });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'offer accept failed' });
+  }
+});
+
+app.post('/api/market/offer/reject', requireDb, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'missing fields' });
+
+    const updated = await pool.query(
+      `UPDATE market_offers mo
+       SET status = 'REJECTED', updated_at = NOW()
+       FROM market_listings ml
+       WHERE mo.id = $1 AND mo.listing_id = ml.id AND ml.seller_player_id = $2
+       RETURNING mo.id`,
+      [offerId, playerId],
+    );
+
+    if (!updated.rows[0]) return res.status(404).json({ error: 'offer not found' });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'offer reject failed' });
+  }
+});
+
+app.post('/api/market/offer/cancel', requireDb, async (req, res) => {
+  try {
+    const { playerId, offerId } = req.body || {};
+    if (!playerId || !offerId) return res.status(400).json({ error: 'missing fields' });
+
+    const updated = await pool.query(
+      `UPDATE market_offers
+       SET status = 'REJECTED', updated_at = NOW()
+       WHERE id = $1 AND buyer_player_id = $2 AND status = 'PENDING'
+       RETURNING id`,
+      [offerId, playerId],
+    );
+
+    if (!updated.rows[0]) return res.status(404).json({ error: 'offer not found' });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'offer cancel failed' });
+  }
+});
+
+app.post('/api/market/listing/cancel', requireDb, async (req, res) => {
+  try {
+    const { playerId, listingId } = req.body || {};
+    if (!playerId || !listingId) return res.status(400).json({ error: 'missing fields' });
+
+    await withTransaction(async (db) => {
+      const updated = await db.query(
+        `UPDATE market_listings
+         SET status = 'CANCELLED', updated_at = NOW()
+         WHERE id = $1 AND seller_player_id = $2 AND status = 'ACTIVE'
+         RETURNING id`,
+        [listingId, playerId],
+      );
+      if (!updated.rows[0]) throw new Error('listing not found');
+
+      await db.query(
+        `UPDATE market_offers SET status = 'REJECTED', updated_at = NOW()
+         WHERE listing_id = $1 AND status = 'PENDING'`,
+        [listingId],
+      );
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'listing cancel failed' });
+  }
+});
+
+app.post('/api/market/npc/refresh', async (_req, res) => {
+  try {
+    if (!dbReady || !pool) return res.json({ ok: true });
+    await refreshNpcListings();
+    const sold = await runNpcAutoBuyerSweep();
+    res.json({ ok: true, sold });
+  } catch (error) {
+    res.status(500).json({ error: 'npc refresh failed' });
+  }
+});
+
+// ========== BATCH A: Bootstrap, Showroom, Roulette ==========
+
+// GET /api/bootstrap - Initialize player with full state
+app.get('/api/bootstrap', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    // Ensure player exists
+    await pool.query(
+      `INSERT INTO players (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
+      [playerId],
+    );
+
+    // Get player state
+    const playerRes = await pool.query(`SELECT * FROM players WHERE player_id = $1`, [playerId]);
+    const player = playerRes.rows[0];
+
+    // Get owned vehicles
+    const vehiclesRes = await pool.query(
+      `SELECT ov.id, ov.model_id, vm.name, vm.brand, ov.purchase_price, ov.purchased_at, ov.purchase_source
+       FROM owned_vehicles ov
+       JOIN vehicle_models vm ON ov.model_id = vm.id
+       WHERE ov.player_id = $1`,
+      [playerId],
+    );
+
+    // Get inventory
+    const inventoryRes = await pool.query(
+      `SELECT id, item_type, quantity, metadata FROM inventory_items WHERE player_id = $1`,
+      [playerId],
+    );
+
+    // Get active boosts
+    const boostsRes = await pool.query(
+      `SELECT id, boost_type, expires_at FROM active_boosts WHERE player_id = $1 AND expires_at > NOW()`,
+      [playerId],
+    );
+
+    const usedSlots = vehiclesRes.rows.length;
+    const playerState = {
+      playerId: player.player_id,
+      displayName: player.display_name || player.player_id,
+      cleanMoney: Number(player.clean_money),
+      flowCoins: player.flow_coins,
+      rouletteFragments: player.roulette_fragments,
+      vehicleSlotsBase: player.vehicle_slots_base,
+      vehicleSlotsExtra: player.vehicle_slots_extra,
+      totalSlots: player.vehicle_slots_base + player.vehicle_slots_extra,
+      usedSlots,
+      skipNextTax: player.skip_next_tax,
+      nextTaxCollectionAt: player.next_tax_collection_at,
+      ownedVehicles: vehiclesRes.rows.map(v => ({
+        id: v.id,
+        modelId: v.model_id,
+        modelName: v.name,
+        brand: v.brand,
+        purchasePrice: Number(v.purchase_price),
+        purchasedAt: v.purchased_at.toISOString(),
+        acquisitionSource: v.purchase_source || 'SHOWROOM',
+      })),
+      inventory: inventoryRes.rows.map(i => ({
+        id: i.id,
+        itemType: i.item_type,
+        quantity: i.quantity,
+        metadata: i.metadata,
+      })),
+      activeBoosts: boostsRes.rows.map(b => ({
+        id: b.id,
+        boostType: b.boost_type,
+        expiresAt: b.expires_at.toISOString(),
+      })),
+    };
+
+    res.json(playerState);
+  } catch (e) {
+    console.error('bootstrap error', e);
+    res.status(500).json({ error: 'bootstrap failed' });
+  }
+});
+
+app.get('/api/player/profile', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const player = await ensurePlayer(pool, playerId);
+    res.json({ playerId: player.player_id, displayName: player.display_name || player.player_id });
+  } catch (error) {
+    res.status(500).json({ error: 'profile fetch failed' });
+  }
+});
+
+app.post('/api/player/profile/name', requireDb, async (req, res) => {
+  try {
+    const { playerId, displayName } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const safeName = String(displayName || '').trim().slice(0, 32);
+    if (!safeName) return res.status(400).json({ error: 'display name required' });
+
+    await ensurePlayer(pool, playerId);
+    await pool.query(`UPDATE players SET display_name = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, safeName]);
+    res.json({ ok: true, displayName: safeName });
+  } catch (error) {
+    res.status(500).json({ error: 'profile update failed' });
+  }
+});
+
+app.post('/api/player/cash/adjust', requireDb, async (req, res) => {
+  try {
+    const { playerId, delta } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const normalizedDelta = Math.floor(Number(delta));
+    if (!Number.isFinite(normalizedDelta)) {
+      return res.status(400).json({ error: 'invalid delta' });
+    }
+
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const current = await db.query(
+        `SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`,
+        [playerId],
+      );
+      const currentMoney = Number(current.rows[0]?.clean_money ?? 0);
+      const nextMoney = currentMoney + normalizedDelta;
+      if (nextMoney < 0) throw new Error('insufficient funds');
+
+      const updated = await db.query(
+        `UPDATE players SET clean_money = $2, updated_at = NOW() WHERE player_id = $1 RETURNING clean_money`,
+        [playerId, nextMoney],
+      );
+
+      return Number(updated.rows[0].clean_money);
+    });
+
+    res.json({ ok: true, cleanMoney: result });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'cash adjust failed' });
+  }
+});
+
+app.get('/api/pilot/state', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    await ensurePlayer(pool, playerId);
+    const progress = await ensurePilotProgress(pool, playerId);
+    const session = getPilotSession(playerId);
+    setPilotSession(playerId, session);
+    res.json(pilotStateView(session, toPilotProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'pilot state failed' });
+  }
+});
+
+app.post('/api/pilot/shift/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePilotProgress(pool, playerId);
+    const progressView = toPilotProgressView(progress);
+    const now = Date.now();
+    const session = getPilotSession(playerId);
+
+    if (session.shiftState !== 'IDLE') {
+      return res.status(400).json({ error: 'shift already active' });
+    }
+    if (session.cooldownUntil && session.cooldownUntil > now) {
+      return res.status(400).json({ error: 'shift cooldown active' });
+    }
+
+    const nextSession = {
+      ...session,
+      shiftState: 'SELECTING_ROUTE',
+      selectedRouteId: null,
+      activeFlight: null,
+      lastResult: null,
+      lastActionAt: 0,
+    };
+    setPilotSession(playerId, nextSession);
+    res.json(pilotStateView(nextSession, progressView));
+  } catch (error) {
+    res.status(500).json({ error: 'start pilot shift failed' });
+  }
+});
+
+app.post('/api/pilot/shift/end', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePilotProgress(db, playerId);
+      const progressBefore = toPilotProgressView(progressRow);
+      const session = getPilotSession(playerId);
+
+      let nextProgress = progressBefore;
+      if (session.activeFlight) {
+        await db.query(`UPDATE player_pilot_progress SET pilot_streak = 0, updated_at = NOW() WHERE player_id = $1`, [playerId]);
+        const updated = await ensurePilotProgress(db, playerId);
+        nextProgress = toPilotProgressView(updated);
+      }
+
+      const nextSession = {
+        ...session,
+        shiftState: 'IDLE',
+        selectedRouteId: null,
+        activeFlight: null,
+        cooldownUntil: Date.now() + PILOT_CONFIG.startCooldownMs,
+      };
+      if (session.activeFlight) {
+        nextSession.lastResult = {
+          routeId: session.activeFlight.routeId,
+          completed: false,
+          cancelled: true,
+          failReason: 'Flight cancelled. Streak reset.',
+          breakdown: {
+            baseReward: 0,
+            levelBonus: 0,
+            streakBonus: 0,
+            milestoneBonus: 0,
+            firstCompletionBonus: 0,
+            totalCash: 0,
+            baseXp: 0,
+            streakXpBonus: 0,
+            milestoneXpBonus: 0,
+            firstCompletionXpBonus: 0,
+            totalXp: 0,
+          },
+          progression: {
+            levelBefore: progressBefore.level,
+            levelAfter: nextProgress.level,
+            xpBefore: progressBefore.xp,
+            xpAfter: nextProgress.xp,
+            newlyUnlockedRouteIds: [],
+            milestoneLabel: null,
+            promotionLabel: null,
+          },
+        };
+      }
+
+      setPilotSession(playerId, nextSession);
+      return {
+        state: pilotStateView(nextSession, nextProgress),
+      };
+    });
+
+    res.json(outcome.state);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'end pilot shift failed' });
+  }
+});
+
+app.post('/api/pilot/route/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, routeId } = req.body || {};
+    if (!playerId || !routeId) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensurePilotProgress(pool, playerId);
+    const progressView = toPilotProgressView(progress);
+    const session = getPilotSession(playerId);
+
+    if (session.shiftState === 'IDLE') {
+      return res.status(400).json({ error: 'shift not active' });
+    }
+    if (session.activeFlight) {
+      return res.status(400).json({ error: 'flight already running' });
+    }
+    enforcePilotActionCooldown(session);
+
+    const route = pilotRouteById(String(routeId));
+    if (!route) return res.status(404).json({ error: 'route not found' });
+
+    const lockReasons = pilotRouteLockReasons(route, progressView);
+    if (lockReasons.length > 0) {
+      return res.status(400).json({ error: lockReasons[0] });
+    }
+
+    session.selectedRouteId = route.id;
+    session.shiftState = 'ROUTE_READY';
+    session.lastResult = null;
+    setPilotSession(playerId, session);
+
+    res.json(pilotStateView(session, progressView));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'select route failed' });
+  }
+});
+
+app.post('/api/pilot/flight/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePilotProgress(pool, playerId);
+    const progressView = toPilotProgressView(progress);
+    const session = getPilotSession(playerId);
+
+    if (session.shiftState !== 'ROUTE_READY') {
+      return res.status(400).json({ error: 'route not ready' });
+    }
+    if (!session.selectedRouteId) {
+      return res.status(400).json({ error: 'select route first' });
+    }
+    if (session.activeFlight) {
+      return res.status(400).json({ error: 'flight already running' });
+    }
+    enforcePilotActionCooldown(session);
+
+    const route = pilotRouteById(session.selectedRouteId);
+    if (!route) return res.status(404).json({ error: 'route not found' });
+    const lockReasons = pilotRouteLockReasons(route, progressView);
+    if (lockReasons.length > 0) return res.status(400).json({ error: lockReasons[0] });
+
+    const now = Date.now();
+    session.activeFlight = {
+      sessionId: crypto.randomBytes(10).toString('hex'),
+      routeId: route.id,
+      startedAt: now,
+      minFinishAt: now + Number(route.durationSeconds || 1) * 1000,
+      completing: false,
+    };
+    session.shiftState = 'FLIGHT_STAGE_PROGRESS';
+    session.lastResult = null;
+    setPilotSession(playerId, session);
+
+    res.json({
+      state: pilotStateView(session, progressView),
+      flight: {
+        sessionId: session.activeFlight.sessionId,
+        routeId: route.id,
+        durationSeconds: route.durationSeconds,
+        stages: [...route.stages],
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'start flight failed' });
+  }
+});
+
+app.post('/api/pilot/flight/cancel', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePilotProgress(db, playerId);
+      const progressBefore = toPilotProgressView(progressRow);
+      const session = getPilotSession(playerId);
+
+      if (!session.activeFlight) throw new Error('no active flight');
+      await db.query(`UPDATE player_pilot_progress SET pilot_streak = 0, updated_at = NOW() WHERE player_id = $1`, [playerId]);
+      const updated = await ensurePilotProgress(db, playerId);
+      const progressAfter = toPilotProgressView(updated);
+
+      session.activeFlight = null;
+      session.shiftState = 'SELECTING_ROUTE';
+      session.lastResult = {
+        routeId: session.selectedRouteId,
+        completed: false,
+        cancelled: true,
+        failReason: 'Flight cancelled. Streak reset.',
+        breakdown: {
+          baseReward: 0,
+          levelBonus: 0,
+          streakBonus: 0,
+          milestoneBonus: 0,
+          firstCompletionBonus: 0,
+          totalCash: 0,
+          baseXp: 0,
+          streakXpBonus: 0,
+          milestoneXpBonus: 0,
+          firstCompletionXpBonus: 0,
+          totalXp: 0,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          newlyUnlockedRouteIds: [],
+          milestoneLabel: null,
+          promotionLabel: null,
+        },
+      };
+      setPilotSession(playerId, session);
+      return {
+        state: pilotStateView(session, progressAfter),
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'cancel flight failed' });
+  }
+});
+
+app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const session = getPilotSession(playerId);
+    if (!session.activeFlight) {
+      return res.status(400).json({ error: 'no active flight' });
+    }
+    if (session.activeFlight.completing) {
+      return res.status(400).json({ error: 'flight already being completed' });
+    }
+
+    session.activeFlight.completing = true;
+    setPilotSession(playerId, session);
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePilotProgress(db, playerId);
+      const progressBefore = toPilotProgressView(progressRow);
+      const activeSession = getPilotSession(playerId);
+      const activeFlight = activeSession.activeFlight;
+      if (!activeFlight) throw new Error('no active flight');
+
+      const route = pilotRouteById(activeFlight.routeId);
+      if (!route) throw new Error('route not found');
+
+      const lockReasons = pilotRouteLockReasons(route, progressBefore);
+      if (lockReasons.length > 0) throw new Error(lockReasons[0]);
+
+      const now = Date.now();
+      if (now + PILOT_CONFIG.completionGraceMs < Number(activeFlight.minFinishAt || 0)) {
+        throw new Error('flight duration not completed yet');
+      }
+
+      const beforeUnlocked = pilotUnlockedRouteIds(progressBefore);
+      const routeCompletionsBefore = pilotCompletionsByRoute(progressBefore, route.id);
+      const totalFlightsAfter = Number(progressBefore.totalFlights || 0) + 1;
+      const currentStreak = Number(progressBefore.streak || 0);
+      const nextStreak = currentStreak + 1;
+
+      const levelMultiplier = 1 + (Math.max(1, Number(progressBefore.level || 1)) - 1) * 0.01;
+      const streakMultiplier = 1 + Math.min(PILOT_CONFIG.streakBonusMax, currentStreak * PILOT_CONFIG.streakBonusPerStep);
+
+      const baseReward = Number(route.baseReward || 0);
+      const levelBonus = Math.max(0, Math.floor(baseReward * (levelMultiplier - 1)));
+      const streakBonus = Math.max(0, Math.floor((baseReward + levelBonus) * (streakMultiplier - 1)));
+      const milestoneBonus = Number(PILOT_CONFIG.milestoneBonusCash[String(totalFlightsAfter)] || 0);
+      const firstCompletionBonus = routeCompletionsBefore === 0 ? Number(PILOT_CONFIG.firstCompletionBonusCash || 0) : 0;
+      const totalCash = Math.max(0, baseReward + levelBonus + streakBonus + milestoneBonus + firstCompletionBonus);
+
+      const baseXp = Number(route.baseXp || 0);
+      const streakXpBonus = Math.max(0, Math.min(30, currentStreak * 2));
+      const milestoneXpBonus = Number(PILOT_CONFIG.milestoneBonusXp[String(totalFlightsAfter)] || 0);
+      const firstCompletionXpBonus = routeCompletionsBefore === 0 ? Number(PILOT_CONFIG.firstCompletionBonusXp || 0) : 0;
+      const totalXp = Math.max(0, Math.floor(baseXp + streakXpBonus + milestoneXpBonus + firstCompletionXpBonus));
+
+      const nextXp = Number(progressBefore.xp || 0) + totalXp;
+      const nextLevel = computePilotLevel(nextXp);
+      const nextBestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+      const routeColumn = pilotCompletionColumnByRoute(route.id);
+
+      await db.query(
+        `UPDATE player_pilot_progress
+         SET pilot_level = $2,
+             pilot_xp = $3,
+             pilot_total_earnings = pilot_total_earnings + $4,
+             pilot_streak = $5,
+             pilot_best_streak = GREATEST(pilot_best_streak, $6),
+             pilot_total_flights = pilot_total_flights + 1,
+             ${routeColumn} = ${routeColumn} + 1,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          totalCash,
+          nextStreak,
+          nextBestStreak,
+        ],
+      );
+
+      if (totalCash > 0) {
+        await db.query(`UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`, [playerId, totalCash]);
+      }
+
+      await addPilotTimeForFlight(db, playerId, Number(route.durationSeconds || 0) / 3600);
+
+      const updatedProgressRow = await ensurePilotProgress(db, playerId);
+      const progressAfter = toPilotProgressView(updatedProgressRow);
+      const afterUnlocked = pilotUnlockedRouteIds(progressAfter);
+      const newlyUnlockedRouteIds = afterUnlocked.filter((routeId) => !beforeUnlocked.includes(routeId));
+
+      const milestoneLabel = [5, 10, 25].includes(totalFlightsAfter)
+        ? `Milestone Reached: ${totalFlightsAfter} Completed Flights`
+        : null;
+      const promotionLabel = nextLevel > Number(progressBefore.level || 1)
+        ? `Pilot Promotion Achieved: Pilot Lv. ${nextLevel}`
+        : null;
+
+      activeSession.activeFlight = null;
+      activeSession.shiftState = 'SELECTING_ROUTE';
+      activeSession.lastResult = {
+        sessionId: activeFlight.sessionId,
+        routeId: route.id,
+        completed: true,
+        cancelled: false,
+        failReason: null,
+        breakdown: {
+          baseReward,
+          levelBonus,
+          streakBonus,
+          milestoneBonus,
+          firstCompletionBonus,
+          totalCash,
+          baseXp,
+          streakXpBonus,
+          milestoneXpBonus,
+          firstCompletionXpBonus,
+          totalXp,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          newlyUnlockedRouteIds,
+          milestoneLabel,
+          promotionLabel,
+        },
+      };
+      setPilotSession(playerId, activeSession);
+
+      return {
+        state: pilotStateView(activeSession, progressAfter),
+        result: activeSession.lastResult,
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    const session = getPilotSession(req.body?.playerId);
+    if (session?.activeFlight?.completing) {
+      session.activeFlight.completing = false;
+      setPilotSession(req.body?.playerId, session);
+    }
+    res.status(400).json({ error: error.message || 'complete flight failed' });
+  }
+});
+
+app.get('/api/pizzer/state', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    await ensurePlayer(pool, playerId);
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const session = getPizzerSession(playerId);
+    if (session.repairUntil && session.repairUntil <= Date.now()) {
+      session.repairUntil = 0;
+      session.repairLabel = null;
+    }
+    setPizzerSession(playerId, session);
+    res.json(pizzerStateView(session, toPizzerProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'pizzer state failed' });
+  }
+});
+
+app.post('/api/pizzer/shift/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const progressView = toPizzerProgressView(progress);
+    const now = Date.now();
+    const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
+
+    if (session.shiftState !== 'IDLE') {
+      return res.status(400).json({ error: 'shift already active' });
+    }
+    if (session.cooldownUntil && session.cooldownUntil > now) {
+      return res.status(400).json({ error: 'shift cooldown active' });
+    }
+
+    const nextSession = {
+      ...session,
+      shiftState: 'SELECTING_ORDER',
+      orderOptions: [],
+      optionsGeneratedAt: 0,
+      activeOrder: null,
+      lastResult: null,
+      lastActionAt: 0,
+    };
+    setPizzerSession(playerId, nextSession);
+    res.json(pizzerStateView(nextSession, progressView));
+  } catch (error) {
+    res.status(500).json({ error: 'start shift failed' });
+  }
+});
+
+app.post('/api/pizzer/shift/end', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const session = getPizzerSession(playerId);
+    const next = {
+      ...session,
+      shiftState: 'IDLE',
+      orderOptions: [],
+      activeOrder: null,
+      cooldownUntil: Date.now() + PIZZER_CONFIG.startCooldownMs,
+    };
+    setPizzerSession(playerId, next);
+    res.json(pizzerStateView(next, toPizzerProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'end shift failed' });
+  }
+});
+
+app.post('/api/pizzer/orders/options', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_ORDER') {
+      return res.status(400).json({ error: 'not ready to pick order' });
+    }
+    enforcePizzerActionCooldown(session);
+
+    const now = Date.now();
+    if (!session.orderOptions.length || now - Number(session.optionsGeneratedAt || 0) > PIZZER_CONFIG.optionsCooldownMs) {
+      session.orderOptions = [buildOrderOption(view.level), buildOrderOption(view.level), buildOrderOption(view.level)];
+      session.optionsGeneratedAt = now;
+      setPizzerSession(playerId, session);
+    }
+
+    res.json({
+      options: session.orderOptions.map((order) => ({
+        orderId: order.orderId,
+        orderType: order.orderType,
+        distanceMeters: order.distanceMeters,
+        estimatedReward: order.estimatedReward,
+        estimatedXp: order.estimatedXp,
+        estimatedTimeSec: order.estimatedTimeSec,
+        difficulty: order.difficulty,
+        pizzas: order.pizzas || [],
+        drinks: order.drinks || [],
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'order options failed' });
+  }
+});
+
+app.post('/api/pizzer/order/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, orderId } = req.body || {};
+    if (!playerId || !orderId) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_ORDER') return res.status(400).json({ error: 'not selecting order' });
+    enforcePizzerActionCooldown(session);
+
+    const selected = (session.orderOptions || []).find((entry) => entry.orderId === orderId);
+    if (!selected) return res.status(404).json({ error: 'order option not found' });
+
+    session.shiftState = 'PACKING_ORDER';
+    session.activeOrder = {
+      ...selected,
+      etaSec: selected.estimatedTimeSec,
+      deliveryStartedAt: Date.now(),
+      damagePercent: 0,
+      packingStepsRequired: ['PICK_BOXES', 'ADD_DRINKS', 'CONFIRM_ORDER'],
+      packingStepsDone: [],
+      handovers: selected.handovers,
+      pizzas: selected.pizzas || [],
+      drinks: selected.drinks || [],
+    };
+    session.orderOptions = [];
+    session.lastResult = null;
+    setPizzerSession(playerId, session);
+
+    res.json(pizzerStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'select order failed' });
+  }
+});
+
+app.post('/api/pizzer/packing/step', requireDb, async (req, res) => {
+  try {
+    const { playerId, stepKey } = req.body || {};
+    if (!playerId || !stepKey) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    enforcePizzerRepairCooldown(session);
+    if (session.shiftState !== 'PACKING_ORDER' || !session.activeOrder) {
+      return res.status(400).json({ error: 'no order in packing' });
+    }
+    enforcePizzerActionCooldown(session);
+
+    const order = session.activeOrder;
+    if (!order.packingStepsRequired.includes(stepKey)) {
+      return res.status(400).json({ error: 'invalid packing step' });
+    }
+    const nextRequiredStep = order.packingStepsRequired.find((step) => !order.packingStepsDone.includes(step));
+    if (nextRequiredStep && stepKey !== nextRequiredStep) {
+      return res.status(400).json({ error: `next step is ${nextRequiredStep}` });
+    }
+    if (!order.packingStepsDone.includes(stepKey)) {
+      order.packingStepsDone.push(stepKey);
+    }
+
+    if (order.packingStepsRequired.every((step) => order.packingStepsDone.includes(step))) {
+      session.shiftState = 'DELIVERY_ACTIVE';
+      order.deliveryStartedAt = Date.now();
+    }
+
+    setPizzerSession(playerId, session);
+    res.json(pizzerStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'packing step failed' });
+  }
+});
+
+app.post('/api/pizzer/delivery/report-damage', requireDb, async (req, res) => {
+  try {
+    const { playerId, damageDelta } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const delta = Math.max(0, Math.floor(Number(damageDelta || 0)));
+
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const view = toPizzerProgressView(progress);
+    const session = getPizzerSession(playerId);
+    if (session.shiftState !== 'DELIVERY_ACTIVE' || !session.activeOrder) {
+      return res.status(400).json({ error: 'no active delivery' });
+    }
+
+    session.activeOrder.damagePercent = Math.max(0, Math.min(100, Number(session.activeOrder.damagePercent || 0) + delta));
+    setPizzerSession(playerId, session);
+    res.json(pizzerStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'damage report failed' });
+  }
+});
+
+app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
+  try {
+    const { playerId, handoverVariant } = req.body || {};
+    if (!playerId || !handoverVariant) return res.status(400).json({ error: 'missing fields' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensurePizzerProgress(db, playerId);
+      const progressBefore = toPizzerProgressView(progressRow);
+      const session = getPizzerSession(playerId);
+      enforcePizzerRepairCooldown(session);
+      enforcePizzerActionCooldown(session);
+
+      if (session.shiftState !== 'DELIVERY_ACTIVE' || !session.activeOrder) {
+        throw new Error('no active delivery');
+      }
+
+      const order = session.activeOrder;
+      if (!order.handovers.includes(String(handoverVariant).toLowerCase())) {
+        throw new Error('invalid handover variant');
+      }
+
+      const vehicleKey = pizzerVehicleKeyForLevel(progressBefore.level);
+      const accidentChance = Number(PIZZER_CONFIG.accidentChanceByVehicle?.[vehicleKey] || 0.05);
+      const accidentTriggered = Math.random() < accidentChance;
+
+      if (accidentTriggered) {
+        const now = Date.now();
+        const repairLabel = vehicleKey === 'BICICLETA' ? 'Repairing bicycle' : vehicleKey === 'SCUTER' ? 'Repairing scooter' : 'Repairing car';
+        const repairUntil = now + PIZZER_CONFIG.repairCooldownMs;
+        session.streak = 0;
+        session.activeOrder = null;
+        session.shiftState = 'SELECTING_ORDER';
+        session.orderOptions = [];
+        session.optionsGeneratedAt = 0;
+        session.repairUntil = repairUntil;
+        session.repairLabel = repairLabel;
+        session.lastResult = {
+          delivered: false,
+          accident: true,
+          orderType: order.orderType,
+          breakdown: {
+            baseReward: 0,
+            orderTypeMultiplier: 1,
+            levelMultiplier: 1,
+            freshnessMultiplier: 1,
+            streakMultiplier: 1,
+            damageMultiplier: 1,
+            tip: 0,
+            totalReward: 0,
+            xpGained: 0,
+            freshness: freshnessForOrder(order, progressBefore.level),
+            damagePercent: 100,
+            timeLeftSec: 0,
+            rating: 'FAILED',
+          },
+          progression: {
+            levelBefore: progressBefore.level,
+            levelAfter: progressBefore.level,
+            xpBefore: progressBefore.xp,
+            xpAfter: progressBefore.xp,
+            unlockedVehicle: null,
+          },
+        };
+        setPizzerSession(playerId, session);
+        return {
+          state: pizzerStateView(session, progressBefore),
+          result: session.lastResult,
+        };
+      }
+
+      const now = Date.now();
+      const elapsedSec = Math.max(0, Math.floor((now - Number(order.deliveryStartedAt)) / 1000));
+      const lateSec = Math.max(0, elapsedSec - Number(order.etaSec));
+      const hardFail = lateSec > PIZZER_CONFIG.hardLateGraceSec;
+
+      const freshness = freshnessForOrder(order, progressBefore.level);
+      const freshnessMultiplier = freshness >= 76 ? 1.15 : freshness >= 41 ? 1.0 : 0.85;
+      const orderTypeMultiplier = PIZZER_CONFIG.orderTypeMultipliers[order.orderType] || 1;
+      const levelMultiplier = levelPayoutMultiplier(progressBefore.level);
+      const streakMultiplier = 1 + Math.min(3, Number(session.streak || 0)) * PIZZER_CONFIG.streakBonusPerStep;
+      const damagePercent = Math.max(0, Math.min(100, Number(order.damagePercent || 0)));
+      const damageMultiplier = Math.max(1 - PIZZER_CONFIG.damagePenaltyMax, 1 - (damagePercent / 100) * PIZZER_CONFIG.damagePenaltyMax);
+
+      const speedPenaltyMultiplier = lateSec <= 0 ? 1.05 : lateSec <= 45 ? 0.9 : lateSec <= 90 ? 0.75 : 0.6;
+      const baseReward = 120 + Math.floor(Number(order.distanceMeters) * PIZZER_CONFIG.baseRewardDistanceFactor);
+      const preTip = hardFail
+        ? 0
+        : Math.floor(baseReward * orderTypeMultiplier * levelMultiplier * freshnessMultiplier * streakMultiplier * damageMultiplier * speedPenaltyMultiplier);
+
+      const tipRange = PIZZER_CONFIG.tipRange[order.orderType] || [20, 60];
+      const tipPerf = freshness >= 76 && lateSec <= 0 ? 1 : freshness >= 41 ? 0.7 : 0.35;
+      const tip = hardFail ? 0 : Math.floor(randomInt(tipRange[0], tipRange[1]) * tipPerf);
+      const totalReward = Math.max(0, preTip + tip);
+
+      const baseXp = PIZZER_CONFIG.baseXp[order.orderType] || 18;
+      const perfectBonusXp = freshness >= 88 && lateSec <= 0 && damagePercent <= 10 ? 6 : 0;
+      const streakXpBonus = Math.min(6, Number(session.streak || 0));
+      const xpGained = hardFail ? 0 : baseXp + perfectBonusXp + streakXpBonus;
+
+      const rating = hardFail
+        ? 'FAILED'
+        : freshness >= 88 && lateSec <= 0 && damagePercent <= 12
+          ? 'PERFECT'
+          : freshness >= 70 && lateSec <= 25
+            ? 'GOOD'
+            : 'OK';
+
+      const nextXp = Number(progressBefore.xp) + xpGained;
+      const nextLevel = computePizzerLevel(nextXp);
+      const unlockedVehicle = nextLevel > progressBefore.level ? pizzerVehicleForLevel(nextLevel).label : null;
+
+      const nextStreak = rating === 'PERFECT' || rating === 'GOOD' ? Number(session.streak || 0) + 1 : rating === 'FAILED' ? 0 : Number(session.streak || 0);
+      const bestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+
+      await db.query(
+        `UPDATE player_pizzer_progress
+         SET pizzer_level = $2,
+             pizzer_xp = $3,
+             pizzer_total_deliveries = pizzer_total_deliveries + 1,
+             pizzer_perfect_deliveries = pizzer_perfect_deliveries + $4,
+             pizzer_best_streak = GREATEST(pizzer_best_streak, $5),
+             pizzer_total_earnings = pizzer_total_earnings + $6,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          rating === 'PERFECT' ? 1 : 0,
+          bestStreak,
+          totalReward,
+        ],
+      );
+
+      if (totalReward > 0) {
+        await db.query(
+          `UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`,
+          [playerId, totalReward],
+        );
+      }
+
+      const updatedProgress = await ensurePizzerProgress(db, playerId);
+      const progressAfter = toPizzerProgressView(updatedProgress);
+
+      session.streak = nextStreak;
+      session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
+      session.activeOrder = null;
+      session.shiftState = 'DELIVERY_RESULT';
+      session.lastResult = {
+        delivered: !hardFail,
+        orderType: order.orderType,
+        breakdown: {
+          baseReward,
+          orderTypeMultiplier,
+          levelMultiplier,
+          freshnessMultiplier,
+          streakMultiplier,
+          damageMultiplier,
+          tip,
+          totalReward,
+          xpGained,
+          freshness,
+          damagePercent,
+          timeLeftSec: Math.max(0, Number(order.etaSec) - elapsedSec),
+          rating,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          unlockedVehicle,
+        },
+      };
+      session.shiftState = 'SELECTING_ORDER';
+      session.orderOptions = [];
+      session.optionsGeneratedAt = 0;
+      setPizzerSession(playerId, session);
+
+      return {
+        state: pizzerStateView(session, progressAfter),
+        result: session.lastResult,
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'handover failed' });
+  }
+});
+
+app.post('/api/pizzer/admin/set-level', requireDb, async (req, res) => {
+  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { playerId, level } = req.body || {};
+    const safeLevel = Math.max(1, Math.min(PIZZER_MAX_LEVEL, Number(level || 1)));
+    const xp = levelStartXp(safeLevel);
+    await ensurePlayer(pool, playerId);
+    await ensurePizzerProgress(pool, playerId);
+    await pool.query(
+      `UPDATE player_pizzer_progress SET pizzer_level = $2, pizzer_xp = $3, updated_at = NOW() WHERE player_id = $1`,
+      [playerId, safeLevel, xp],
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: 'set-level failed' });
+  }
+});
+
+app.post('/api/pizzer/admin/add-xp', requireDb, async (req, res) => {
+  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { playerId, xp } = req.body || {};
+    const add = Math.max(0, Math.floor(Number(xp || 0)));
+    await ensurePlayer(pool, playerId);
+    const progress = await ensurePizzerProgress(pool, playerId);
+    const nextXp = Number(progress.pizzer_xp || 0) + add;
+    const nextLevel = computePizzerLevel(nextXp);
+    await pool.query(
+      `UPDATE player_pizzer_progress SET pizzer_level = $2, pizzer_xp = $3, updated_at = NOW() WHERE player_id = $1`,
+      [playerId, nextLevel, nextXp],
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: 'add-xp failed' });
+  }
+});
+
+app.post('/api/pizzer/admin/reset', requireDb, async (req, res) => {
+  if (!verifyAdminToken(req.cookies.adminpanelv2_token)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { playerId } = req.body || {};
+    await ensurePlayer(pool, playerId);
+    await pool.query(
+      `DELETE FROM player_pizzer_progress WHERE player_id = $1`,
+      [playerId],
+    );
+    pizzerSessions.delete(playerId);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: 'reset failed' });
+  }
+});
+
+app.get('/api/fisher/state', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.query;
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    await ensurePlayer(pool, playerId);
+    const progress = await ensureFisherProgress(pool, playerId);
+    const progressView = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    if (session.repairUntil && session.repairUntil <= Date.now()) {
+      session.repairUntil = 0;
+      session.repairLabel = null;
+    }
+    session.carryCapacityKg = Number(progressView.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
+    syncFisherSessionTime(session);
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, progressView));
+  } catch (error) {
+    res.status(500).json({ error: 'fisher state failed' });
+  }
+});
+
+app.post('/api/fisher/shift/start', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const progressView = toFisherProgressView(progress);
+    const now = Date.now();
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+
+    if (session.shiftState !== 'IDLE') {
+      return res.status(400).json({ error: 'shift already active' });
+    }
+    if (session.cooldownUntil && session.cooldownUntil > now) {
+      return res.status(400).json({ error: 'shift cooldown active' });
+    }
+
+    const nextSession = {
+      ...session,
+      shiftState: 'SELECTING_SPOT',
+      spotOptions: [],
+      optionsGeneratedAt: 0,
+      activeSpot: null,
+      activeCatch: null,
+      lastResult: null,
+      lastActionAt: 0,
+      lastReelTickAt: 0,
+      carryCapacityKg: Number(progressView.carryCapacityKg || FISHER_CONFIG.carryCapacityKg),
+      currentDockCell: null,
+      targetDockCell: null,
+    };
+    setFisherSession(playerId, nextSession);
+    res.json(fisherStateView(nextSession, progressView));
+  } catch (error) {
+    res.status(500).json({ error: 'start fisher shift failed' });
+  }
+});
+
+app.post('/api/fisher/shift/end', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const progress = await ensureFisherProgress(pool, playerId);
+    const session = getFisherSession(playerId);
+    const next = {
+      ...session,
+      shiftState: 'IDLE',
+      spotOptions: [],
+      activeSpot: null,
+      activeCatch: null,
+      lastResult: null,
+      currentDockCell: null,
+      targetDockCell: null,
+      cooldownUntil: Date.now() + FISHER_CONFIG.shiftStartCooldownMs,
+    };
+    setFisherSession(playerId, next);
+    res.json(fisherStateView(next, toFisherProgressView(progress)));
+  } catch (error) {
+    res.status(500).json({ error: 'end fisher shift failed' });
+  }
+});
+
+app.post('/api/fisher/spots/options', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_SPOT') {
+      return res.status(400).json({ error: 'not ready to pick spot' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const now = Date.now();
+    if (!session.spotOptions.length || now - Number(session.optionsGeneratedAt || 0) > FISHER_CONFIG.optionsCooldownMs) {
+      const availableTiers = fisherAvailableSpotTiers(view.level);
+      const options = [fisherBuildSpotOption(view.level, 'COMMON')];
+      if (availableTiers.includes('BETTER')) {
+        options.push(fisherBuildSpotOption(view.level, 'BETTER'));
+      } else {
+        options.push({
+          spotId: `locked-${crypto.randomBytes(4).toString('hex')}`,
+          tier: 'BETTER',
+          name: FISHER_CONFIG.spots.BETTER.label,
+          difficulty: FISHER_CONFIG.spots.BETTER.difficulty,
+          fishPool: [...FISHER_CONFIG.spots.BETTER.fishPool],
+          estimatedReward: 0,
+          estimatedXp: 0,
+          castDifficulty: FISHER_CONFIG.spots.BETTER.castDifficulty,
+          reelDifficulty: FISHER_CONFIG.spots.BETTER.reelDifficulty,
+          waitBiteEstimateSec: FISHER_CONFIG.spots.BETTER.waitBiteSecRange[0],
+          failRisk: FISHER_CONFIG.spots.BETTER.risk,
+          travelSec: FISHER_CONFIG.spots.BETTER.travelSecRange[0],
+          rarityHint: 'LOCKED',
+          locked: true,
+          unlockLevel: FISHER_CONFIG.spots.BETTER.levelMin,
+        });
+      }
+      if (availableTiers.includes('PREMIUM')) {
+        options.push(fisherBuildSpotOption(view.level, 'PREMIUM'));
+      } else {
+        options.push({
+          spotId: `locked-${crypto.randomBytes(4).toString('hex')}`,
+          tier: 'PREMIUM',
+          name: FISHER_CONFIG.spots.PREMIUM.label,
+          difficulty: FISHER_CONFIG.spots.PREMIUM.difficulty,
+          fishPool: [...FISHER_CONFIG.spots.PREMIUM.fishPool],
+          estimatedReward: 0,
+          estimatedXp: 0,
+          castDifficulty: FISHER_CONFIG.spots.PREMIUM.castDifficulty,
+          reelDifficulty: FISHER_CONFIG.spots.PREMIUM.reelDifficulty,
+          waitBiteEstimateSec: FISHER_CONFIG.spots.PREMIUM.waitBiteSecRange[0],
+          failRisk: FISHER_CONFIG.spots.PREMIUM.risk,
+          travelSec: FISHER_CONFIG.spots.PREMIUM.travelSecRange[0],
+          rarityHint: 'LOCKED',
+          locked: true,
+          unlockLevel: FISHER_CONFIG.spots.PREMIUM.levelMin,
+        });
+      }
+      session.spotOptions = options;
+      session.optionsGeneratedAt = now;
+      setFisherSession(playerId, session);
+    }
+
+    res.json({ options: session.spotOptions });
+  } catch (error) {
+    res.status(500).json({ error: 'fisher spot options failed' });
+  }
+});
+
+app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, cellId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const parsedCell = Math.max(1, Math.min(16, Math.floor(Number(cellId || 0))));
+    if (!parsedCell) return res.status(400).json({ error: 'invalid cellId' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_DOCK') {
+      return res.status(400).json({ error: 'not ready for dock marker' });
+    }
+    if (!session.activeSpot || !session.targetDockCell) {
+      return res.status(400).json({ error: 'select spot first' });
+    }
+    enforceFisherActionCooldown(session);
+
+    if (parsedCell !== Number(session.targetDockCell)) {
+      throw new Error('wrong square, go to the green marker');
+    }
+
+    const spotModel = session.activeSpot;
+    const carryLeft = Math.max(0, Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg) - Number(session.carryWeightKg || 0));
+    if (carryLeft <= 0.05) {
+      throw new Error('bag full, sell fish first');
+    }
+
+    const spotConfig = FISHER_CONFIG.spots[spotModel.tier] || FISHER_CONFIG.spots.COMMON;
+    const rarityWeights = { ...spotConfig.rarityWeights };
+    const fishRarity = fisherPickRarity(rarityWeights);
+    const rodTier = Math.max(1, Math.min(5, Number(view.rodTier || 1)));
+    const autoCastMeter = 50 + randomInt(-8, 8);
+    const fishSize = fisherFishSizeRoll(autoCastMeter, rodTier);
+    const fishName = fisherChooseFishName(fishRarity, spotModel.tier);
+    let fishWeightKg = fisherFishWeightKg(spotModel.tier, fishSize);
+    fishWeightKg = Math.min(fishWeightKg, Math.round(carryLeft * 10) / 10);
+    if (fishWeightKg <= 0.05) {
+      throw new Error('bag full, sell fish first');
+    }
+    const qualityScore = Math.max(0.55, Math.min(0.99, 0.74 + Math.random() * 0.2));
+
+    const calc = fisherComputeAutoCatchResult({
+      session,
+      progressBefore: view,
+      spot: spotModel,
+      fishRarity,
+      fishSize,
+      fishWeightKg,
+      qualityScore,
+    });
+
+    const levelOutcome = await withTransaction(async (db) => {
+      const progressRow = await ensureFisherProgress(db, playerId);
+      const progressBefore = toFisherProgressView(progressRow);
+
+      const nextXp = Number(progressBefore.xp) + Number(calc.xpGained || 0);
+      const nextLevel = computeFisherLevel(nextXp);
+      const unlockedTier = nextLevel > progressBefore.level ? fisherTierForLevel(nextLevel) : null;
+      const nextStreak = Number(session.streak || 0) + 1;
+      const bestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+      const isPerfect = Number(calc.qualityScore || 0) >= 0.92;
+
+      await db.query(
+        `UPDATE player_fisher_progress
+         SET fisher_level = $2,
+             fisher_xp = $3,
+             fisher_total_catches = fisher_total_catches + 1,
+             fisher_perfect_catches = fisher_perfect_catches + $4,
+             fisher_best_streak = GREATEST(fisher_best_streak, $5),
+             fisher_total_earnings = fisher_total_earnings + $6,
+             fisher_rare_catches = fisher_rare_catches + $7,
+             fisher_legendary_catches = fisher_legendary_catches + $8,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          isPerfect ? 1 : 0,
+          bestStreak,
+          calc.totalReward,
+          fishRarity === 'RARE' ? 1 : 0,
+          fishRarity === 'LEGENDARY' ? 1 : 0,
+        ],
+      );
+
+      await addFarmTimeForCatch(db, playerId, 0.1);
+
+      const updatedProgress = await ensureFisherProgress(db, playerId);
+      return {
+        progress: toFisherProgressView(updatedProgress),
+        unlockedTier,
+      };
+    });
+    const progressAfter = levelOutcome.progress;
+
+    const nextStreak = Number(session.streak || 0) + 1;
+    const nextCarryWeight = Math.min(Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg), Number(session.carryWeightKg || 0) + fishWeightKg);
+
+    session.streak = nextStreak;
+    session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
+    session.carryWeightKg = Math.round(nextCarryWeight * 10) / 10;
+    session.carryEstimatedValue = Number(session.carryEstimatedValue || 0) + calc.totalReward;
+    session.carriedFish = [
+      ...(session.carriedFish || []),
+      {
+        name: fishName,
+        rarity: fishRarity,
+        size: fishSize,
+        weightKg: fishWeightKg,
+        value: calc.totalReward,
+      },
+    ].slice(-25);
+    session.currentDockCell = parsedCell;
+    session.targetDockCell = randomInt(1, 16);
+    session.activeCatch = null;
+    session.shiftState = 'SELECTING_DOCK';
+    session.lastResult = {
+      caught: true,
+      failReason: null,
+      fishName,
+      fishRarity,
+      fishSize,
+      fishWeightKg,
+      breakdown: {
+        baseReward: calc.baseReward,
+        spotMultiplier: calc.spotMultiplier,
+        levelMultiplier: calc.levelMultiplier,
+        qualityMultiplier: calc.qualityMultiplier,
+        streakMultiplier: calc.streakMultiplier,
+        integrityMultiplier: calc.integrityMultiplier,
+        bonusLootValue: calc.bonusLootValue,
+        totalReward: calc.totalReward,
+        xpGained: calc.xpGained,
+        qualityScore: calc.qualityScore,
+      },
+      progression: {
+        levelBefore: view.level,
+        levelAfter: progressAfter.level,
+        xpBefore: view.xp,
+        xpAfter: progressAfter.xp,
+        unlockedTier: levelOutcome.unlockedTier,
+      },
+    };
+    session.spotOptions = [];
+    syncFisherSessionTime(session);
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, progressAfter));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'dock select failed' });
+  }
+});
+
+app.post('/api/fisher/spot/select', requireDb, async (req, res) => {
+  try {
+    const { playerId, spotId } = req.body || {};
+    if (!playerId || !spotId) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    if (session.shiftState !== 'SELECTING_SPOT') return res.status(400).json({ error: 'not selecting spot' });
+    enforceFisherActionCooldown(session);
+
+    const selected = (session.spotOptions || []).find((entry) => entry.spotId === spotId);
+    if (!selected) return res.status(404).json({ error: 'spot option not found' });
+    if (selected.locked) return res.status(400).json({ error: 'spot locked for your level' });
+
+    const spotModel = {
+      spotId: selected.spotId,
+      tier: selected.tier,
+      name: selected.name,
+      difficulty: selected.difficulty,
+      fishPool: selected.fishPool,
+      castDifficulty: selected.castDifficulty,
+      reelDifficulty: selected.reelDifficulty,
+      failRisk: selected.failRisk,
+      estimatedReward: selected.estimatedReward,
+      estimatedXp: selected.estimatedXp,
+      waitBiteEstimateSec: selected.waitBiteEstimateSec,
+      travelSec: selected.travelSec,
+    };
+
+    session.activeSpot = spotModel;
+    session.activeCatch = null;
+    session.shiftState = 'SELECTING_DOCK';
+    session.targetDockCell = randomInt(1, 16);
+    session.currentDockCell = null;
+    session.spotOptions = [];
+    session.lastResult = null;
+    syncFisherSessionTime(session);
+    setFisherSession(playerId, session);
+
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'select fisher spot failed' });
+  }
+});
+
+app.post('/api/fisher/spot/change', requireDb, async (req, res) => {
+  try {
+    return res.status(400).json({ error: 'end shift to change spot' });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'change spot failed' });
+  }
+});
+
+app.post('/api/fisher/step', requireDb, async (req, res) => {
+  try {
+    const { playerId, stepKey } = req.body || {};
+    if (!playerId || !stepKey) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch) {
+      return res.status(400).json({ error: 'no active fishing session' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    const nextStep = (active.stepsRequired || []).find((step) => !(active.stepsDone || []).includes(step));
+    const normalized = String(stepKey || '').toUpperCase();
+    if (!nextStep || nextStep !== normalized) {
+      return res.status(400).json({ error: `next step is ${nextStep || 'none'}` });
+    }
+
+    if (normalized !== 'BAIT') {
+      return res.status(400).json({ error: 'this step requires dedicated action endpoint' });
+    }
+
+    active.stepsDone.push('BAIT');
+    session.shiftState = 'CAST_STEP';
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'fisher step failed' });
+  }
+});
+
+app.post('/api/fisher/cast/commit', requireDb, async (req, res) => {
+  try {
+    const { playerId, meterValue } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (session.shiftState !== 'CAST_STEP' || !session.activeCatch) {
+      return res.status(400).json({ error: 'not in cast step' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    const nextStep = (active.stepsRequired || []).find((step) => !(active.stepsDone || []).includes(step));
+    if (nextStep !== 'CAST') return res.status(400).json({ error: `next step is ${nextStep}` });
+
+    const cast = fisherCastScoreFromMeter(meterValue);
+    active.castQuality = cast.quality;
+    active.castScore = cast.score;
+    active.castMeter = cast.meter;
+    active.stepsDone.push('CAST');
+    active.stepsDone.push('WAIT_BITE');
+
+    const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
+    const baseWait = randomInt(spot.waitBiteSecRange[0], spot.waitBiteSecRange[1]);
+    const castAdjust = cast.quality === 'PERFECT' ? -1 : cast.quality === 'GOOD' ? -0.4 : 0.6;
+    const waitSec = Math.max(1.8, baseWait + castAdjust);
+    active.biteAt = Date.now() + Math.floor(waitSec * 1000);
+    session.shiftState = 'WAITING_BITE';
+    setFisherSession(playerId, session);
+
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'cast commit failed' });
+  }
+});
+
+app.post('/api/fisher/hook/attempt', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch || session.shiftState !== 'HOOK_WINDOW') {
+      return res.status(400).json({ error: 'hook window not active' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    const now = Date.now();
+    if (now > Number(active.hookWindowEndsAt || 0)) {
+      session.streak = 0;
+      fisherSetRepair(session, 'Untangling hook');
+      session.shiftState = 'BAIT_STEP';
+      session.lastResult = {
+        caught: false,
+        failReason: 'Fish escaped (missed hook window)',
+        fishName: null,
+        fishRarity: null,
+        breakdown: {
+          baseReward: 0,
+          spotMultiplier: 1,
+          levelMultiplier: 1,
+          qualityMultiplier: 0,
+          streakMultiplier: 1,
+          integrityMultiplier: 0,
+          bonusLootValue: 0,
+          totalReward: 0,
+          xpGained: 0,
+          qualityScore: 0,
+        },
+        progression: {
+          levelBefore: view.level,
+          levelAfter: view.level,
+          xpBefore: view.xp,
+          xpAfter: view.xp,
+          unlockedTier: null,
+        },
+      };
+      if (session.activeSpot) {
+        session.activeCatch = fisherPrepareCatchFromSpot(session.activeSpot, false);
+      } else {
+        session.activeCatch = null;
+        session.shiftState = 'SELECTING_SPOT';
+      }
+      setFisherSession(playerId, session);
+      return res.json(fisherStateView(session, view));
+    }
+
+    const remainingMs = Math.max(0, Number(active.hookWindowEndsAt || 0) - now);
+    const ratio = remainingMs / FISHER_CONFIG.hookWindowMs;
+    active.hookScore = Math.max(0.35, Math.min(1, ratio + 0.22));
+    active.hookQuality = active.hookScore >= 0.88 ? 'PERFECT' : active.hookScore >= 0.66 ? 'GOOD' : 'OK';
+    active.stepsDone.push('HOOK');
+    session.shiftState = 'REELING';
+    active.pullPrompt = null;
+    active.reelTicks = 0;
+    active.safeTicks = 0;
+    active.redTicks = 0;
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(500).json({ error: 'hook attempt failed' });
+  }
+});
+
+app.post('/api/fisher/reel/tick', requireDb, async (req, res) => {
+  try {
+    const { playerId, isReeling } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch || session.shiftState !== 'REELING') {
+      return res.status(400).json({ error: 'not reeling' });
+    }
+    enforceFisherReelTickCooldown(session);
+
+    const active = session.activeCatch;
+    active.reelTicks = Number(active.reelTicks || 0) + 1;
+
+    const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
+    const reelDifficultyPenalty = spot.reelDifficulty === 'HIGH' ? 1.1 : spot.reelDifficulty === 'MEDIUM' ? 1.04 : 1;
+    const castBoost = Number(active.castScore || 0.5);
+    const hookBoost = Number(active.hookScore || 0.45);
+
+    if (isReeling !== false) {
+      const progressGain = (4.6 + castBoost * 2.4 + hookBoost * 1.8) / reelDifficultyPenalty;
+      active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + progressGain);
+      active.tension = Math.min(100, Number(active.tension || 0) + (6.2 * reelDifficultyPenalty - castBoost * 2.4));
+    } else {
+      const driftGain = 0.35 + castBoost * 0.3;
+      active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + driftGain);
+      active.tension = Math.max(0, Number(active.tension || 0) - (8.5 + hookBoost * 1.9));
+    }
+
+    if (Number(active.tension || 0) <= 76) {
+      active.safeTicks = Number(active.safeTicks || 0) + 1;
+    }
+
+    if (Number(active.tension || 0) >= FISHER_CONFIG.tensionRedThreshold) {
+      active.redTicks = Number(active.redTicks || 0) + 1;
+      active.lineIntegrity = Math.max(0, Number(active.lineIntegrity || 0) - 8);
+    }
+
+    if (active.pullPrompt && Date.now() > Number(active.pullPrompt.expiresAt || 0)) {
+      active.pullMisses = Number(active.pullMisses || 0) + 1;
+      active.tension = Math.min(100, Number(active.tension || 0) + FISHER_CONFIG.randomPullTensionPenalty);
+      active.lineIntegrity = Math.max(0, Number(active.lineIntegrity || 0) - FISHER_CONFIG.lineIntegrityPenaltyPerMiss);
+      active.qualityPenalty = Number(active.qualityPenalty || 0) + FISHER_CONFIG.randomPullQualityPenalty;
+      active.pullPrompt = null;
+    }
+
+    if (!active.pullPrompt) {
+      const everyMin = FISHER_CONFIG.randomPullEveryTicks[0];
+      const everyMax = FISHER_CONFIG.randomPullEveryTicks[1];
+      const nextEvery = randomInt(everyMin, everyMax);
+      if (Number(active.reelTicks || 0) % nextEvery === 0) {
+        active.pullPrompt = {
+          direction: Math.random() < 0.5 ? 'LEFT' : 'RIGHT',
+          expiresAt: Date.now() + FISHER_CONFIG.randomPullWindowMs,
+        };
+      }
+    }
+
+    const snapped = Number(active.tension || 0) >= FISHER_CONFIG.tensionFailThreshold || Number(active.redTicks || 0) >= FISHER_CONFIG.maxRedTicksBeforeSnap || Number(active.lineIntegrity || 0) <= 0;
+    if (snapped) {
+      session.streak = 0;
+      fisherSetRepair(session, 'Repairing snapped line');
+      session.shiftState = 'BAIT_STEP';
+      session.lastResult = {
+        caught: false,
+        failReason: 'Line snapped while reeling',
+        fishName: null,
+        fishRarity: null,
+        breakdown: {
+          baseReward: 0,
+          spotMultiplier: 1,
+          levelMultiplier: 1,
+          qualityMultiplier: 0,
+          streakMultiplier: 1,
+          integrityMultiplier: 0,
+          bonusLootValue: 0,
+          totalReward: 0,
+          xpGained: 0,
+          qualityScore: 0,
+        },
+        progression: {
+          levelBefore: view.level,
+          levelAfter: view.level,
+          xpBefore: view.xp,
+          xpAfter: view.xp,
+          unlockedTier: null,
+        },
+      };
+      if (session.activeSpot) {
+        session.activeCatch = fisherPrepareCatchFromSpot(session.activeSpot, false);
+      } else {
+        session.activeCatch = null;
+        session.shiftState = 'SELECTING_SPOT';
+      }
+      setFisherSession(playerId, session);
+      return res.json(fisherStateView(session, view));
+    }
+
+    if (Number(active.catchProgress || 0) >= 100) {
+      active.stepsDone.push('REEL');
+      session.shiftState = 'LANDING';
+    }
+
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'reel tick failed' });
+  }
+});
+
+app.post('/api/fisher/pull/respond', requireDb, async (req, res) => {
+  try {
+    const { playerId, direction } = req.body || {};
+    if (!playerId || !direction) return res.status(400).json({ error: 'missing fields' });
+
+    const progress = await ensureFisherProgress(pool, playerId);
+    const view = toFisherProgressView(progress);
+    const session = getFisherSession(playerId);
+    enforceFisherRepairCooldown(session);
+    syncFisherSessionTime(session);
+    if (!session.activeCatch || session.shiftState !== 'REELING') {
+      return res.status(400).json({ error: 'not reeling' });
+    }
+    enforceFisherActionCooldown(session);
+
+    const active = session.activeCatch;
+    if (!active.pullPrompt) {
+      return res.status(400).json({ error: 'no pull prompt active' });
+    }
+    if (Date.now() > Number(active.pullPrompt.expiresAt || 0)) {
+      return res.status(400).json({ error: 'pull prompt expired' });
+    }
+
+    const normalized = String(direction || '').toUpperCase();
+    if (normalized === String(active.pullPrompt.direction || '').toUpperCase()) {
+      active.pullHits = Number(active.pullHits || 0) + 1;
+      active.tension = Math.max(0, Number(active.tension || 0) - 16);
+      active.catchProgress = Math.min(100, Number(active.catchProgress || 0) + 1.2);
+    } else {
+      active.pullMisses = Number(active.pullMisses || 0) + 1;
+      active.tension = Math.min(100, Number(active.tension || 0) + FISHER_CONFIG.randomPullTensionPenalty);
+      active.lineIntegrity = Math.max(0, Number(active.lineIntegrity || 0) - 10);
+      active.qualityPenalty = Number(active.qualityPenalty || 0) + FISHER_CONFIG.randomPullQualityPenalty;
+    }
+    active.pullPrompt = null;
+    setFisherSession(playerId, session);
+    res.json(fisherStateView(session, view));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'pull respond failed' });
+  }
+});
+
+app.post('/api/fisher/land', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensureFisherProgress(db, playerId);
+      const progressBefore = toFisherProgressView(progressRow);
+      const session = getFisherSession(playerId);
+      enforceFisherRepairCooldown(session);
+      syncFisherSessionTime(session);
+      if (!session.activeCatch || session.shiftState !== 'LANDING') {
+        throw new Error('not ready to land catch');
+      }
+      enforceFisherActionCooldown(session);
+
+      const active = session.activeCatch;
+      const spot = FISHER_CONFIG.spots[active.spotTier] || FISHER_CONFIG.spots.COMMON;
+
+      active.stepsDone.push('LAND');
+
+      const pullTotal = Number(active.pullHits || 0) + Number(active.pullMisses || 0);
+      const pullRatio = pullTotal > 0 ? Number(active.pullHits || 0) / pullTotal : 1;
+      const safeRatio = Number(active.reelTicks || 0) > 0 ? Number(active.safeTicks || 0) / Number(active.reelTicks || 1) : 0.5;
+
+      const qualityScoreRaw =
+        Number(active.castScore || 0.5) * 0.28 +
+        Number(active.hookScore || 0.5) * 0.24 +
+        Math.max(0, Math.min(1, safeRatio)) * 0.33 +
+        Math.max(0, Math.min(1, pullRatio)) * 0.15 -
+        Number(active.qualityPenalty || 0);
+      const qualityScore = Math.max(0.05, Math.min(1, qualityScoreRaw));
+
+      const rarityWeights = { ...spot.rarityWeights };
+      rarityWeights.RARE += qualityScore >= 0.82 ? 0.08 : 0;
+      rarityWeights.LEGENDARY += qualityScore >= 0.92 ? 0.05 : 0;
+      const fishRarity = fisherPickRarity(rarityWeights);
+      const rodTier = Math.max(1, Math.min(5, Number(progressBefore.rodTier || 1)));
+      const rodModel = fisherRodTierModel(rodTier);
+      const fishSize = fisherFishSizeRoll(active.castMeter, rodTier);
+      const fishName = fisherChooseFishName(fishRarity, active.spotTier);
+      const fishWeightKg = fisherFishWeightKg(active.spotTier, fishSize);
+
+      const kgPrice = Number(FISHER_CONFIG.kgBasePrice[fishSize] || 1000);
+      const baseReward = Math.max(0, Math.floor(fishWeightKg * kgPrice));
+      const baseXp = Number(FISHER_CONFIG.fishRarityXpBase[fishRarity] || 20);
+      const spotMultiplier = Number(spot.spotMultiplier || 1);
+      const levelMultiplier = levelPayoutMultiplier(progressBefore.level) * Number(rodModel.payoutMultiplier || 1);
+      const qualityMultiplier = 0.7 + qualityScore * 0.65;
+      const streakMultiplier = 1 + Math.min(4, Number(session.streak || 0)) * FISHER_CONFIG.streakBonusPerStep;
+      const integrityMultiplier = Math.max(0.35, Number(active.lineIntegrity || 100) / 100);
+      const bonusLootValue = fishRarity === 'LEGENDARY' ? randomInt(120, 300) : fishRarity === 'RARE' ? randomInt(45, 120) : 0;
+
+      const totalReward = Math.max(
+        0,
+        Math.floor(baseReward * spotMultiplier * levelMultiplier * qualityMultiplier * streakMultiplier * integrityMultiplier) + bonusLootValue,
+      );
+
+      const fishValue = totalReward;
+
+      const nextCarryWeight = Number(session.carryWeightKg || 0) + fishWeightKg;
+      const carryLimit = Number(session.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
+      if (nextCarryWeight > carryLimit) {
+        session.streak = 0;
+        fisherSetRepair(session, 'Untangling overloaded line');
+        session.lastResult = {
+          caught: false,
+          failReason: 'Carry bag is full. Sell your fish first.',
+          fishName: null,
+          fishRarity: null,
+          fishSize: null,
+          fishWeightKg: null,
+          breakdown: {
+            baseReward: 0,
+            spotMultiplier: 1,
+            levelMultiplier: 1,
+            qualityMultiplier: 0,
+            streakMultiplier: 1,
+            integrityMultiplier: 0,
+            bonusLootValue: 0,
+            totalReward: 0,
+            xpGained: 0,
+            qualityScore: 0,
+          },
+          progression: {
+            levelBefore: progressBefore.level,
+            levelAfter: progressBefore.level,
+            xpBefore: progressBefore.xp,
+            xpAfter: progressBefore.xp,
+            unlockedTier: null,
+          },
+        };
+        session.activeCatch = session.activeSpot ? fisherPrepareCatchFromSpot(session.activeSpot, false) : null;
+        session.shiftState = session.activeSpot ? 'BAIT_STEP' : 'SELECTING_SPOT';
+        setFisherSession(playerId, session);
+        return {
+          state: fisherStateView(session, progressBefore),
+          result: session.lastResult,
+        };
+      }
+
+      const qualityXpBonus = qualityScore >= 0.9 ? 12 : qualityScore >= 0.75 ? 7 : qualityScore >= 0.6 ? 3 : 0;
+      const streakXpBonus = Math.min(10, Number(session.streak || 0) * 2);
+      const xpGained = Math.max(0, Math.floor(baseXp + qualityXpBonus + streakXpBonus));
+
+      const nextXp = Number(progressBefore.xp) + xpGained;
+      const nextLevel = computeFisherLevel(nextXp);
+      const unlockedTier = nextLevel > progressBefore.level ? fisherTierForLevel(nextLevel) : null;
+
+      const isPerfect = qualityScore >= 0.92 && Number(active.lineIntegrity || 0) >= 85;
+      const nextStreak = Number(session.streak || 0) + 1;
+      const bestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
+
+      await db.query(
+        `UPDATE player_fisher_progress
+         SET fisher_level = $2,
+             fisher_xp = $3,
+             fisher_total_catches = fisher_total_catches + 1,
+             fisher_perfect_catches = fisher_perfect_catches + $4,
+             fisher_best_streak = GREATEST(fisher_best_streak, $5),
+             fisher_total_earnings = fisher_total_earnings + $6,
+             fisher_rare_catches = fisher_rare_catches + $7,
+             fisher_legendary_catches = fisher_legendary_catches + $8,
+             updated_at = NOW()
+         WHERE player_id = $1`,
+        [
+          playerId,
+          nextLevel,
+          nextXp,
+          isPerfect ? 1 : 0,
+          bestStreak,
+          fishValue,
+          fishRarity === 'RARE' ? 1 : 0,
+          fishRarity === 'LEGENDARY' ? 1 : 0,
+        ],
+      );
+
+      await addFarmTimeForCatch(db, playerId, 0.1);
+
+      const updatedProgress = await ensureFisherProgress(db, playerId);
+      const progressAfter = toFisherProgressView(updatedProgress);
+
+      session.streak = nextStreak;
+      session.bestStreakShift = Math.max(Number(session.bestStreakShift || 0), nextStreak);
+      session.carryWeightKg = Math.round(nextCarryWeight * 10) / 10;
+      session.carryEstimatedValue = Number(session.carryEstimatedValue || 0) + fishValue;
+      session.carriedFish = [
+        ...(session.carriedFish || []),
+        {
+          name: fishName,
+          rarity: fishRarity,
+          size: fishSize,
+          weightKg: fishWeightKg,
+          value: fishValue,
+        },
+      ].slice(-25);
+      session.activeCatch = session.activeSpot ? fisherPrepareCatchFromSpot(session.activeSpot, false) : null;
+      session.shiftState = session.activeSpot ? 'BAIT_STEP' : 'SELECTING_SPOT';
+      session.lastResult = {
+        caught: true,
+        failReason: null,
+        fishName,
+        fishRarity,
+        fishSize,
+        fishWeightKg,
+        breakdown: {
+          baseReward,
+          spotMultiplier,
+          levelMultiplier,
+          qualityMultiplier,
+          streakMultiplier,
+          integrityMultiplier,
+          bonusLootValue,
+          totalReward: fishValue,
+          xpGained,
+          qualityScore,
+        },
+        progression: {
+          levelBefore: progressBefore.level,
+          levelAfter: progressAfter.level,
+          xpBefore: progressBefore.xp,
+          xpAfter: progressAfter.xp,
+          unlockedTier,
+        },
+      };
+      setFisherSession(playerId, session);
+
+      return {
+        state: fisherStateView(session, progressAfter),
+        result: session.lastResult,
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'land catch failed' });
+  }
+});
+
+app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const outcome = await withTransaction(async (db) => {
+      const progressRow = await ensureFisherProgress(db, playerId);
+      const progressView = toFisherProgressView(progressRow);
+      const session = getFisherSession(playerId);
+      enforceFisherActionCooldown(session);
+
+      const sellValue = Math.max(0, Math.floor(Number(session.carryEstimatedValue || 0)));
+      if (sellValue <= 0) {
+        throw new Error('no fish to sell');
+      }
+
+      await db.query(
+        `UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`,
+        [playerId, sellValue],
+      );
+
+      session.carryEstimatedValue = 0;
+      session.carryWeightKg = 0;
+      session.carriedFish = [];
+      setFisherSession(playerId, session);
+
+      return {
+        soldValue: sellValue,
+        state: fisherStateView(session, progressView),
+      };
+    });
+
+    res.json(outcome);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'sell fish failed' });
+  }
+});
+
+app.post('/api/fisher/rod/buy', requireDb, async (req, res) => {
+  try {
+    const { playerId, tier } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+    const targetTier = Math.max(1, Math.min(5, Math.floor(Number(tier || 1))));
+    const rod = fisherRodTierModel(targetTier);
+
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const progress = await ensureFisherProgress(db, playerId);
+      const currentTier = Math.max(1, Math.min(5, Number(progress.fisher_rod_tier || 1)));
+      if (targetTier <= currentTier) throw new Error('already unlocked');
+
+      const player = await db.query(`SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
+      const currentMoney = Number(player.rows[0]?.clean_money || 0);
+      if (currentMoney < Number(rod.price || 0)) throw new Error('insufficient funds');
+
+      await db.query(`UPDATE players SET clean_money = clean_money - $2, updated_at = NOW() WHERE player_id = $1`, [playerId, Number(rod.price || 0)]);
+      await db.query(`UPDATE player_fisher_progress SET fisher_rod_tier = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, targetTier]);
+
+      return {
+        boughtTier: targetTier,
+        rodName: rod.name,
+        cost: Number(rod.price || 0),
+      };
+    });
+
+    const nextProgress = await ensureFisherProgress(pool, playerId);
+    const session = getFisherSession(playerId);
+    setFisherSession(playerId, session);
+    res.json({ ...result, state: fisherStateView(session, toFisherProgressView(nextProgress)) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'rod buy failed' });
+  }
+});
+
+app.post('/api/fisher/carry/buy', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const session = getFisherSession(playerId);
+    if (session.shiftState !== 'IDLE') {
+      throw new Error('end shift to buy carry');
+    }
+
+    const result = await withTransaction(async (db) => {
+      await ensurePlayer(db, playerId);
+      const progress = await ensureFisherProgress(db, playerId);
+      const currentCapacity = Math.max(FISHER_CONFIG.carryCapacityKg, Math.min(FISHER_CONFIG.carryCapacityMaxKg, Number(progress.fisher_carry_capacity_kg || FISHER_CONFIG.carryCapacityKg)));
+      if (currentCapacity >= FISHER_CONFIG.carryCapacityMaxKg) {
+        throw new Error('carry already maxed');
+      }
+
+      const player = await db.query(`SELECT clean_money FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
+      const currentMoney = Number(player.rows[0]?.clean_money || 0);
+      if (currentMoney < Number(FISHER_CONFIG.carryUpgradeCost || 0)) {
+        throw new Error('insufficient funds');
+      }
+
+      const nextCapacity = Math.min(FISHER_CONFIG.carryCapacityMaxKg, currentCapacity + Number(FISHER_CONFIG.carryUpgradeStepKg || 5));
+
+      await db.query(`UPDATE players SET clean_money = clean_money - $2, updated_at = NOW() WHERE player_id = $1`, [playerId, Number(FISHER_CONFIG.carryUpgradeCost || 0)]);
+      await db.query(`UPDATE player_fisher_progress SET fisher_carry_capacity_kg = $2, updated_at = NOW() WHERE player_id = $1`, [playerId, nextCapacity]);
+
+      return {
+        previousCapacity: currentCapacity,
+        nextCapacity,
+        cost: Number(FISHER_CONFIG.carryUpgradeCost || 0),
+      };
+    });
+
+    const nextProgressRow = await ensureFisherProgress(pool, playerId);
+    const nextProgress = toFisherProgressView(nextProgressRow);
+    const nextSession = getFisherSession(playerId);
+    nextSession.carryCapacityKg = Number(nextProgress.carryCapacityKg || nextSession.carryCapacityKg || FISHER_CONFIG.carryCapacityKg);
+    setFisherSession(playerId, nextSession);
+
+    res.json({
+      ...result,
+      state: fisherStateView(nextSession, nextProgress),
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'carry buy failed' });
+  }
+});
+
+// GET /api/showroom - List all vehicle models grouped by brand
+app.get('/api/showroom', requireDb, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, brand, name, base_price, is_jackpot, stock FROM vehicle_models ORDER BY brand, name`,
+    );
+
+    const brands = {};
+    for (const vehicle of result.rows) {
+      if (!brands[vehicle.brand]) brands[vehicle.brand] = [];
+      brands[vehicle.brand].push({
+        id: vehicle.id,
+        brand: vehicle.brand,
+        name: vehicle.name,
+        basePrice: Number(vehicle.base_price),
+        isJackpot: vehicle.is_jackpot,
+        stock: vehicle.stock,
+      });
+    }
+
+    res.json({ brands });
+  } catch (e) {
+    console.error('showroom error', e);
+    res.status(500).json({ error: 'showroom failed' });
+  }
+});
+
+// POST /api/showroom/buy - Purchase a vehicle
+app.post('/api/showroom/buy', requireDb, async (req, res) => {
+  try {
+    const { playerId, modelId, useVoucher } = req.body || {};
+    if (!playerId || !modelId) return res.status(400).json({ error: 'missing fields' });
+
+    const result = await withTransaction(async (db) => {
+      const player = await ensurePlayer(db, playerId);
+      await ensureVehicleCapacity(db, playerId);
+
+      const vmRes = await db.query(`SELECT * FROM vehicle_models WHERE id = $1`, [modelId]);
+      const model = vmRes.rows[0];
+      if (!model) throw new Error('vehicle not found');
+      if (model.stock <= 0) throw new Error('vehicle out of stock');
+
+      let finalPrice = Number(model.base_price);
+      let discountPct = 0;
+
+      if (useVoucher) {
+        const voucherRes = await db.query(
+          `SELECT id FROM inventory_items WHERE player_id = $1 AND item_type = 'VOUCHER_SHOWROOM' AND quantity > 0 ORDER BY created_at ASC LIMIT 1`,
+          [playerId],
+        );
+        if (!voucherRes.rows[0]) throw new Error('no vouchers available');
+        discountPct = Math.floor(10 + Math.random() * 25);
+        finalPrice = Math.floor(finalPrice * (1 - discountPct / 100));
+        await consumeInventoryItem(db, voucherRes.rows[0].id, 1);
+      }
+
+      if (Number(player.clean_money) < finalPrice) {
+        throw new Error('insufficient funds');
+      }
+
+      await db.query(
+        `UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`,
+        [finalPrice, playerId],
+      );
+      await db.query(
+        `UPDATE vehicle_models SET stock = stock - 1 WHERE id = $1`,
+        [modelId],
+      );
+      const inserted = await db.query(
+        `INSERT INTO owned_vehicles (player_id, model_id, purchase_price, purchase_source)
+         VALUES ($1, $2, $3, 'SHOWROOM')
+         RETURNING id, model_id, purchase_price, purchased_at`,
+        [playerId, modelId, finalPrice],
+      );
+      const updatedPlayer = await db.query(`SELECT clean_money FROM players WHERE player_id = $1`, [playerId]);
+      const updatedModel = await db.query(`SELECT stock FROM vehicle_models WHERE id = $1`, [modelId]);
+
+      return {
+        discountPct,
+        vehicle: {
+          id: inserted.rows[0].id,
+          modelId: inserted.rows[0].model_id,
+          modelName: model.name,
+          brand: model.brand,
+          purchasePrice: Number(inserted.rows[0].purchase_price),
+          purchasedAt: asIso(inserted.rows[0].purchased_at),
+          acquisitionSource: 'SHOWROOM',
+        },
+        newBalance: Number(updatedPlayer.rows[0].clean_money),
+        stockRemaining: updatedModel.rows[0].stock,
+      };
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('showroom/buy error', e);
+    res.status(400).json({ error: e.message || 'purchase failed' });
+  }
+});
+
+// ========== ROULETTE HELPERS ==========
+
+const ROULETTE_REWARDS = [
+  { name: 'Vehicul Suvenir', tier: 'legendary', itemType: null, valueMin: 2_000_000, valueMax: 5_000_000 },
+  { name: 'VIP Gold', tier: 'epic', itemType: 'VIP_GOLD', valueMin: 0, valueMax: 0 },
+  { name: 'VIP Silver', tier: 'epic', itemType: 'VIP_SILVER', valueMin: 0, valueMax: 0 },
+  { name: 'Mystery Box', tier: 'epic', itemType: 'MYSTERY_BOX', valueMin: 5_000, valueMax: 10_000_000 },
+  { name: 'Fragmente Ruleta', tier: 'rare', itemType: 'ROULETTE_FRAGMENTS', valueMin: 5, valueMax: 5 },
+  { name: 'FlowCoins', tier: 'rare', itemType: null, valueMin: 10, valueMax: 10 },
+  { name: 'Slot Vehicle', tier: 'rare', itemType: 'SLOT_VEHICLE', valueMin: 1, valueMax: 1 },
+  { name: 'Voucher Showroom', tier: 'rare', itemType: 'VOUCHER_SHOWROOM', valueMin: 1, valueMax: 1 },
+  { name: 'Job Boost Pilot', tier: 'uncommon', itemType: 'JOB_BOOST_PILOT', valueMin: 1, valueMax: 1 },
+  { name: 'Scutire Taxe', tier: 'uncommon', itemType: 'TAX_EXEMPTION', valueMin: 1, valueMax: 1 },
+  { name: 'Xenon Vehicul', tier: 'common', itemType: 'XENON_VEHICLE', valueMin: 5_000, valueMax: 150_000 },
+  { name: 'Bani', tier: 'common', itemType: null, valueMin: 25_000, valueMax: 50_000 },
+];
+
+const TIER_WEIGHT = { legendary: 2, epic: 8, rare: 18, uncommon: 30, common: 42 };
+
+function pickWeightedReward() {
+  const totalWeight = Object.values(TIER_WEIGHT).reduce((a, b) => a + b, 0);
+  let roll = Math.random() * totalWeight;
+  for (const reward of ROULETTE_REWARDS) {
+    roll -= TIER_WEIGHT[reward.tier];
+    if (roll <= 0) return reward;
+  }
+  return ROULETTE_REWARDS[ROULETTE_REWARDS.length - 1];
+}
+
+// POST /api/roulette/spin - Spin the roulette
+app.post('/api/roulette/spin', requireDb, async (req, res) => {
+  try {
+    const { playerId, costType } = req.body || {};
+    if (!playerId || !costType) return res.status(400).json({ error: 'missing fields' });
+
+    const result = await withTransaction(async (db) => {
+      const player = await ensurePlayer(db, playerId);
+      const cost = costType === 'flowcoins' ? 30 : 100_000;
+      if (costType === 'flowcoins' && player.flow_coins < cost) throw new Error('insufficient flowcoins');
+      if (costType === 'cash' && Number(player.clean_money) < cost) throw new Error('insufficient funds');
+
+      if (costType === 'flowcoins') {
+        await db.query(`UPDATE players SET flow_coins = flow_coins - $1 WHERE player_id = $2`, [cost, playerId]);
+      } else {
+        await db.query(`UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`, [cost, playerId]);
+      }
+
+      const reward = pickWeightedReward();
+      const payout = reward.valueMin === reward.valueMax
+        ? reward.valueMin
+        : Math.floor(reward.valueMin + Math.random() * (reward.valueMax - reward.valueMin));
+
+      let rewardType = reward.itemType || 'CASH';
+      let rewardSubtitle = '';
+      let emoji = '🎁';
+      let metadata = {};
+
+      if (reward.name === 'Bani') {
+        await db.query(`UPDATE players SET clean_money = clean_money + $1 WHERE player_id = $2`, [payout, playerId]);
+        rewardSubtitle = `+${payout.toLocaleString('ro-RO')} $`;
+        emoji = '💵';
+      } else if (reward.name === 'FlowCoins') {
+        await db.query(`UPDATE players SET flow_coins = flow_coins + $1 WHERE player_id = $2`, [payout, playerId]);
+        rewardSubtitle = `+${payout} FlowCoins`;
+        emoji = '🟠';
+      } else if (reward.itemType === 'ROULETTE_FRAGMENTS') {
+        await db.query(`UPDATE players SET roulette_fragments = roulette_fragments + $1 WHERE player_id = $2`, [payout, playerId]);
+        rewardSubtitle = `+${payout} fragmente`;
+        emoji = '🪙';
+      } else if (reward.itemType) {
+        metadata = reward.itemType === 'VOUCHER_SHOWROOM' ? { discount: randomInt(10, 35) } : {};
+        await addInventoryItem(db, playerId, reward.itemType, payout || 1, metadata);
+        rewardSubtitle = reward.name;
+        emoji = {
+          VIP_GOLD: '💎',
+          VIP_SILVER: '💠',
+          MYSTERY_BOX: '📦',
+          SLOT_VEHICLE: '➕',
+          VOUCHER_SHOWROOM: '🎟️',
+          JOB_BOOST_PILOT: '✈️',
+          TAX_EXEMPTION: '💸',
+          XENON_VEHICLE: '🔩',
+        }[reward.itemType] || '🎁';
+      }
+
+      const updatedPlayerRes = await db.query(
+        `SELECT clean_money, flow_coins, roulette_fragments FROM players WHERE player_id = $1`,
+        [playerId],
+      );
+      const updatedPlayer = updatedPlayerRes.rows[0];
+
+      return {
+        rewardType,
+        rewardName: reward.name,
+        rewardSubtitle,
+        tier: reward.tier,
+        emoji,
+        payout,
+        metadata,
+        player: {
+          cleanMoney: Number(updatedPlayer.clean_money),
+          flowCoins: updatedPlayer.flow_coins,
+          rouletteFragments: updatedPlayer.roulette_fragments,
+        },
+      };
+    });
+
+    res.json(result);
+  } catch (e) {
+    console.error('roulette spin error', e);
+    res.status(400).json({ error: e.message || 'spin failed' });
+  }
+});
+
+// POST /api/mystery/open - Open a mystery box
+app.post('/api/mystery/open', requireDb, async (req, res) => {
+  try {
+    const { playerId } = req.body || {};
+    if (!playerId) return res.status(400).json({ error: 'playerId missing' });
+
+    const clothing = await withTransaction(async (db) => {
+      const mysteryRes = await db.query(
+        `SELECT id FROM inventory_items WHERE player_id = $1 AND item_type = 'MYSTERY_BOX' AND quantity > 0 ORDER BY created_at ASC LIMIT 1`,
+        [playerId],
+      );
+      if (!mysteryRes.rows[0]) throw new Error('no mystery box available');
+
+      await consumeInventoryItem(db, mysteryRes.rows[0].id, 1);
+
+      const clothRes = await db.query(
+        `SELECT id, name, category, rarity, min_value, max_value FROM clothing_items ORDER BY RANDOM() LIMIT 1`,
+      );
+      const cloth = clothRes.rows[0];
+      if (!cloth) throw new Error('no clothing items');
+
+      const marketValue = randomInt(Number(cloth.min_value), Number(cloth.max_value));
+      await addInventoryItem(db, playerId, 'CLOTHING', 1, {
+        name: cloth.name,
+        category: cloth.category,
+        rarity: cloth.rarity,
+        marketValue,
+        source: 'ROULETTE',
+        imagePath: getClothingImagePath(cloth.name, cloth.category),
+      });
+
+      return {
+        id: cloth.id,
+        name: cloth.name,
+        category: cloth.category,
+        rarity: cloth.rarity,
+        marketValue,
+      };
+    });
+
+    res.json({ clothing });
+  } catch (e) {
+    console.error('mystery open error', e);
+    res.status(400).json({ error: e.message || 'open failed' });
+  }
+});
+
+// POST /api/inventory/use - Use an inventory item
+app.post('/api/inventory/use', requireDb, async (req, res) => {
+  try {
+    const { playerId, itemId } = req.body || {};
+    if (!playerId || !itemId) return res.status(400).json({ error: 'missing fields' });
+
+    const result = await withTransaction(async (db) => {
+      const itemRes = await db.query(`SELECT * FROM inventory_items WHERE player_id = $1 AND id = $2`, [playerId, itemId]);
+      const item = itemRes.rows[0];
+      if (!item) throw new Error('item not found');
+      if (item.quantity < 1) throw new Error('not enough items');
+
+      let effect = 'item_used';
+      const metadata = {};
+
+      await consumeInventoryItem(db, itemId, 1);
+
+      if (item.item_type === 'SLOT_VEHICLE') {
+        await db.query(`UPDATE players SET vehicle_slots_extra = vehicle_slots_extra + 1 WHERE player_id = $1`, [playerId]);
+        effect = 'vehicle_slot_added';
+      } else if (item.item_type === 'TAX_EXEMPTION') {
+        await db.query(`UPDATE players SET skip_next_tax = TRUE WHERE player_id = $1`, [playerId]);
+        effect = 'tax_exemption_activated';
+      } else if (item.item_type === 'JOB_BOOST_PILOT') {
+        effect = 'pilot_boost_reserved';
+      } else if (item.item_type === 'JOB_BOOST_SLEEP') {
+        effect = 'sleep_boost_reserved';
+      } else if (item.item_type === 'VIP_GOLD') {
+        await db.query(
+          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'VIP_GOLD', NOW() + INTERVAL '10 minutes')`,
+          [playerId],
+        );
+        effect = 'vip_gold_activated';
+      } else if (item.item_type === 'VIP_SILVER') {
+        await db.query(
+          `INSERT INTO active_boosts (player_id, boost_type, expires_at) VALUES ($1, 'VIP_SILVER', NOW() + INTERVAL '5 minutes')`,
+          [playerId],
+        );
+        effect = 'vip_silver_activated';
+      }
+
+      return { effect, metadata };
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('inventory use error', e);
+    res.status(400).json({ error: e.message || 'use failed' });
+  }
 });
 
 const BOT_NAMES = ['Rico', 'Marlon', 'Maya', 'Toretto', 'Nina', 'Sergio', 'Vlad', 'Alex'];
@@ -529,7 +5229,8 @@ app.get('/api/adminpanelv2/dashboard', requireDb, async (req, res) => {
       pool.query(
         `
         SELECT
-          player_id,
+          ps.player_id,
+          COALESCE(NULLIF(TRIM(p.display_name), ''), ps.player_id) AS nickname,
           cash_available,
           roulette_spent,
           roulette_won,
@@ -546,8 +5247,9 @@ app.get('/api/adminpanelv2/dashboard', requireDb, async (req, res) => {
           city,
           country,
           path
-        FROM player_stats
-        ORDER BY updated_at DESC
+        FROM player_stats ps
+        LEFT JOIN players p ON p.player_id = ps.player_id
+        ORDER BY ps.updated_at DESC
         LIMIT 300;
         `,
       ),
@@ -583,6 +5285,154 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
+// ========== SEED DATA ==========
+
+const VEHICLE_MODELS = [
+  { brand: 'DRAVIA', name: 'Dravia Nova', base_price: 100_000, is_jackpot: false, image_path: '/cars/Dravia Nova.png' },
+  { brand: 'DRAVIA', name: 'Dravia Dustera', base_price: 180_000, is_jackpot: false, image_path: '/cars/Dravia Dustera.png' },
+  { brand: 'BERVIK', name: 'Bervik M4R', base_price: 650_000, is_jackpot: false, image_path: '/cars/Bervik M4R.png' },
+  { brand: 'BERVIK', name: 'Bervik X8', base_price: 900_000, is_jackpot: false, image_path: '/cars/Bervik X8.png' },
+  { brand: 'AURON', name: 'Auron RS7', base_price: 1_200_000, is_jackpot: false, image_path: '/cars/Auron RS7.png' },
+  { brand: 'AURON', name: 'Auron Q8X', base_price: 1_500_000, is_jackpot: false, image_path: '/cars/Auron Q8X.png' },
+  { brand: 'FERANO', name: 'Ferano Roma X', base_price: 2_300_000, is_jackpot: false, image_path: '/cars/Ferano Roma X.png' },
+  { brand: 'FERANO', name: 'Ferano F8R', base_price: 2_800_000, is_jackpot: false, image_path: '/cars/Ferano F8R.png' },
+  { brand: 'VORTEK', name: 'Vortek Cayenne X', base_price: 3_200_000, is_jackpot: true, image_path: '/cars/Vortek Cayenne X.png' },
+  { brand: 'VORTEK', name: 'Vortek 911R', base_price: 4_000_000, is_jackpot: true, image_path: '/cars/Vortek 911R.png' },
+];
+
+const CLOTHING_ITEMS = [
+  // TSHIRTS
+  { name: 'Like Basic Tee', category: 'TSHIRT', rarity: 'BLUE', min_value: 10_000, max_value: 80_000, image_path: '/Clothes/tshirt/Like Basic Tee.png' },
+  { name: 'Adibas Sport Tee', category: 'TSHIRT', rarity: 'LIGHT_PURPLE', min_value: 50_000, max_value: 200_000, image_path: '/Clothes/tshirt/Adibas Sport Tee.png' },
+  { name: 'Guci Monogram Tee', category: 'TSHIRT', rarity: 'YELLOW', min_value: 500_000, max_value: 900_000, image_path: '/Clothes/tshirt/Guci Monogram Tee.png' },
+  { name: 'Balencii Oversize Tee', category: 'TSHIRT', rarity: 'RED', min_value: 250_000, max_value: 500_000, image_path: '/Clothes/tshirt/Balencii Oversize Tee.png' },
+  { name: 'Stone Ilan Patch Tee', category: 'TSHIRT', rarity: 'DARK_PURPLE', min_value: 120_000, max_value: 350_000, image_path: '/Clothes/tshirt/Stone Ilan Patch Tee.png' },
+  // PANTS
+  { name: 'Like Track Pants', category: 'PANTS', rarity: 'BLUE', min_value: 10_000, max_value: 80_000, image_path: '/Clothes/pants/Like Track Pants.png' },
+  { name: 'Adibas Stripe Pants', category: 'PANTS', rarity: 'LIGHT_PURPLE', min_value: 50_000, max_value: 200_000, image_path: '/Clothes/pants/Adibas Stripe Pants.png' },
+  { name: 'Levios Urban Jeans', category: 'PANTS', rarity: 'DARK_PURPLE', min_value: 120_000, max_value: 350_000, image_path: '/Clothes/pants/Levios Urban Jeans.png' },
+  { name: 'Stone Ilan Cargo Pants', category: 'PANTS', rarity: 'RED', min_value: 250_000, max_value: 500_000, image_path: '/Clothes/pants/Stone Ilan Cargo Pants.png' },
+  { name: 'Balencii Baggy Pants', category: 'PANTS', rarity: 'YELLOW', min_value: 500_000, max_value: 900_000, image_path: '/Clothes/pants/Balencii Baggy Pants.png' },
+  // SHOES
+  { name: 'Like Air Run', category: 'SHOES', rarity: 'YELLOW', min_value: 500_000, max_value: 900_000, image_path: '/Clothes/shoes/Like Air Run.png' },
+  { name: 'Adibas Ultra Move', category: 'SHOES', rarity: 'RED', min_value: 250_000, max_value: 500_000, image_path: '/Clothes/shoes/Adibas Ultra Move.png' },
+  { name: 'Niu Balanse 550', category: 'SHOES', rarity: 'DARK_PURPLE', min_value: 120_000, max_value: 350_000, image_path: '/Clothes/shoes/Niu Balanse 550.png' },
+  { name: 'Convoy Classic High', category: 'SHOES', rarity: 'LIGHT_PURPLE', min_value: 50_000, max_value: 200_000, image_path: '/Clothes/shoes/Convoy Classic High.png' },
+  { name: 'Luma Street Rider', category: 'SHOES', rarity: 'BLUE', min_value: 10_000, max_value: 80_000, image_path: '/Clothes/shoes/Luma Street Rider.png' },
+];
+
+const NPC_SELLERS = [
+  { id: 1, name: 'Shadow Dealer', emoji: '🕵️' },
+  { id: 2, name: 'Gold Rush', emoji: '🤑' },
+  { id: 3, name: 'Street King', emoji: '👑' },
+  { id: 4, name: 'Midnight Shift', emoji: '🌙' },
+  { id: 5, name: 'Chrome Broker', emoji: '🔧' },
+  { id: 6, name: 'Velvet Tag', emoji: '🧥' },
+  { id: 7, name: 'Runway Flip', emoji: '👠' },
+  { id: 8, name: 'Nitro Node', emoji: '⚡' },
+];
+
+async function seedNpcSellers() {
+  for (const npc of NPC_SELLERS) {
+    await pool.query(
+      `INSERT INTO npc_sellers (id, name, emoji)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, emoji = EXCLUDED.emoji`,
+      [npc.id, npc.name, npc.emoji],
+    );
+  }
+}
+
+async function refreshNpcListings() {
+  await pool.query(`DELETE FROM market_listings WHERE seller_npc_id IS NOT NULL AND status = 'ACTIVE'`);
+
+  const vehicleRows = await pool.query(`SELECT id, brand, name, base_price FROM vehicle_models`);
+  const clothingRows = await pool.query(`SELECT id, name, category, rarity, min_value, max_value FROM clothing_items`);
+
+  const npcCap = 10;
+  const sellers = [...NPC_SELLERS].sort(() => Math.random() - 0.5);
+  let created = 0;
+
+  while (created < npcCap) {
+    const seller = sellers[created % sellers.length];
+    const useVehicle = Math.random() < 0.6;
+    if (useVehicle && vehicleRows.rows.length > 0) {
+      const vehicle = vehicleRows.rows[randomInt(0, vehicleRows.rows.length - 1)];
+      const askPrice = toDynamicNpcPrice(Number(vehicle.base_price));
+      const assetMetadata = {
+        id: vehicle.id,
+        brand: vehicle.brand,
+        basePrice: Number(vehicle.base_price),
+        marketPrice: Number(vehicle.base_price),
+        imagePath: getVehicleImagePath(vehicle.name),
+      };
+      await pool.query(
+        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
+         VALUES ('NPC', $1, 'VEHICLE', $2, $3, $4::jsonb, $5, 'ACTIVE')`,
+        [seller.id, vehicle.id, vehicle.name, JSON.stringify(assetMetadata), askPrice],
+      );
+      created += 1;
+      continue;
+    }
+
+    if (clothingRows.rows.length > 0) {
+      const clothing = clothingRows.rows[randomInt(0, clothingRows.rows.length - 1)];
+      const midValue = Math.round((Number(clothing.min_value) + Number(clothing.max_value)) / 2);
+      const askPrice = toDynamicNpcPrice(midValue);
+      const assetMetadata = {
+        id: clothing.id,
+        name: clothing.name,
+        category: clothing.category,
+        rarity: clothing.rarity,
+        marketValue: midValue,
+        marketPrice: midValue,
+        imagePath: getClothingImagePath(clothing.name, clothing.category),
+      };
+      await pool.query(
+        `INSERT INTO market_listings (seller_type, seller_npc_id, asset_type, asset_ref_id, asset_name, asset_metadata, ask_price, status)
+         VALUES ('NPC', $1, 'CLOTHING', $2, $3, $4::jsonb, $5, 'ACTIVE')`,
+        [seller.id, clothing.id, clothing.name, JSON.stringify(assetMetadata), askPrice],
+      );
+      created += 1;
+    }
+  }
+}
+
+async function seedGameData() {
+  try {
+    // Seed vehicles
+    for (const v of VEHICLE_MODELS) {
+      await pool.query(
+        `INSERT INTO vehicle_models (brand, name, base_price, is_jackpot, stock)
+         VALUES ($1, $2, $3, $4, 10)
+         ON CONFLICT (name) DO UPDATE SET
+           brand = EXCLUDED.brand,
+           base_price = EXCLUDED.base_price,
+           is_jackpot = EXCLUDED.is_jackpot`,
+        [v.brand, v.name, v.base_price, v.is_jackpot],
+      );
+    }
+
+    // Seed clothing
+    for (const c of CLOTHING_ITEMS) {
+      await pool.query(
+        `INSERT INTO clothing_items (name, category, rarity, min_value, max_value)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (name) DO UPDATE SET
+           category = EXCLUDED.category,
+           rarity = EXCLUDED.rarity,
+           min_value = EXCLUDED.min_value,
+           max_value = EXCLUDED.max_value`,
+        [c.name, c.category, c.rarity, c.min_value, c.max_value],
+      );
+    }
+
+    console.log('✅ Game data seeded successfully');
+  } catch (e) {
+    console.error('Seed game data error:', e);
+  }
+}
+
 const startServer = () => {
   app.listen(port, '0.0.0.0', () => {
     console.log(`Server listening on port ${port}`);
@@ -597,12 +5447,18 @@ if (!pool) {
   startServer();
 } else {
   initDb()
-    .then(() => {
+    .then(async () => {
       dbReady = true;
-      seedBotPosts().catch(() => {});
+      await seedGameData();
+      await seedNpcSellers();
+      await refreshNpcListings();
+      await seedBotPosts();
+      await runNpcAutoBuyerSweep();
       setInterval(() => {
+        refreshNpcListings().catch(() => {});
         seedBotPosts().catch(() => {});
-      }, 5 * 60 * 1000);
+        runNpcAutoBuyerSweep().catch(() => {});
+      }, NPC_REFRESH_INTERVAL_MS);
       startServer();
     })
     .catch((err) => {

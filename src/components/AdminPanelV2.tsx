@@ -1,179 +1,184 @@
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import {
+  adminLogin,
+  adminLogout,
+  fetchAdminAudit,
+  fetchAdminOverview,
+  fetchAdminPlayers,
+  type AdminAction,
+  type AdminOverviewResponse,
+  type AdminPlayer,
+  type AdminPlayerFilters,
+  type AdminPlayersResponse,
+} from '../lib/adminApi';
+import AdminAudit from './admin/AdminAudit';
+import AdminOverview from './admin/AdminOverview';
+import AdminPlayerEditor from './admin/AdminPlayerEditor';
+import AdminPlayersTable from './admin/AdminPlayersTable';
+import CityIcon from './ui/CityIcon';
 
-type DashboardResponse = {
-  summary: {
-    onlineNow: number;
-    activeRecent: number;
-    totalPlayers: number;
-  };
-  players: Array<{
-    player_id: string;
-    cash_available: number;
-    roulette_spent: number;
-    roulette_won: number;
-    total_net: number;
-    time_spent: number;
-    leaves_collected: number;
-    white_processed: number;
-    blue_processed: number;
-    farm_earned: number;
-    time_pilot: number;
-    sleep_count: number;
-    sleep_money: number;
-    last_seen: string;
-    city: string | null;
-    country: string | null;
-    path: string | null;
-  }>;
+type AdminTab = 'overview' | 'players' | 'audit';
+
+const DEFAULT_FILTERS: AdminPlayerFilters = {
+  search: '',
+  accountOnly: false,
+  onlineOnly: false,
+  vipOnly: false,
+  gangOnly: false,
+  minLevel: '',
+  maxLevel: '',
+  minCityXp: '',
+  maxCityXp: '',
+  minMoney: '',
+  maxMoney: '',
+  minNetWorth: '',
+  maxNetWorth: '',
+  minEarnings: '',
+  maxEarnings: '',
+  minCareer: '',
+  maxCareer: '',
+  minTime: '',
+  maxTime: '',
+  sortBy: 'lastSeenMs',
+  sortDir: 'desc',
+  page: 1,
+  pageSize: 25,
 };
 
 export default function AdminPanelV2() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [data, setData] = useState<DashboardResponse | null>(null);
+  const [loginError, setLoginError] = useState('');
+  const [tab, setTab] = useState<AdminTab>('overview');
+  const [overview, setOverview] = useState<AdminOverviewResponse | null>(null);
+  const [players, setPlayers] = useState<AdminPlayersResponse | null>(null);
+  const [audit, setAudit] = useState<AdminAction[]>([]);
+  const [filters, setFilters] = useState<AdminPlayerFilters>(DEFAULT_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<AdminPlayerFilters>(DEFAULT_FILTERS);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<AdminPlayer | null>(null);
 
-  const loadDashboard = async () => {
-    const res = await fetch('/api/adminpanelv2/dashboard', { credentials: 'include' });
-    if (res.status === 401) {
-      setLoggedIn(false);
-      return;
-    }
-
-    const payload = await res.json();
-    setData(payload);
+  const loadOverview = useCallback(async () => {
+    const payload = await fetchAdminOverview();
+    setOverview(payload);
     setLoggedIn(true);
-  };
-
-  useEffect(() => {
-    loadDashboard().catch(() => {});
-    const timer = window.setInterval(() => loadDashboard().catch(() => {}), 30_000);
-    return () => window.clearInterval(timer);
   }, []);
 
-  const login = async (e: FormEvent) => {
-    e.preventDefault();
-    setError('');
+  const loadPlayers = useCallback(async (next = appliedFilters) => {
+    const payload = await fetchAdminPlayers(next);
+    setPlayers(payload);
+    setLoggedIn(true);
+  }, [appliedFilters]);
 
-    const res = await fetch('/api/adminpanelv2/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ username, password }),
-    });
+  const loadAudit = useCallback(async () => {
+    const payload = await fetchAdminAudit();
+    setAudit(payload.actions);
+    setLoggedIn(true);
+  }, []);
 
-    if (!res.ok) {
-      setError('Credențiale invalide.');
-      return;
+  const refreshCurrent = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (tab === 'overview') await loadOverview();
+      else if (tab === 'players') await loadPlayers();
+      else await loadAudit();
+    } catch (reason: unknown) {
+      const message = reason instanceof Error ? reason.message : 'Admin data failed to load.';
+      if (message === 'unauthorized') setLoggedIn(false);
+      else setError(message);
+    } finally {
+      setLoading(false);
     }
+  }, [loadAudit, loadOverview, loadPlayers, tab]);
 
-    await loadDashboard();
+  useEffect(() => {
+    refreshCurrent().catch(() => {});
+  }, [refreshCurrent]);
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    const timer = window.setInterval(() => refreshCurrent().catch(() => {}), 30_000);
+    return () => window.clearInterval(timer);
+  }, [loggedIn, refreshCurrent]);
+
+  const login = async (event: FormEvent) => {
+    event.preventDefault();
+    setLoginError('');
+    try {
+      await adminLogin(username, password);
+      setLoggedIn(true);
+      setPassword('');
+      await loadOverview();
+    } catch (reason: unknown) {
+      setLoginError(reason instanceof Error ? reason.message : 'Invalid credentials.');
+    }
+  };
+
+  const logout = async () => {
+    await adminLogout().catch(() => {});
+    setLoggedIn(false);
+    setOverview(null);
+    setPlayers(null);
+    setAudit([]);
+  };
+
+  const applyFilters = () => {
+    const next = { ...filters, page: 1 };
+    setAppliedFilters(next);
+    setFilters(next);
+  };
+
+  const changePage = (page: number) => {
+    const next = { ...appliedFilters, page };
+    setAppliedFilters(next);
+    setFilters(next);
   };
 
   if (!loggedIn) {
     return (
-      <div className="min-h-screen bg-[#0d1021] p-6 text-white">
-        <div className="mx-auto mt-24 max-w-md rounded-2xl border border-white/15 bg-[#151a32]/80 p-6">
-          <h1 className="text-2xl font-black">Admin Panel V2</h1>
-          <form className="mt-4 space-y-3" onSubmit={login}>
-            <input className="w-full rounded-lg bg-black/30 px-3 py-2" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-            <input className="w-full rounded-lg bg-black/30 px-3 py-2" placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            {error ? <p className="text-sm text-rose-300">{error}</p> : null}
-            <button className="w-full rounded-lg bg-violet-500 px-3 py-2 font-bold" type="submit">Login</button>
-          </form>
+      <div className="min-h-screen px-4 pb-10 pt-24 text-white sm:px-6">
+        <div className="mx-auto max-w-md">
+          <section className="game-panel overflow-hidden">
+            <div className="border-b border-white/[0.07] p-6"><p className="section-kicker">Restricted system</p><h1 className="mt-3 text-4xl font-black tracking-[-0.055em] text-white">Control Center</h1><p className="mt-3 text-sm leading-relaxed text-white/40">Manage players, economy, progression, inventory, VIP access and audit history.</p></div>
+            <form className="space-y-3 p-6" onSubmit={login}>
+              <label className="block"><span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/28">Username</span><input className="input-dark w-full rounded-xl px-4 py-3 text-sm outline-none" value={username} onChange={(event) => setUsername(event.target.value)} /></label>
+              <label className="block"><span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/28">Password</span><input className="input-dark w-full rounded-xl px-4 py-3 text-sm outline-none" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+              {loginError ? <p className="rounded-xl border border-red-400/20 bg-red-500/[0.06] px-3 py-2 text-sm font-bold text-red-100">{loginError}</p> : null}
+              <button type="submit" className="btn-primary w-full rounded-xl px-4 py-3.5 text-sm">Enter Control Center</button>
+            </form>
+          </section>
         </div>
       </div>
     );
   }
 
-  const totals = (data?.players ?? []).reduce(
-    (acc, p) => {
-      acc.cash += Number(p.cash_available || 0);
-      acc.spent += Number(p.roulette_spent || 0);
-      acc.won += Number(p.roulette_won || 0);
-      acc.net += Number(p.total_net || 0);
-      acc.time += Number(p.time_spent || 0);
-      acc.leaves += Number(p.leaves_collected || 0);
-      acc.white += Number(p.white_processed || 0);
-      acc.blue += Number(p.blue_processed || 0);
-      acc.farmEarned += Number(p.farm_earned || 0);
-      acc.timePilot += Number(p.time_pilot || 0);
-      acc.sleepCount += Number(p.sleep_count || 0);
-      acc.sleepMoney += Number(p.sleep_money || 0);
-      return acc;
-    },
-    { cash: 0, spent: 0, won: 0, net: 0, time: 0, leaves: 0, white: 0, blue: 0, farmEarned: 0, timePilot: 0, sleepCount: 0, sleepMoney: 0 },
-  );
-
   return (
-    <div className="min-h-screen bg-[#0d1021] p-6 text-white">
-      <div className="mx-auto max-w-[1400px]">
-        <h1 className="text-3xl font-black">Roulette Stifyy · Admin Panel V2</h1>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <InfoCard label="Online acum" value={String(data?.summary.onlineNow ?? 0)} />
-          <InfoCard label="Activi recent" value={String(data?.summary.activeRecent ?? 0)} />
-          <InfoCard label="Total jucători" value={String(data?.summary.totalPlayers ?? 0)} />
-        </div>
+    <div className="min-h-screen px-4 pb-12 pt-24 sm:px-6 md:px-8">
+      <div className="mx-auto max-w-[1480px] space-y-5">
+        <section className="game-panel relative overflow-hidden p-5 sm:p-7">
+          <div className="pointer-events-none absolute -right-24 -top-32 h-96 w-96 rounded-full bg-[var(--accent)] opacity-[0.065] blur-3xl" />
+          <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div><p className="section-kicker">CityFlow administration</p><h1 className="mt-3 text-4xl font-black tracking-[-0.055em] text-white sm:text-6xl">Control Center</h1><p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/40">Search the complete player database, filter by ranges, edit core values safely and inspect every change through the audit log.</p></div>
+            <div className="flex flex-wrap gap-2"><button type="button" onClick={() => refreshCurrent().catch(() => {})} className="btn-secondary rounded-xl px-4 py-3 text-xs"><span className="inline-flex items-center gap-2"><CityIcon name="refresh" className="h-4 w-4" />Refresh</span></button><button type="button" onClick={logout} className="btn-ghost rounded-xl px-4 py-3 text-xs"><span className="inline-flex items-center gap-2"><CityIcon name="logout" className="h-4 w-4" />Log out</span></button></div>
+          </div>
+        </section>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <InfoCard label="Total Cash" value={totals.cash.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Cheltuit" value={totals.spent.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Câștigat" value={totals.won.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Net" value={totals.net.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Timp" value={`${totals.time.toLocaleString('ro-RO')}h`} />
-          <InfoCard label="Total Frunze" value={totals.leaves.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Alb" value={totals.white.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Albastru" value={totals.blue.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Farm $" value={totals.farmEarned.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Pilot h" value={totals.timePilot.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Sleep #" value={totals.sleepCount.toLocaleString('ro-RO')} />
-          <InfoCard label="Total Sleep $" value={totals.sleepMoney.toLocaleString('ro-RO')} />
-        </div>
+        <section className="game-panel-soft flex flex-wrap gap-2 p-2">
+          {(['overview', 'players', 'audit'] as AdminTab[]).map((entry) => <button key={entry} type="button" onClick={() => setTab(entry)} className={`rounded-[14px] px-5 py-3 text-xs font-black uppercase tracking-[0.1em] ${tab === entry ? 'bg-[var(--accent)] text-[#10140b]' : 'text-white/35 hover:bg-white/[0.04] hover:text-white/70'}`}>{entry}</button>)}
+        </section>
 
-        <div className="mt-6 overflow-auto rounded-xl border border-white/10">
-          <table className="min-w-full text-sm">
-            <thead className="bg-white/5">
-              <tr>
-                {['Player', 'Cash', 'Cheltuit', 'Câștigat', 'Net', 'Timp', 'Farm $', 'Pilot h', 'Frunze', 'Alb', 'Albastru', 'Sleep #', 'Sleep $', 'Last seen', 'Locație', 'Path'].map((h) => (
-                  <th key={h} className="px-3 py-2 text-left font-semibold text-white/70">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.players ?? []).map((p) => (
-                <tr key={p.player_id} className="border-t border-white/10">
-                  <td className="px-3 py-2">{p.player_id}</td>
-                  <td className="px-3 py-2">{p.cash_available.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.roulette_spent.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.roulette_won.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.total_net.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.time_spent.toLocaleString('ro-RO')}h</td>
-                  <td className="px-3 py-2">{p.farm_earned.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.time_pilot.toLocaleString('ro-RO')}h</td>
-                  <td className="px-3 py-2">{p.leaves_collected.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.white_processed.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.blue_processed.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.sleep_count}</td>
-                  <td className="px-3 py-2">{p.sleep_money.toLocaleString('ro-RO')}</td>
-                  <td className="px-3 py-2">{p.last_seen ? new Date(p.last_seen).toLocaleString('ro-RO') : '-'}</td>
-                  <td className="px-3 py-2">{[p.city, p.country].filter(Boolean).join(', ') || '-'}</td>
-                  <td className="px-3 py-2">{p.path || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {error ? <section className="rounded-[18px] border border-red-400/20 bg-red-500/[0.06] p-4 text-sm font-bold text-red-100">{error}</section> : null}
+        {loading && !overview && !players && audit.length === 0 ? <section className="game-panel-soft p-12 text-center text-sm font-black uppercase tracking-[0.14em] text-white/28">Loading control data...</section> : null}
+
+        {tab === 'overview' && overview ? <AdminOverview data={overview} /> : null}
+        {tab === 'players' ? <AdminPlayersTable data={players} filters={filters} loading={loading} onFiltersChange={setFilters} onApply={applyFilters} onPage={changePage} onEdit={setEditing} /> : null}
+        {tab === 'audit' ? <AdminAudit actions={audit} /> : null}
       </div>
-    </div>
-  );
-}
 
-function InfoCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-white/15 bg-white/5 p-3">
-      <p className="text-xs uppercase tracking-[0.2em] text-white/45">{label}</p>
-      <p className="mt-1 text-2xl font-black">{value}</p>
+      {editing ? <AdminPlayerEditor player={editing} onClose={() => setEditing(null)} onChanged={() => { loadPlayers().catch(() => {}); loadOverview().catch(() => {}); loadAudit().catch(() => {}); }} /> : null}
     </div>
   );
 }

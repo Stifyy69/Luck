@@ -15,7 +15,7 @@ import GangWorkPanel from './gangs/GangWorkPanel';
 
 export type GangSection = 'overview' | 'work' | 'members' | 'recruitment' | 'storage' | 'finance' | 'battles';
 
-export default function GangsPage({ section = 'overview' }: { section?: GangSection }) {
+export default function GangsPage({ section = 'overview' }: { section?: GangSection; onNavigate?: (path: string) => void }) {
   const gang = useGangController();
   const nextLevel = gang.level.index < 3 ? getGangLevel(gang.level.index + 1).name : null;
 

@@ -46,6 +46,7 @@ async function ensureSchema() {
         dirty_earned BIGINT NOT NULL DEFAULT 0,
         stock_value BIGINT NOT NULL DEFAULT 0,
         gang_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        state_version BIGINT NOT NULL DEFAULT 0,
         last_leave_at BIGINT NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -58,6 +59,17 @@ async function ensureSchema() {
     await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS clean_balance BIGINT NOT NULL DEFAULT 0;`);
     await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS dirty_balance BIGINT NOT NULL DEFAULT 0;`);
     await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS gang_meta JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+    await pool.query(`ALTER TABLE player_gangs ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 0;`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS player_gang_operations (
+        player_id TEXT NOT NULL REFERENCES player_gangs(player_id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL,
+        operation_type TEXT NOT NULL,
+        result JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (player_id, operation_id)
+      );
+    `);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS admin_action_log (

@@ -20,6 +20,75 @@ const GANG_UPGRADE_COSTS = Object.freeze([
   { from: 1, to: 2, dirtyCash: 1_000_000_000, leaves: 50_000, white: 50_000, blue: 50_000 },
   { from: 2, to: 3, dirtyCash: 10_000_000_000, leaves: 200_000, white: 200_000, blue: 200_000 },
 ]);
+const GANG_SELL_PRICES = Object.freeze({ blue: 2_300, gunpowder: 5_000, steel: 6_000 });
+const GANG_RECIPES = Object.freeze({
+  white: { input: 'leaves', output: 'white_packs', inputPerBatch: 1_200, outputPerBatch: 400, dirtyCost: 900_000 },
+  blue: { input: 'white_packs', output: 'blue_packs', inputPerBatch: 400, outputPerBatch: 800, dirtyCost: 100_000 },
+  gunpowder: { input: 'sulfur', output: 'gunpowder', inputPerBatch: 5, outputPerBatch: 1, dirtyCost: 0 },
+  steel: { input: 'iron_ore', output: 'steel', inputPerBatch: 5, outputPerBatch: 1, dirtyCost: 0 },
+});
+
+function validateOperationId(value) {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{8,100}$/.test(value)) throw new Error('operationId invalid');
+}
+
+async function runGangOperation(playerId, operationId, operationType, mutate) {
+  await ensureSchema();
+  validateOperationId(operationId);
+  return withTransaction(async (db) => {
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${playerId}:${operationId}`]);
+    const replay = await db.query('SELECT operation_type, result FROM player_gang_operations WHERE player_id = $1 AND operation_id = $2', [playerId, operationId]);
+    if (replay.rows[0]) {
+      if (replay.rows[0].operation_type !== operationType) throw new Error('operationId already used for another operation');
+      return { ...replay.rows[0].result, idempotentReplay: true };
+    }
+    const locked = await db.query('SELECT * FROM player_gangs WHERE player_id = $1 FOR UPDATE', [playerId]);
+    if (!locked.rows[0]?.gang_name) throw new Error('player does not have a synchronized gang');
+    const result = await mutate(db, locked.rows[0]);
+    const version = Number(locked.rows[0].state_version || 0) + 1;
+    await db.query('UPDATE player_gangs SET state_version = $2, updated_at = NOW() WHERE player_id = $1', [playerId, version]);
+    const gang = await getGangStateFromDb(db, playerId);
+    const response = { ok: true, ...result, gang, stateVersion: version };
+    await db.query('INSERT INTO player_gang_operations (player_id, operation_id, operation_type, result) VALUES ($1, $2, $3, $4::jsonb)', [playerId, operationId, operationType, JSON.stringify(response)]);
+    return response;
+  });
+}
+
+function sellGangMaterial(playerId, material, quantityValue, operationId) {
+  const price = GANG_SELL_PRICES[material];
+  const quantity = Math.floor(Number(quantityValue));
+  if (!price) throw new Error('invalid gang material');
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new Error('quantity must be a positive integer');
+  return runGangOperation(playerId, operationId, 'sell', async (db, row) => {
+    const column = material === 'blue' ? 'blue_packs' : material;
+    if (Number(row[column] || 0) < quantity) throw new Error('insufficient gang stock');
+    const payout = quantity * price;
+    await db.query(`UPDATE player_gangs SET ${column} = ${column} - $2, dirty_balance = dirty_balance + $3, dirty_earned = dirty_earned + $3, stock_value = stock_value - $4 WHERE player_id = $1`, [playerId, quantity, payout, payout]);
+    return { payout, quantity, material };
+  });
+}
+
+function processGangMaterial(playerId, recipeName, batchesValue, operationId, options = {}) {
+  const recipe = GANG_RECIPES[recipeName];
+  const batches = Math.floor(Number(batchesValue));
+  if (!recipe) throw new Error('invalid gang recipe');
+  if (!Number.isSafeInteger(batches) || batches <= 0) throw new Error('batches must be a positive integer');
+  return runGangOperation(playerId, operationId, 'process', async (db, row) => {
+    const inputUsed = batches * recipe.inputPerBatch;
+    const dirtyCost = batches * recipe.dirtyCost;
+    if (Number(row[recipe.input] || 0) < inputUsed) throw new Error('insufficient gang materials');
+    if (Number(row.dirty_balance || 0) < dirtyCost) throw new Error('insufficient gang dirty balance');
+    const raided = options.forceRaid === true || (options.forceRaid !== false && Math.random() < 0.05);
+    const outputAdded = raided ? 0 : batches * recipe.outputPerBatch;
+    await db.query(`UPDATE player_gangs SET ${recipe.input} = ${recipe.input} - $2, ${recipe.output} = ${recipe.output} + $3, dirty_balance = dirty_balance - $4 WHERE player_id = $1`, [playerId, inputUsed, outputAdded, dirtyCost]);
+    const updated = (await db.query('SELECT * FROM player_gangs WHERE player_id = $1', [playerId])).rows[0];
+    await db.query('UPDATE player_gangs SET stock_value = $2 WHERE player_id = $1', [playerId, stockValueFor({
+      leaves: Number(updated.leaves || 0), whitePacks: Number(updated.white_packs || 0), bluePacks: Number(updated.blue_packs || 0),
+      sulfur: Number(updated.sulfur || 0), ironOre: Number(updated.iron_ore || 0), gunpowder: Number(updated.gunpowder || 0), steel: Number(updated.steel || 0),
+    })]);
+    return { recipe: recipeName, batches, inputUsed, outputAdded, dirtyCost, raided };
+  });
+}
 
 function calculateGangLevelIndex(dirtyEarned) {
   if (dirtyEarned >= 10_000_000_000) return 3;
@@ -119,8 +188,9 @@ async function assertGangAccess(playerId) {
 async function syncGang(playerId, gangData) {
   await ensureSchema();
   const name = String(gangData?.name || '').trim().slice(0, 48);
-  const existingResult = await pool.query(`SELECT members, gang_level_index, updated_at FROM player_gangs WHERE player_id = $1`, [playerId]);
+  const existingResult = await pool.query(`SELECT members, gang_level_index, state_version, updated_at FROM player_gangs WHERE player_id = $1`, [playerId]);
   const existing = existingResult.rows[0] || null;
+  if (existing && Number(gangData?.stateVersion || 0) < Number(existing.state_version || 0)) return getGangState(playerId);
   const incomingUpdatedAt = gangData?.serverUpdatedAt ? new Date(String(gangData.serverUpdatedAt)) : null;
   if (existing?.updated_at && incomingUpdatedAt && Number.isFinite(incomingUpdatedAt.getTime())) {
     const storedUpdatedAt = new Date(existing.updated_at);
@@ -174,9 +244,9 @@ async function syncGang(playerId, gangData) {
         INSERT INTO player_gangs (
           player_id, gang_name, gang_level_index, members, members_count, active_workers,
           leaves, white_packs, blue_packs, sulfur, iron_ore, gunpowder, steel,
-          clean_balance, dirty_balance, dirty_earned, stock_value, gang_meta, last_leave_at, updated_at
+          clean_balance, dirty_balance, dirty_earned, stock_value, gang_meta, state_version, last_leave_at, updated_at
         )
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, NOW())
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, 1, $19, NOW())
         ON CONFLICT (player_id) DO UPDATE SET
           gang_name = EXCLUDED.gang_name,
           members = EXCLUDED.members,
@@ -194,6 +264,7 @@ async function syncGang(playerId, gangData) {
           dirty_earned = EXCLUDED.dirty_earned,
           stock_value = EXCLUDED.stock_value,
           gang_meta = EXCLUDED.gang_meta,
+          state_version = player_gangs.state_version + 1,
           last_leave_at = EXCLUDED.last_leave_at,
           updated_at = NOW()
       `,
@@ -284,7 +355,11 @@ async function grantMythicGangMember(playerId, customName = '') {
 
 async function getGangState(playerId) {
   await ensureSchema();
-  const result = await pool.query(`SELECT * FROM player_gangs WHERE player_id = $1`, [playerId]);
+  return getGangStateFromDb(pool, playerId);
+}
+
+async function getGangStateFromDb(db, playerId) {
+  const result = await db.query(`SELECT * FROM player_gangs WHERE player_id = $1`, [playerId]);
   const row = result.rows[0];
   if (!row) return null;
   const protectedMythics = getProtectedMythics(row.members);
@@ -293,6 +368,7 @@ async function getGangState(playerId) {
   });
   const meta = sanitizeGangMeta(row.gang_meta);
   return {
+    stateVersion: Number(row.state_version || 0),
     playerId: row.player_id,
     name: row.gang_name,
     gangLevelIndex: Number(row.gang_level_index || 0),
@@ -326,10 +402,14 @@ async function getGangState(playerId) {
 module.exports = {
   GANG_UPGRADE_COSTS,
   calculateGangLevelIndex,
+  stockValueFor,
+  validateOperationId,
   getGangState,
   grantMythicGangMember,
   sanitizeGangMeta,
   sanitizeMembers,
+  processGangMaterial,
+  sellGangMaterial,
   syncGang,
   upgradeGang,
 };

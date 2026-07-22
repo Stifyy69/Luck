@@ -4,6 +4,7 @@ import type { GangMember } from './gangMembers';
 import type { GangLevelIndex } from './gangProgression';
 
 export type GangData = {
+  stateVersion: number;
   name: string;
   levelIndex: GangLevelIndex;
   members: GangMember[];
