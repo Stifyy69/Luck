@@ -34,6 +34,7 @@ function validateOperationId(value) {
 
 async function runGangOperation(playerId, operationId, operationType, mutate) {
   await ensureSchema();
+  await assertGangAccess(playerId);
   validateOperationId(operationId);
   return withTransaction(async (db) => {
     await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${playerId}:${operationId}`]);
@@ -87,6 +88,226 @@ function processGangMaterial(playerId, recipeName, batchesValue, operationId, op
       sulfur: Number(updated.sulfur || 0), ironOre: Number(updated.iron_ore || 0), gunpowder: Number(updated.gunpowder || 0), steel: Number(updated.steel || 0),
     })]);
     return { recipe: recipeName, batches, inputUsed, outputAdded, dirtyCost, raided };
+  });
+}
+
+function normalizeParticipantIds(row, value) {
+  const storedMembers = sanitizeMembers(row.members, {
+    allowMythicIds: new Set(getProtectedMythics(row.members).map((entry) => entry.id)),
+  });
+  const byId = new Map(storedMembers.map((member) => [member.id, member]));
+  const ids = Array.isArray(value)
+    ? [...new Set(value.map((id) => sanitizeText(id, 100)).filter((id) => byId.has(id)))].slice(0, 10)
+    : [];
+  if (ids.length === 0) throw new Error('at least one valid gang member is required');
+  return ids.map((id) => byId.get(id));
+}
+
+function performGangWork(playerId, workType, participantIds, operationId) {
+  if (!['collect', 'mining', 'transport'].includes(workType)) throw new Error('invalid gang work type');
+  return runGangOperation(playerId, operationId, `work:${workType}`, async (db, row) => {
+    const levelCap = [4, 10, 20, 34][clampInteger(row.gang_level_index, 0, 3)];
+    const participants = normalizeParticipantIds(row, participantIds).slice(0, Math.min(10, levelCap));
+    const count = participants.length;
+    const raided = Math.random() < 0.05;
+    let leaves = 0;
+    let sulfur = 0;
+    let ironOre = 0;
+    let dirtyPayout = 0;
+
+    if (!raided && workType === 'collect') {
+      leaves = Math.max(1, Math.floor(count * 850 + Math.random() * count * 400));
+    } else if (!raided && workType === 'mining') {
+      sulfur = Math.max(1, Math.floor(count * (1 + Math.random() * 3)));
+      ironOre = Math.max(1, Math.floor(count * (1 + Math.random() * 2)));
+    } else if (!raided && workType === 'transport') {
+      dirtyPayout = Math.max(25_000, Math.floor(count * 140_000 + Math.random() * count * 100_000));
+    }
+
+    await db.query(
+      `UPDATE player_gangs
+       SET leaves = leaves + $2,
+           sulfur = sulfur + $3,
+           iron_ore = iron_ore + $4,
+           dirty_balance = dirty_balance + $5,
+           dirty_earned = dirty_earned + $5,
+           active_workers = 0,
+           updated_at = NOW()
+       WHERE player_id = $1`,
+      [playerId, leaves, sulfur, ironOre, dirtyPayout],
+    );
+    const updated = (await db.query('SELECT * FROM player_gangs WHERE player_id = $1', [playerId])).rows[0];
+    await db.query(
+      'UPDATE player_gangs SET stock_value = $2 WHERE player_id = $1',
+      [playerId, stockValueFor({
+        leaves: Number(updated.leaves || 0), whitePacks: Number(updated.white_packs || 0), bluePacks: Number(updated.blue_packs || 0),
+        sulfur: Number(updated.sulfur || 0), ironOre: Number(updated.iron_ore || 0), gunpowder: Number(updated.gunpowder || 0), steel: Number(updated.steel || 0),
+      })],
+    );
+    return { workType, participantCount: count, raided, leaves, sulfur, ironOre, dirtyPayout };
+  });
+}
+
+function transferGangFunds(playerId, currency, direction, amountValue, operationId) {
+  if (!['clean', 'dirty'].includes(currency)) throw new Error('invalid currency');
+  if (!['deposit', 'withdraw'].includes(direction)) throw new Error('invalid transfer direction');
+  const amount = Math.floor(Number(amountValue));
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 1_000_000_000_000) throw new Error('invalid transfer amount');
+
+  return runGangOperation(playerId, operationId, `funds:${currency}:${direction}`, async (db, row) => {
+    if (currency === 'clean') {
+      await ensurePlayer(db, playerId);
+      await db.query('SELECT player_id FROM players WHERE player_id = $1 FOR UPDATE', [playerId]);
+      if (direction === 'deposit') {
+        const debited = await db.query(
+          'UPDATE players SET clean_money = clean_money - $2, updated_at = NOW() WHERE player_id = $1 AND clean_money >= $2 RETURNING clean_money',
+          [playerId, amount],
+        );
+        if (!debited.rows[0]) throw new Error('insufficient clean money');
+        await db.query('UPDATE player_gangs SET clean_balance = clean_balance + $2 WHERE player_id = $1', [playerId, amount]);
+      } else {
+        if (Number(row.clean_balance || 0) < amount) throw new Error('insufficient gang clean balance');
+        await db.query('UPDATE player_gangs SET clean_balance = clean_balance - $2 WHERE player_id = $1', [playerId, amount]);
+        await db.query('UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1', [playerId, amount]);
+      }
+    } else {
+      await db.query(
+        `INSERT INTO player_cayo_state (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
+        [playerId],
+      );
+      const cayo = (await db.query('SELECT dirty_money FROM player_cayo_state WHERE player_id = $1 FOR UPDATE', [playerId])).rows[0];
+      if (direction === 'deposit') {
+        if (Number(cayo?.dirty_money || 0) < amount) throw new Error('insufficient dirty money');
+        await db.query('UPDATE player_cayo_state SET dirty_money = dirty_money - $2, updated_at = NOW() WHERE player_id = $1', [playerId, amount]);
+        await db.query('UPDATE player_gangs SET dirty_balance = dirty_balance + $2 WHERE player_id = $1', [playerId, amount]);
+      } else {
+        if (Number(row.dirty_balance || 0) < amount) throw new Error('insufficient gang dirty balance');
+        await db.query('UPDATE player_gangs SET dirty_balance = dirty_balance - $2 WHERE player_id = $1', [playerId, amount]);
+        await db.query('UPDATE player_cayo_state SET dirty_money = dirty_money + $2, updated_at = NOW() WHERE player_id = $1', [playerId, amount]);
+      }
+    }
+    const balances = await db.query(
+      `SELECT p.clean_money, COALESCE(cs.dirty_money, 0) AS dirty_money
+       FROM players p LEFT JOIN player_cayo_state cs ON cs.player_id = p.player_id
+       WHERE p.player_id = $1`,
+      [playerId],
+    );
+    return {
+      currency,
+      direction,
+      amount,
+      playerCleanMoney: Number(balances.rows[0]?.clean_money || 0),
+      playerDirtyMoney: Number(balances.rows[0]?.dirty_money || 0),
+    };
+  });
+}
+
+function launderGangFunds(playerId, amountValue, operationId) {
+  const amount = Math.floor(Number(amountValue));
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 1_000_000_000_000) throw new Error('invalid launder amount');
+  return runGangOperation(playerId, operationId, 'funds:launder', async (db, row) => {
+    if (Number(row.dirty_balance || 0) < amount) throw new Error('insufficient gang dirty balance');
+    const cleanGain = Math.floor(amount * 0.65);
+    await db.query(
+      'UPDATE player_gangs SET dirty_balance = dirty_balance - $2, clean_balance = clean_balance + $3 WHERE player_id = $1',
+      [playerId, amount, cleanGain],
+    );
+    return { amount, cleanGain };
+  });
+}
+
+function performGangBattle(playerId, opponentValue, participantIds, leaderIdValue, operationId) {
+  const opponent = opponentValue && typeof opponentValue === 'object' ? opponentValue : {};
+  const opponentId = sanitizeText(opponent.id, 100);
+  const opponentName = sanitizeText(opponent.name, 80, 'Bot Gang');
+  const difficulty = ['EASY', 'BALANCED', 'HARD'].includes(String(opponent.difficulty)) ? String(opponent.difficulty) : 'BALANCED';
+  const difficultyIndex = difficulty === 'EASY' ? 0 : difficulty === 'HARD' ? 2 : 1;
+  if (!opponentId) throw new Error('invalid opponent');
+
+  return runGangOperation(playerId, operationId, 'battle', async (db, row) => {
+    const levelCap = [4, 10, 20, 34][clampInteger(row.gang_level_index, 0, 3)];
+    const participants = normalizeParticipantIds(row, participantIds).slice(0, Math.min(5, levelCap));
+    const ids = participants.map((member) => member.id);
+    const leaderId = ids.includes(sanitizeText(leaderIdValue, 100)) ? sanitizeText(leaderIdValue, 100) : ids[0];
+    const levelIndex = clampInteger(row.gang_level_index, 0, 3);
+    // Rewards never depend on client-synchronized member skill values.
+    const playerBase = 42 + levelIndex * 14 + participants.length * 5;
+    const opponentBase = 38 + levelIndex * 14 + difficultyIndex * 16;
+    const stageIds = [
+      ['ambush', 'Ambush'],
+      ['firefight', 'Firefight'],
+      ['finalPush', 'Final Push'],
+    ];
+    const stages = stageIds.map(([id, label], index) => {
+      const playerScore = Math.round((playerBase * (0.9 + Math.random() * 0.2) + index * 2) * 10) / 10;
+      const opponentScore = Math.round((opponentBase * (0.9 + Math.random() * 0.2) + (2 - index) * 2) * 10) / 10;
+      const winner = playerScore >= opponentScore ? 'PLAYER' : 'OPPONENT';
+      return { id, label, playerScore, opponentScore, winner, eventText: winner === 'PLAYER' ? `${label} controlled by your crew.` : `${opponentName} controlled ${label.toLowerCase()}.` };
+    });
+    const playerStageWins = stages.filter((stage) => stage.winner === 'PLAYER').length;
+    const opponentStageWins = stages.length - playerStageWins;
+    const won = playerStageWins >= 2;
+    const rewardScale = [1, 1.6, 2.4][difficultyIndex] * (1 + levelIndex * 0.35);
+    const dirtyReward = won ? Math.floor(750_000 * rewardScale) : 0;
+    const reputationReward = won ? Math.floor(8 * rewardScale) : 1;
+    const gunpowderReward = won ? Math.floor(3 * rewardScale) : 0;
+    const steelReward = won ? Math.floor(2 * rewardScale) : 0;
+    const injuries = participants
+      .filter(() => Math.random() < (won ? 0.08 : 0.18))
+      .slice(0, 2)
+      .map((member) => ({ memberId: member.id, memberName: member.displayName || member.nickname || 'Member', recoveryHours: 1 + Math.floor(Math.random() * 3) }));
+    const completedAt = Date.now();
+    const result = {
+      won,
+      playerStageWins,
+      opponentStageWins,
+      stages,
+      injuries,
+      dirtyReward,
+      reputationReward,
+      gunpowderReward,
+      steelReward,
+      loyaltyGain: won ? 2 : 0,
+      xpGain: won ? 30 : 12,
+      opponentId,
+      opponentName,
+      completedAt,
+    };
+    const meta = sanitizeGangMeta(row.gang_meta);
+    meta.battleReputation += reputationReward;
+    meta.battleBoardSeed += 1;
+    meta.battleHistory = [{
+      id: `battle_${operationId}`,
+      opponentId,
+      opponentName,
+      won,
+      score: `${playerStageWins}-${opponentStageWins}`,
+      memberIds: ids,
+      leaderId,
+      injuries,
+      dirtyReward,
+      reputationReward,
+      gunpowderReward,
+      steelReward,
+      completedAt,
+    }, ...meta.battleHistory].slice(0, 20);
+    await db.query(
+      `UPDATE player_gangs
+       SET dirty_balance = dirty_balance + $2,
+           dirty_earned = dirty_earned + $2,
+           gunpowder = gunpowder + $3,
+           steel = steel + $4,
+           gang_meta = $5::jsonb,
+           updated_at = NOW()
+       WHERE player_id = $1`,
+      [playerId, dirtyReward, gunpowderReward, steelReward, JSON.stringify(meta)],
+    );
+    const updated = (await db.query('SELECT * FROM player_gangs WHERE player_id = $1', [playerId])).rows[0];
+    await db.query('UPDATE player_gangs SET stock_value = $2 WHERE player_id = $1', [playerId, stockValueFor({
+      leaves: Number(updated.leaves || 0), whitePacks: Number(updated.white_packs || 0), bluePacks: Number(updated.blue_packs || 0),
+      sulfur: Number(updated.sulfur || 0), ironOre: Number(updated.iron_ore || 0), gunpowder: Number(updated.gunpowder || 0), steel: Number(updated.steel || 0),
+    })]);
+    return { result };
   });
 }
 
@@ -185,11 +406,48 @@ async function assertGangAccess(playerId) {
   if (cityLevelFromXp(safeNumber(access.city_xp)) < 15) throw new Error('City Level 15 required');
 }
 
+async function createGang(playerId, rawName, rawMembers) {
+  await ensureSchema();
+  await assertGangAccess(playerId);
+  const name = sanitizeText(rawName, 48);
+  if (name.length < 3) throw new Error('gang name must contain at least 3 characters');
+  const members = sanitizeMembers(rawMembers).filter((member) => member.source !== 'ADMIN_EVENT').slice(0, 4);
+  if (members.length !== 4) throw new Error('four starter members are required');
+
+  return withTransaction(async (db) => {
+    await ensurePlayer(db, playerId);
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`gang-create:${playerId}`]);
+    const existing = await db.query('SELECT gang_name FROM player_gangs WHERE player_id = $1 FOR UPDATE', [playerId]);
+    if (existing.rows[0]?.gang_name) throw new Error('gang already exists');
+
+    await db.query('INSERT INTO player_cayo_state (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING', [playerId]);
+    const charged = await db.query(
+      `UPDATE player_cayo_state
+       SET dirty_money = dirty_money - 10000000, updated_at = NOW()
+       WHERE player_id = $1 AND dirty_money >= 10000000
+       RETURNING dirty_money`,
+      [playerId],
+    );
+    if (!charged.rows[0]) throw new Error('you need 10,000,000 dirty money to create a gang');
+
+    await db.query(
+      `INSERT INTO player_gangs (
+        player_id, gang_name, gang_level_index, members, members_count, active_workers,
+        leaves, white_packs, blue_packs, sulfur, iron_ore, gunpowder, steel,
+        clean_balance, dirty_balance, dirty_earned, stock_value, gang_meta, state_version, last_leave_at, updated_at
+      ) VALUES ($1, $2, 0, $3::jsonb, $4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, $5::jsonb, 1, $6, NOW())`,
+      [playerId, name, JSON.stringify(members), members.length, JSON.stringify(sanitizeGangMeta({})), Date.now()],
+    );
+    return { gang: await getGangStateFromDb(db, playerId), playerDirtyMoney: Number(charged.rows[0].dirty_money || 0) };
+  });
+}
+
 async function syncGang(playerId, gangData) {
   await ensureSchema();
   const name = String(gangData?.name || '').trim().slice(0, 48);
-  const existingResult = await pool.query(`SELECT members, gang_level_index, state_version, updated_at FROM player_gangs WHERE player_id = $1`, [playerId]);
+  const existingResult = await pool.query(`SELECT * FROM player_gangs WHERE player_id = $1`, [playerId]);
   const existing = existingResult.rows[0] || null;
+  if (!existing && name) throw new Error('create the gang through the create endpoint');
   if (existing && Number(gangData?.stateVersion || 0) < Number(existing.state_version || 0)) return getGangState(playerId);
   const incomingUpdatedAt = gangData?.serverUpdatedAt ? new Date(String(gangData.serverUpdatedAt)) : null;
   if (existing?.updated_at && incomingUpdatedAt && Number.isFinite(incomingUpdatedAt.getTime())) {
@@ -207,21 +465,23 @@ async function syncGang(playerId, gangData) {
   const incomingMembers = sanitizeMembers(gangData?.members, { allowMythicIds: protectedIds });
   const members = mergeProtectedMythics(incomingMembers, protectedMythics);
 
-  const leaves = clampInteger(gangData?.frunze ?? gangData?.leaves, 0, 10_000_000_000);
-  const whitePacks = clampInteger(gangData?.white ?? gangData?.whitePacks, 0, 10_000_000_000);
-  const bluePacks = clampInteger(gangData?.blue ?? gangData?.bluePacks, 0, 10_000_000_000);
-  const sulfur = clampInteger(gangData?.sulfur, 0, 10_000_000_000);
-  const ironOre = clampInteger(gangData?.ironOre, 0, 10_000_000_000);
-  const gunpowder = clampInteger(gangData?.gunpowder, 0, 10_000_000_000);
-  const steel = clampInteger(gangData?.steel, 0, 10_000_000_000);
-  const cleanBalance = clampInteger(gangData?.cleanBalance, 0, Number.MAX_SAFE_INTEGER);
-  const dirtyBalance = clampInteger(gangData?.dirtyBalance, 0, Number.MAX_SAFE_INTEGER);
-  const dirtyEarned = clampInteger(gangData?.dirtyEarned, 0, Number.MAX_SAFE_INTEGER);
+  // Economic fields are always server authoritative. The sync endpoint only
+  // synchronizes presentation/member state and can never mint stock or money.
+  const leaves = Number(existing?.leaves || 0);
+  const whitePacks = Number(existing?.white_packs || 0);
+  const bluePacks = Number(existing?.blue_packs || 0);
+  const sulfur = Number(existing?.sulfur || 0);
+  const ironOre = Number(existing?.iron_ore || 0);
+  const gunpowder = Number(existing?.gunpowder || 0);
+  const steel = Number(existing?.steel || 0);
+  const cleanBalance = Number(existing?.clean_balance || 0);
+  const dirtyBalance = Number(existing?.dirty_balance || 0);
+  const dirtyEarned = Number(existing?.dirty_earned || 0);
   const lastLeaveAt = clampInteger(gangData?.lastLeaveAt || Date.now(), 0, Number.MAX_SAFE_INTEGER);
   const activeWorkers = clampInteger(gangData?.onlineNow, 0, members.length);
   const gangLevelIndex = existing
     ? clampInteger(existing.gang_level_index, 0, 3)
-    : calculateGangLevelIndex(dirtyEarned);
+    : 0;
   const gangMeta = sanitizeGangMeta({
     dismissalPressure: gangData?.dismissalPressure,
     lastDismissalAt: gangData?.lastDismissalAt,
@@ -231,6 +491,12 @@ async function syncGang(playerId, gangData) {
     defensiveCrewIds: gangData?.defensiveCrewIds,
     battleBoardSeed: gangData?.battleBoardSeed,
   });
+  if (existing) {
+    const storedMeta = sanitizeGangMeta(existing.gang_meta);
+    gangMeta.battleHistory = storedMeta.battleHistory;
+    gangMeta.battleReputation = storedMeta.battleReputation;
+    gangMeta.battleBoardSeed = storedMeta.battleBoardSeed;
+  }
   const memberIds = new Set(members.map((member) => member.id));
   gangMeta.defensiveCrewIds = gangMeta.defensiveCrewIds.filter((id) => memberIds.has(id));
   const stockValue = stockValueFor({ leaves, whitePacks, bluePacks, sulfur, ironOre, gunpowder, steel });
@@ -252,18 +518,11 @@ async function syncGang(playerId, gangData) {
           members = EXCLUDED.members,
           members_count = EXCLUDED.members_count,
           active_workers = EXCLUDED.active_workers,
-          leaves = EXCLUDED.leaves,
-          white_packs = EXCLUDED.white_packs,
-          blue_packs = EXCLUDED.blue_packs,
-          sulfur = EXCLUDED.sulfur,
-          iron_ore = EXCLUDED.iron_ore,
-          gunpowder = EXCLUDED.gunpowder,
-          steel = EXCLUDED.steel,
-          clean_balance = EXCLUDED.clean_balance,
-          dirty_balance = EXCLUDED.dirty_balance,
-          dirty_earned = EXCLUDED.dirty_earned,
-          stock_value = EXCLUDED.stock_value,
-          gang_meta = EXCLUDED.gang_meta,
+          gang_meta = EXCLUDED.gang_meta || jsonb_build_object(
+            'battleHistory', COALESCE(player_gangs.gang_meta->'battleHistory', '[]'::jsonb),
+            'battleReputation', COALESCE(player_gangs.gang_meta->'battleReputation', '0'::jsonb),
+            'battleBoardSeed', COALESCE(player_gangs.gang_meta->'battleBoardSeed', '1'::jsonb)
+          ),
           state_version = player_gangs.state_version + 1,
           last_leave_at = EXCLUDED.last_leave_at,
           updated_at = NOW()
@@ -402,14 +661,19 @@ async function getGangStateFromDb(db, playerId) {
 module.exports = {
   GANG_UPGRADE_COSTS,
   calculateGangLevelIndex,
+  createGang,
   stockValueFor,
   validateOperationId,
   getGangState,
   grantMythicGangMember,
+  launderGangFunds,
+  performGangBattle,
+  performGangWork,
   sanitizeGangMeta,
   sanitizeMembers,
   processGangMaterial,
   sellGangMaterial,
   syncGang,
+  transferGangFunds,
   upgradeGang,
 };

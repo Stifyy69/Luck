@@ -65,7 +65,7 @@ export function PlatformStatusProvider({ children }: { children: React.ReactNode
     const expiresAtMs = new Date(vipBoost.expiresAt).getTime();
     if (expiresAtMs <= Date.now()) return;
     const tier = vipBoost.boostType as 'VIP_SILVER' | 'VIP_GOLD';
-    const durationMs = tier === 'VIP_GOLD' ? 125_000 : 65_000;
+    const durationMs = tier === 'VIP_GOLD' ? 10 * 60_000 : 5 * 60_000;
     setServerStatus({
       vip: {
         active: true,

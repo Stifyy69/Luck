@@ -1,34 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
-
-const GAME_KEY = 'luck_game_state_v1';
-const GAME_SALT = 'stifyy-ogromania-salt';
-
-function signPayload(payload: unknown) {
-  const raw = JSON.stringify(payload) + GAME_SALT;
-  let hash = 0;
-  for (let i = 0; i < raw.length; i += 1) hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
-  return String(hash);
-}
-
-function loadGameState() {
-  try {
-    const raw = localStorage.getItem(GAME_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.data || !parsed?.sig) return null;
-    return signPayload(parsed.data) === parsed.sig ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveGameState(data: unknown) {
-  try {
-    localStorage.setItem(GAME_KEY, JSON.stringify({ data, sig: signPayload(data) }));
-  } catch {}
-}
+import type { SleepState } from '../types/game';
 
 function fmt(value: number) {
   return value.toLocaleString('en-US');
@@ -40,35 +13,45 @@ export default function SleepPage() {
   const [cooldown, setCooldown] = useState(0);
   const [popup, setPopup] = useState<string | null>(null);
   const [runBoostMultiplier, setRunBoostMultiplier] = useState(1);
+  const [serverState, setServerState] = useState<SleepState | null>(null);
+  const claimingRef = useRef(false);
+  const lastClaimAttemptRef = useRef(0);
+  const claimOperationRef = useRef<string | null>(null);
 
   const sleepBoostItem = player?.inventory.find((item) => item.itemType === 'JOB_BOOST_SLEEP' && item.quantity > 0) ?? null;
   const sleepBoostCount = sleepBoostItem?.quantity ?? 0;
 
-  const syncFromStorage = () => {
-    const latest = loadGameState() || {};
-    const now = Date.now();
-    const sleepEndsAt = latest.sleepEndsAt ?? 0;
-    const sleepCooldownUntil = latest.sleepCooldownUntil ?? 0;
-
-    setTimer(Math.max(0, Math.ceil((sleepEndsAt - now) / 1000)));
-    setCooldown(Math.max(0, Math.ceil((sleepCooldownUntil - now) / 1000)));
+  const operationId = (prefix: string) => {
+    const suffix = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().replace(/-/g, '')
+      : `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+    return `${prefix}_${suffix}`;
   };
 
   useEffect(() => {
-    syncFromStorage();
-    const interval = window.setInterval(() => {
-      const latest = loadGameState() || {};
-      const now = Date.now();
+    let cancelled = false;
+    api.sleepState(playerId)
+      .then((payload) => {
+        if (cancelled) return;
+        setServerState(payload.state);
+        claimOperationRef.current = payload.state.activeCycleId ? `sleep_claim_${payload.state.activeCycleId}`.slice(0, 100) : null;
+      })
+      .catch((error) => { if (!cancelled) setPopup(error instanceof Error ? error.message : 'Sleep state failed.'); });
+    return () => { cancelled = true; };
+  }, [playerId]);
 
-      const sleepEndsAt = latest.sleepEndsAt ?? 0;
-      const sleepCooldownUntil = latest.sleepCooldownUntil ?? 0;
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      const sleepEndsAt = serverState?.sleepEndsAt ? new Date(serverState.sleepEndsAt).getTime() : 0;
+      const sleepCooldownUntil = serverState?.cooldownUntil ? new Date(serverState.cooldownUntil).getTime() : 0;
 
       if (sleepEndsAt > now) {
         setTimer(Math.ceil((sleepEndsAt - now) / 1000));
-        setRunBoostMultiplier(Number(latest.sleepRewardMultiplier ?? 1));
+        setRunBoostMultiplier(Number(serverState?.multiplier ?? 1));
       } else {
         setTimer(0);
-        setRunBoostMultiplier(1);
+        setRunBoostMultiplier(Number(serverState?.multiplier ?? 1));
       }
 
       if (sleepCooldownUntil > now) {
@@ -77,78 +60,41 @@ export default function SleepPage() {
         setCooldown(0);
       }
 
-      if (sleepEndsAt > 0 && sleepEndsAt <= now && !latest.sleepRewardClaimed) {
-        const multiplier = Number(latest.sleepRewardMultiplier ?? 1);
-        const reward = 300_000 * multiplier;
-        const nextSleepTime = (latest.timeSleep ?? 0) + 24;
-        const nextCooldownUntil = now + 30_000;
-        const nextSleepCount = (latest.sleepCount ?? 0) + 1;
-        const nextSleepMoney = (latest.sleepMoney ?? 0) + reward;
-
-        saveGameState({
-          ...latest,
-          cashBalance: Number(player?.cleanMoney ?? latest.cashBalance ?? 0),
-          baniCurati: Number(player?.cleanMoney ?? latest.cashBalance ?? 0),
-          timeSleep: nextSleepTime,
-          sleepCount: nextSleepCount,
-          sleepMoney: nextSleepMoney,
-          sleepRewardClaimed: true,
-          sleepRewardMultiplier: 1,
-          sleepCooldownUntil: nextCooldownUntil,
-        });
-
-        (async () => {
-          try {
-            const adjusted = await api.playerCashAdjust(playerId, reward);
-            const newest = loadGameState() || {};
-            saveGameState({
-              ...newest,
-              cashBalance: Number(adjusted.cleanMoney),
-              baniCurati: Number(adjusted.cleanMoney),
-            });
+      if (serverState?.activeCycleId && sleepEndsAt > 0 && sleepEndsAt <= now && !claimingRef.current && now - lastClaimAttemptRef.current >= 3000) {
+        claimingRef.current = true;
+        lastClaimAttemptRef.current = now;
+        const claimOperationId = claimOperationRef.current || `sleep_claim_${serverState.activeCycleId}`.slice(0, 100);
+        claimOperationRef.current = claimOperationId;
+        api.sleepClaim(playerId, claimOperationId)
+          .then((result) => {
+            setServerState(result.state);
+            claimOperationRef.current = null;
+            setPopup(`Recovery completed. +${fmt(Number(result.reward || 0))} clean money. 30s cooldown.`);
+            window.setTimeout(() => setPopup(null), 2500);
             refresh();
-          } catch {
-            setPopup('Recovery finished, but cash sync failed. Refresh the page.');
-          }
-        })();
-
-        setPopup(`Recovery completed. +${fmt(reward)} clean money. 30s cooldown.`);
-        window.setTimeout(() => setPopup(null), 2500);
+          })
+          .catch((error) => setPopup(error instanceof Error ? error.message : 'Reward claim failed. It will retry.'))
+          .finally(() => { claimingRef.current = false; });
       }
     }, 250);
 
     return () => window.clearInterval(interval);
-  }, []);
+  }, [playerId, refresh, serverState]);
 
   const startSleep = async () => {
-    const latest = loadGameState() || {};
-    const now = Date.now();
-
-    if ((latest.sleepCooldownUntil ?? 0) > now) return;
-    if ((latest.sleepEndsAt ?? 0) > now) return;
-
-    let multiplier = 1;
-    if (sleepBoostItem) {
-      try {
-        await api.inventoryUse(playerId, sleepBoostItem.id);
-        await refresh();
-        multiplier = 2;
-        setPopup('Recovery Boost consumed for this cycle (x2).');
-        window.setTimeout(() => setPopup(null), 1800);
-      } catch {
-        setPopup('Could not consume Recovery Boost. Starting normal cycle.');
+    try {
+      const result = await api.sleepStart(playerId, operationId('sleep_start'));
+      setServerState(result.state);
+      claimOperationRef.current = result.state.activeCycleId ? `sleep_claim_${result.state.activeCycleId}`.slice(0, 100) : null;
+      setRunBoostMultiplier(result.state.multiplier);
+      if (result.jobBoostUsed) {
+        setPopup(`Recovery Boost consumed. Active multiplier x${result.state.multiplier}.`);
         window.setTimeout(() => setPopup(null), 1800);
       }
+      refresh();
+    } catch (error) {
+      setPopup(error instanceof Error ? error.message : 'Could not start recovery.');
     }
-
-    saveGameState({
-      ...latest,
-      sleepEndsAt: now + 3_000,
-      sleepRewardClaimed: false,
-      sleepRewardMultiplier: multiplier,
-    });
-
-    syncFromStorage();
   };
 
   const isSleeping = timer > 0;
@@ -156,7 +102,7 @@ export default function SleepPage() {
     if (!isSleeping) return 0;
     return Math.max(0, Math.min(100, ((3 - timer) / 3) * 100));
   }, [isSleeping, timer]);
-  const projectedReward = 300_000 * (sleepBoostCount > 0 ? 2 : 1);
+  const projectedReward = serverState?.projectedReward || 300_000 * (sleepBoostCount > 0 ? 2 : 1);
 
   return (
     <div className="min-h-screen px-4 pb-10 pt-20 sm:px-6 md:px-8 md:pb-12 md:pt-8">

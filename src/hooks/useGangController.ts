@@ -3,6 +3,7 @@ import type { GangActivityOverlayState } from '../components/gangs/GangActivityO
 import type { GangBattleOverlayState } from '../components/gangs/GangBattleOverlay';
 import { LOYALTY_SUPPORT_OPTIONS } from '../components/gangs/GangLoyaltySupportModal';
 import { createGangActivityLog } from '../lib/gangActivity';
+import { api } from '../lib/api';
 import { generateBotOpponents } from '../lib/gangBattles';
 import {
   awardMemberActivity,
@@ -19,7 +20,7 @@ import { appendLog, applyRemoteGangData, buildInitialGangData, loadGameState, sa
 import { canAffordGangUpgrade, getGangLevel, getGangUpgradeCost } from '../lib/gangProgression';
 import type { GangData } from '../lib/gangState';
 import { GANG_WORK_LABELS, GANG_WORK_STAGES, gangStockValue, type GangWorkType } from '../lib/gangWork';
-import { syncGangState, upgradeGangState } from '../lib/platformApi';
+import { createGangState, syncGangState, upgradeGangState } from '../lib/platformApi';
 import { usePlayer } from './usePlayer';
 import { useGangBattleActions } from './useGangBattleActions';
 import { useGangWorkActions } from './useGangWorkActions';
@@ -33,7 +34,7 @@ function navigate(path: string) {
 }
 
 export function useGangController() {
-  const { playerId } = usePlayer();
+  const { playerId, player } = usePlayer();
   const saved = typeof window === 'undefined' ? null : loadGameState();
   const [gangNameInput, setGangNameInput] = useState('');
   const [popup, setPopup] = useState<string | null>(null);
@@ -72,6 +73,19 @@ export function useGangController() {
     const timer = window.setInterval(() => setRecruitTimer((value) => Math.max(0, value - 1)), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (player) setCashBalance(Number(player.cleanMoney || 0));
+  }, [player]);
+
+  useEffect(() => {
+    if (!playerId) return;
+    let cancelled = false;
+    api.cayoState(playerId)
+      .then(({ state }) => { if (!cancelled) setBaniMurdari(Number(state.dirtyMoney || 0)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [playerId]);
 
   useEffect(() => {
     const current = loadGameState() || {};
@@ -117,14 +131,22 @@ export function useGangController() {
     pushPopup(`${candidate.displayName} joined the gang.`);
   }, [recruitTimer, recruitingCandidate, maxMembers, pushPopup]);
 
-  const formGang = () => {
-    if (formed || activityBusy) return;
+  const formGang = async () => {
+    if (formed || activityBusy || !playerId) return;
     if (!gangNameInput.trim()) return pushPopup('Set a gang name.');
-    if (baniMurdari < 10_000_000) return pushPopup('You need 10,000,000 dirty cash.');
     const members = createStarterMembers(4);
-    setBaniMurdari((value) => value - 10_000_000);
-    setGangData((current) => ({ ...current, name: gangNameInput.trim().slice(0, 48), levelIndex: 0, members, recruitmentBoard: createRecruitmentBoard(members, 3), lastLeaveAt: Date.now(), activityLog: [createGangActivityLog('Gang created.', 'positive')] }));
-    pushPopup('Gang created.');
+    setActivityBusy(true);
+    try {
+      const result = await createGangState(playerId, gangNameInput.trim().slice(0, 48), members);
+      setBaniMurdari(result.playerDirtyMoney);
+      setGangData((current) => applyRemoteGangData({ ...current, recruitmentBoard: createRecruitmentBoard(members, 3), activityLog: [createGangActivityLog('Gang created.', 'positive')] }, result.gang));
+      window.dispatchEvent(new Event('cityflow-player-refresh'));
+      pushPopup('Gang created.');
+    } catch (error) {
+      pushPopup(error instanceof Error ? error.message : 'Gang creation failed.');
+    } finally {
+      setActivityBusy(false);
+    }
   };
 
   const startRecruit = (id: string) => {
@@ -196,7 +218,7 @@ export function useGangController() {
   };
 
   const work = useGangWorkActions({ busy: activityBusy, availableMembers, gangData, maxMembers, timeFarm, transportMembers, cashBalance, baniMurdari, setGangData, setTimeFarm, setCashBalance, setBaniMurdari, runActivityPresentation, pushPopup, playerId });
-  const battle = useGangBattleActions({ busy: activityBusy || work.economyBusy, members: availableMembers, gangData, currentGameHour, setBusy: setActivityBusy, setGangData, setTimeFarm, setBattleOverlay, pushPopup });
+  const battle = useGangBattleActions({ busy: activityBusy || work.economyBusy, members: availableMembers, gangData, currentGameHour, setBusy: setActivityBusy, setGangData, setTimeFarm, setBattleOverlay, pushPopup, playerId });
   const busy = activityBusy || work.economyBusy;
 
   return {

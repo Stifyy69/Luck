@@ -3,7 +3,6 @@ import { applyWorkFatigue } from '../lib/gangActivity';
 import {
   addMemberLoyalty,
   awardMemberActivity,
-  calculateFarmingYield,
   markMembersWorking,
   type GangMember,
   type MemberTrainingPlan,
@@ -12,15 +11,12 @@ import type { GangData } from '../lib/gangState';
 import {
   GANG_PROCESSING_RECIPES,
   calculateMaxProcessingBatches,
-  calculateMiningResult,
-  calculateTransportResult,
   type GangProcessingType,
   type GangWorkType,
 } from '../lib/gangWork';
 import { appendLog, applyRemoteGangData } from '../lib/gangLocalState';
-import { processGangMaterial, sellGangMaterial } from '../lib/platformApi';
+import { launderGangFunds, performGangWork, processGangMaterial, sellGangMaterial, transferGangFunds } from '../lib/platformApi';
 
-const RAID_CHANCE = 0.05;
 export type SellableGangMaterial = 'blue' | 'gunpowder' | 'steel';
 type Currency = 'clean' | 'dirty';
 
@@ -72,69 +68,96 @@ export function useGangWorkActions(options: Options) {
   const isBlocked = () => busy || economyBusy || economyLock.current;
 
   const startCollection = async () => {
-    if (isBlocked() || availableMembers.length === 0) return;
+    if (isBlocked() || availableMembers.length === 0 || !playerId) return;
     const count = Math.max(1, Math.floor(availableMembers.length * (0.55 + Math.random() * 0.45)));
     const participants = randomCrew(availableMembers, count);
     const ids = participants.map((member) => member.id);
-    const reward = calculateFarmingYield(participants);
+    economyLock.current = true;
+    setEconomyBusy(true);
     setGangData((current) => ({ ...current, onlineNow: ids.length, members: markMembersWorking(current.members, ids) }));
-    await runActivityPresentation('collect', ids.length, () => {
-      const raid = Math.random() < RAID_CHANCE;
-      setTimeFarm((current) => current + 1);
-      setGangData((current) => {
-        const fatigue = trainAndFatigue(current.members, ids, { primary: 'farming', secondary: 'leadership' }, raid ? 5 : 18, 'collect');
-        let next: GangData = { ...current, frunze: raid ? current.frunze : current.frunze + reward.total, onlineNow: 0, members: fatigue.members };
-        next = appendLog(next, raid ? 'Police raid: current Leaves harvest lost.' : `+${reward.total.toLocaleString('en-US')} Leaves.`, raid ? 'negative' : 'positive');
-        return addFatigueLog(next, fatigue.penalized.map((member) => member.displayName));
+    try {
+      await runActivityPresentation('collect', ids.length, async () => {
+        const result = await performGangWork(playerId, 'collect', ids, operationId('work_collect'));
+        setTimeFarm((current) => current + 1);
+        setGangData((current) => {
+          const remote = applyRemoteGangData(current, result.gang);
+          const fatigue = trainAndFatigue(remote.members, ids, { primary: 'farming', secondary: 'leadership' }, result.raided ? 5 : 18, 'collect');
+          let next: GangData = { ...remote, onlineNow: 0, members: fatigue.members };
+          next = appendLog(next, result.raided ? 'Police raid: current Leaves harvest lost.' : `+${result.leaves.toLocaleString('en-US')} Leaves.`, result.raided ? 'negative' : 'positive');
+          return addFatigueLog(next, fatigue.penalized.map((member) => member.displayName));
+        });
+        const text = result.raided ? 'Police raid. Current harvest lost.' : `+${result.leaves.toLocaleString('en-US')} Leaves`;
+        pushPopup(text);
+        return text;
       });
-      const text = raid ? 'Police raid. Current harvest lost.' : `+${reward.total.toLocaleString('en-US')} Leaves`;
-      pushPopup(text);
-      return text;
-    });
+    } catch (error) {
+      pushPopup(error instanceof Error ? error.message : 'Gang collection failed.');
+    } finally {
+      economyLock.current = false;
+      setEconomyBusy(false);
+    }
   };
 
   const startMining = async () => {
-    if (isBlocked() || availableMembers.length === 0) return;
+    if (isBlocked() || availableMembers.length === 0 || !playerId) return;
     const participants = randomCrew(availableMembers, Math.max(1, Math.ceil(availableMembers.length * 0.6)));
     const ids = participants.map((member) => member.id);
-    const reward = calculateMiningResult();
+    economyLock.current = true;
+    setEconomyBusy(true);
     setGangData((current) => ({ ...current, onlineNow: ids.length, members: markMembersWorking(current.members, ids) }));
-    await runActivityPresentation('mining', ids.length, () => {
-      const raid = Math.random() < RAID_CHANCE;
-      setTimeFarm((current) => current + 0.5);
-      setGangData((current) => {
-        const fatigue = trainAndFatigue(current.members, ids, { primary: 'farming', secondary: 'streetSmart' }, raid ? 5 : 16, 'mining');
-        let next: GangData = { ...current, sulfur: raid ? current.sulfur : current.sulfur + reward.sulfur, ironOre: raid ? current.ironOre : current.ironOre + reward.ironOre, onlineNow: 0, members: fatigue.members };
-        next = appendLog(next, raid ? 'Police raid: current mining haul lost.' : `+${reward.sulfur} Sulfur, +${reward.ironOre} Iron Ore.`, raid ? 'negative' : 'positive');
-        return addFatigueLog(next, fatigue.penalized.map((member) => member.displayName));
+    try {
+      await runActivityPresentation('mining', ids.length, async () => {
+        const result = await performGangWork(playerId, 'mining', ids, operationId('work_mining'));
+        setTimeFarm((current) => current + 0.5);
+        setGangData((current) => {
+          const remote = applyRemoteGangData(current, result.gang);
+          const fatigue = trainAndFatigue(remote.members, ids, { primary: 'farming', secondary: 'streetSmart' }, result.raided ? 5 : 16, 'mining');
+          let next: GangData = { ...remote, onlineNow: 0, members: fatigue.members };
+          next = appendLog(next, result.raided ? 'Police raid: current mining haul lost.' : `+${result.sulfur} Sulfur, +${result.ironOre} Iron Ore.`, result.raided ? 'negative' : 'positive');
+          return addFatigueLog(next, fatigue.penalized.map((member) => member.displayName));
+        });
+        const text = result.raided ? 'Police raid. Current haul lost.' : `+${result.sulfur} Sulfur, +${result.ironOre} Iron Ore`;
+        pushPopup(text);
+        return text;
       });
-      const text = raid ? 'Police raid. Current haul lost.' : `+${reward.sulfur} Sulfur, +${reward.ironOre} Iron Ore`;
-      pushPopup(text);
-      return text;
-    });
+    } catch (error) {
+      pushPopup(error instanceof Error ? error.message : 'Gang mining failed.');
+    } finally {
+      economyLock.current = false;
+      setEconomyBusy(false);
+    }
   };
 
   const startTransport = async () => {
-    if (isBlocked() || availableMembers.length === 0) return;
+    if (isBlocked() || availableMembers.length === 0 || !playerId) return;
     const participants = randomCrew(availableMembers, Math.min(transportMembers, availableMembers.length));
     const ids = participants.map((member) => member.id);
+    economyLock.current = true;
+    setEconomyBusy(true);
     setGangData((current) => ({ ...current, onlineNow: ids.length, members: markMembersWorking(current.members, ids) }));
-    await runActivityPresentation('transport', ids.length, () => {
-      const result = calculateTransportResult(participants, maxMembers, gangData.levelIndex);
-      setTimeFarm((current) => current + 0.5);
-      setGangData((current) => {
-        const trained = awardMemberActivity(current.members, ids, { primary: 'streetSmart', secondary: 'tactics' }, 24);
-        const loyal = addMemberLoyalty(trained, ids, result.loyaltyGain);
-        const fatigue = applyWorkFatigue(loyal, ids, 'transport');
-        let next: GangData = { ...current, dirtyBalance: Math.max(0, current.dirtyBalance + result.netPayout), dirtyEarned: current.dirtyEarned + Math.max(0, result.netPayout), onlineNow: 0, members: fatigue.members };
-        const sign = result.netPayout >= 0 ? '+' : '-';
-        next = appendLog(next, `${result.qualityLabel}: ${sign}${Math.abs(result.netPayout).toLocaleString('en-US')} dirty, +${result.loyaltyGain}% loyalty.`, result.netPayout >= 0 ? 'positive' : 'negative');
-        return addFatigueLog(next, fatigue.penalized.map((member) => member.displayName));
+    try {
+      await runActivityPresentation('transport', ids.length, async () => {
+        const result = await performGangWork(playerId, 'transport', ids, operationId('work_transport'));
+        setTimeFarm((current) => current + 0.5);
+        setGangData((current) => {
+          const remote = applyRemoteGangData(current, result.gang);
+          const trained = awardMemberActivity(remote.members, ids, { primary: 'streetSmart', secondary: 'tactics' }, 24);
+          const loyal = addMemberLoyalty(trained, ids, 1);
+          const fatigue = applyWorkFatigue(loyal, ids, 'transport');
+          let next: GangData = { ...remote, onlineNow: 0, members: fatigue.members };
+          next = appendLog(next, result.raided ? 'Police raid: transport payout lost.' : `+${result.dirtyPayout.toLocaleString('en-US')} dirty, +1% loyalty.`, result.raided ? 'negative' : 'positive');
+          return addFatigueLog(next, fatigue.penalized.map((member) => member.displayName));
+        });
+        const text = result.raided ? 'Police raid. Transport payout lost.' : `+${result.dirtyPayout.toLocaleString('en-US')} dirty, +1% loyalty`;
+        pushPopup(text);
+        return text;
       });
-      const text = `${result.netPayout >= 0 ? '+' : '-'}${Math.abs(result.netPayout).toLocaleString('en-US')} dirty, +${result.loyaltyGain}% loyalty`;
-      pushPopup(text);
-      return text;
-    });
+    } catch (error) {
+      pushPopup(error instanceof Error ? error.message : 'Gang transport failed.');
+    } finally {
+      economyLock.current = false;
+      setEconomyBusy(false);
+    }
   };
 
   const startProcessing = async (type: GangProcessingType, requestedBatches: number) => {
@@ -191,26 +214,43 @@ export function useGangWorkActions(options: Options) {
     }
   };
 
-  const deposit = (currency: Currency, amount: number) => {
+  const transfer = async (currency: Currency, direction: 'deposit' | 'withdraw', amount: number) => {
     const safeAmount = Math.max(0, Math.floor(amount));
-    if (safeAmount <= 0 || isBlocked()) return;
-    if (currency === 'clean' && safeAmount <= cashBalance) { setCashBalance((current) => current - safeAmount); setGangData((current) => appendLog({ ...current, cleanBalance: current.cleanBalance + safeAmount }, `Deposited ${safeAmount.toLocaleString('en-US')} clean.`, 'neutral')); }
-    if (currency === 'dirty' && safeAmount <= baniMurdari) { setBaniMurdari((current) => current - safeAmount); setGangData((current) => appendLog({ ...current, dirtyBalance: current.dirtyBalance + safeAmount }, `Deposited ${safeAmount.toLocaleString('en-US')} dirty.`, 'neutral')); }
+    if (safeAmount <= 0 || isBlocked() || !playerId) return;
+    economyLock.current = true;
+    setEconomyBusy(true);
+    try {
+      const result = await transferGangFunds(playerId, currency, direction, safeAmount, operationId(`funds_${currency}_${direction}`));
+      setCashBalance(result.playerCleanMoney);
+      setBaniMurdari(result.playerDirtyMoney);
+      setGangData((current) => appendLog(applyRemoteGangData(current, result.gang), `${direction === 'deposit' ? 'Deposited' : 'Withdrew'} ${safeAmount.toLocaleString('en-US')} ${currency}.`, 'neutral'));
+      window.dispatchEvent(new Event('cityflow-player-refresh'));
+    } catch (error) {
+      pushPopup(error instanceof Error ? error.message : 'Gang transfer failed.');
+    } finally {
+      economyLock.current = false;
+      setEconomyBusy(false);
+    }
   };
 
-  const withdraw = (currency: Currency, amount: number) => {
-    const safeAmount = Math.max(0, Math.floor(amount));
-    if (safeAmount <= 0 || isBlocked()) return;
-    if (currency === 'clean' && safeAmount <= gangData.cleanBalance) { setCashBalance((current) => current + safeAmount); setGangData((current) => appendLog({ ...current, cleanBalance: current.cleanBalance - safeAmount }, `Withdrew ${safeAmount.toLocaleString('en-US')} clean.`, 'neutral')); }
-    if (currency === 'dirty' && safeAmount <= gangData.dirtyBalance) { setBaniMurdari((current) => current + safeAmount); setGangData((current) => appendLog({ ...current, dirtyBalance: current.dirtyBalance - safeAmount }, `Withdrew ${safeAmount.toLocaleString('en-US')} dirty.`, 'neutral')); }
-  };
+  const deposit = (currency: Currency, amount: number) => void transfer(currency, 'deposit', amount);
+  const withdraw = (currency: Currency, amount: number) => void transfer(currency, 'withdraw', amount);
 
-  const launder = (amount: number) => {
+  const launder = async (amount: number) => {
     const safeAmount = Math.max(0, Math.floor(amount));
-    if (safeAmount <= 0 || safeAmount > gangData.dirtyBalance || isBlocked()) return;
-    const cleanGain = Math.floor(safeAmount * 0.65);
-    setGangData((current) => appendLog({ ...current, dirtyBalance: current.dirtyBalance - safeAmount, cleanBalance: current.cleanBalance + cleanGain }, `Laundered ${safeAmount.toLocaleString('en-US')} dirty into ${cleanGain.toLocaleString('en-US')} clean.`, 'neutral'));
-    pushPopup(`+${cleanGain.toLocaleString('en-US')} clean`);
+    if (safeAmount <= 0 || safeAmount > gangData.dirtyBalance || isBlocked() || !playerId) return;
+    economyLock.current = true;
+    setEconomyBusy(true);
+    try {
+      const result = await launderGangFunds(playerId, safeAmount, operationId('funds_launder'));
+      setGangData((current) => appendLog(applyRemoteGangData(current, result.gang), `Laundered ${safeAmount.toLocaleString('en-US')} dirty into ${result.cleanGain.toLocaleString('en-US')} clean.`, 'neutral'));
+      pushPopup(`+${result.cleanGain.toLocaleString('en-US')} clean`);
+    } catch (error) {
+      pushPopup(error instanceof Error ? error.message : 'Gang laundering failed.');
+    } finally {
+      economyLock.current = false;
+      setEconomyBusy(false);
+    }
   };
 
   return { economyBusy, startCollection, startMining, startTransport, startProcessing, sellMaterial, deposit, withdraw, launder };

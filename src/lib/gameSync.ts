@@ -61,6 +61,7 @@ export function startGameSync() {
     fetch('/api/activity/heartbeat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ playerId: currentPlayerId(), path: window.location.pathname }),
       keepalive: true,
     }).catch(() => {});
@@ -78,6 +79,7 @@ export function startGameSync() {
     fetch('/api/stats/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ playerId: currentPlayerId(), stats, path: window.location.pathname }),
       keepalive: true,
     }).catch(() => {});

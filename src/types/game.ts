@@ -36,6 +36,7 @@ export interface OwnedVehicle {
   purchasePrice: number;
   purchasedAt: string;
   acquisitionSource?: 'SHOWROOM' | 'CNN' | 'ROULETTE' | 'UNKNOWN' | string;
+  xenonEnabled?: boolean;
 }
 
 export interface OwnedClothingMetadata {
@@ -67,6 +68,53 @@ export interface PlayerState {
   ownedVehicles: OwnedVehicle[];
   inventory: InventoryItem[];
   activeBoosts: ActiveBoost[];
+}
+
+export interface CayoState {
+  leaves: number;
+  whitePacks: number;
+  bluePacks: number;
+  dirtyMoney: number;
+  cleanMoney: number;
+  totalEarnings: number;
+  timeHours: number;
+  nextActionAt: string | null;
+  actionCooldownMs: number;
+}
+
+export interface CayoActionResult {
+  ok: boolean;
+  stage?: 'COLLECT' | 'PROCESS' | 'REFINE';
+  mode?: 'BULK' | 'DELIVERY_100';
+  raided?: boolean;
+  payout?: number;
+  cleanGained?: number;
+  cleanCost?: number;
+  multiplier?: number;
+  state: CayoState;
+  cityProgress?: unknown;
+  cityReward?: unknown;
+}
+
+export interface SleepState {
+  activeCycleId: string | null;
+  sleepEndsAt: string | null;
+  remainingMs: number;
+  claimable: boolean;
+  cooldownUntil: string | null;
+  cooldownMs: number;
+  multiplier: number;
+  projectedReward: number;
+  cleanMoney: number;
+}
+
+export interface SleepActionResult {
+  ok: boolean;
+  reward?: number;
+  multiplier?: number;
+  jobBoostUsed?: boolean;
+  vipMultiplier?: number;
+  state: SleepState;
 }
 
 export interface VehicleModelData {
@@ -343,6 +391,8 @@ export interface FisherSpotOption {
 }
 
 export interface FisherStateResponse {
+  cityProgress?: unknown;
+  cityReward?: unknown;
   progress: FisherProgress;
   shiftState: FisherShiftState;
   streak: number;

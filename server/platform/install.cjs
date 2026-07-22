@@ -18,20 +18,29 @@ const {
   getPlayerLeaderboard,
   grantAdminItem,
   grantAdminMythicMember,
+  createGang,
+  launderGangFunds,
   normalizeLatestVipActivation,
+  performGangBattle,
+  performGangWork,
   processGangMaterial,
   resetAdminTutorial,
   setAdminVip,
   sellGangMaterial,
   syncGang,
+  transferGangFunds,
   updateAdminDisplayName,
   updateAdminNumericField,
   upgradeGang,
 } = require('./store.cjs');
+const { pool } = require('./db.cjs');
+const { createRateLimiter } = require('../security/http.cjs');
+const { requireAuthenticatedPlayer } = require('../security/userAuth.cjs');
 
 function playerIdFromRequest(req, payload = null) {
   return String(
-    req.body?.playerId
+    req.playerId
+      || req.body?.playerId
       || req.query?.playerId
       || req.params?.playerId
       || payload?.playerId
@@ -63,7 +72,11 @@ function installPlatformSystems(app, express) {
     next();
   });
 
-  app.post('/api/adminpanelv2/login', (req, res) => {
+  const requirePlayer = requireAuthenticatedPlayer(pool);
+  const adminLoginLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
+  const gangActionLimit = createRateLimiter({ windowMs: 60_000, max: 20, key: (req) => req.playerId || req.ip });
+
+  app.post('/api/adminpanelv2/login', adminLoginLimit, (req, res) => {
     if (!adminConfigurationReady()) {
       return res.status(503).json({ error: 'Set ADMIN_PASS and ADMIN_SECRET in Railway before using the control center.' });
     }
@@ -78,6 +91,9 @@ function installPlatformSystems(app, express) {
     clearAdminSession(res);
     return res.json({ ok: true });
   });
+
+  app.use('/api/platform/status', requirePlayer);
+  app.use('/api/gangs', requirePlayer);
 
   app.get('/api/platform/status', async (req, res) => {
     try {
@@ -125,7 +141,17 @@ function installPlatformSystems(app, express) {
     }
   });
 
-  app.post('/api/gangs/sell', async (req, res) => {
+  app.post('/api/gangs/create', async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json({ ok: true, ...(await createGang(playerId, req.body?.name, req.body?.members)) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang creation failed' });
+    }
+  });
+
+  app.post('/api/gangs/sell', gangActionLimit, async (req, res) => {
     try {
       const playerId = playerIdFromRequest(req);
       if (!playerId) return res.status(400).json({ error: 'playerId required' });
@@ -135,13 +161,53 @@ function installPlatformSystems(app, express) {
     }
   });
 
-  app.post('/api/gangs/process', async (req, res) => {
+  app.post('/api/gangs/process', gangActionLimit, async (req, res) => {
     try {
       const playerId = playerIdFromRequest(req);
       if (!playerId) return res.status(400).json({ error: 'playerId required' });
       return res.json(await processGangMaterial(playerId, req.body?.recipe, req.body?.batches, req.body?.operationId));
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : 'gang processing failed' });
+    }
+  });
+
+  app.post('/api/gangs/work', gangActionLimit, async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json(await performGangWork(playerId, req.body?.workType, req.body?.participantIds, req.body?.operationId));
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang work failed' });
+    }
+  });
+
+  app.post('/api/gangs/battle', gangActionLimit, async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json(await performGangBattle(playerId, req.body?.opponent, req.body?.participantIds, req.body?.leaderId, req.body?.operationId));
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang battle failed' });
+    }
+  });
+
+  app.post('/api/gangs/funds/transfer', gangActionLimit, async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json(await transferGangFunds(playerId, req.body?.currency, req.body?.direction, req.body?.amount, req.body?.operationId));
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang transfer failed' });
+    }
+  });
+
+  app.post('/api/gangs/funds/launder', gangActionLimit, async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json(await launderGangFunds(playerId, req.body?.amount, req.body?.operationId));
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang laundering failed' });
     }
   });
 
