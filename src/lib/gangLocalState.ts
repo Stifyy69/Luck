@@ -49,6 +49,7 @@ export function buildInitialGangData(saved: any): GangData {
     .filter((member) => member.rarity !== 'MYTHIC' && member.source !== 'ADMIN_EVENT');
 
   return {
+    stateVersion: Math.max(0, Math.floor(safeNumber(raw.stateVersion))),
     name: String(raw.name || '').slice(0, 48),
     levelIndex,
     members,
@@ -85,6 +86,7 @@ export function buildInitialGangData(saved: any): GangData {
 }
 
 export function applyRemoteGangData(current: GangData, remote: ServerGangState | Record<string, any>): GangData {
+  const raw = remote as Record<string, any>;
   const members = migrateGangMembers(remote.members);
   const levelIndex = normalizeGangLevelIndex(remote.gangLevelIndex, remote.dirtyEarned);
   const maxMembers = getGangLevel(levelIndex).maxMembers;
@@ -99,13 +101,14 @@ export function applyRemoteGangData(current: GangData, remote: ServerGangState |
 
   return {
     ...current,
+    stateVersion: Math.max(current.stateVersion, Math.floor(safeNumber(remote.stateVersion, current.stateVersion))),
     name: String(remote.name || current.name).slice(0, 48),
     levelIndex,
     members: filteredMembers,
     recruitmentBoard: board,
-    frunze: Math.max(0, safeNumber(remote.leaves ?? remote.frunze, current.frunze)),
-    white: Math.max(0, safeNumber(remote.whitePacks ?? remote.white, current.white)),
-    blue: Math.max(0, safeNumber(remote.bluePacks ?? remote.blue, current.blue)),
+    frunze: Math.max(0, safeNumber(remote.leaves ?? raw.frunze, current.frunze)),
+    white: Math.max(0, safeNumber(remote.whitePacks ?? raw.white, current.white)),
+    blue: Math.max(0, safeNumber(remote.bluePacks ?? raw.blue, current.blue)),
     sulfur: Math.max(0, safeNumber(remote.sulfur, current.sulfur)),
     ironOre: Math.max(0, safeNumber(remote.ironOre, current.ironOre)),
     gunpowder: Math.max(0, safeNumber(remote.gunpowder, current.gunpowder)),
@@ -113,7 +116,7 @@ export function applyRemoteGangData(current: GangData, remote: ServerGangState |
     cleanBalance: Math.max(0, safeNumber(remote.cleanBalance, current.cleanBalance)),
     dirtyBalance: Math.max(0, safeNumber(remote.dirtyBalance, current.dirtyBalance)),
     dirtyEarned: Math.max(0, safeNumber(remote.dirtyEarned, current.dirtyEarned)),
-    onlineNow: Math.max(0, safeNumber(remote.activeWorkers ?? remote.onlineNow, 0)),
+    onlineNow: Math.max(0, safeNumber(remote.activeWorkers ?? raw.onlineNow, 0)),
     dismissalPressure: Math.max(0, safeNumber(remote.dismissalPressure, current.dismissalPressure)),
     lastDismissalAt: Math.max(0, safeNumber(remote.lastDismissalAt, current.lastDismissalAt)),
     activityLog: migrateGangActivityLog(remote.activityLog ?? current.activityLog),

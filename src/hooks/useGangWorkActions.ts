@@ -18,6 +18,8 @@ import {
   type GangWorkType,
 } from '../lib/gangWork';
 import { appendLog } from '../lib/gangLocalState';
+import { applyRemoteGangData } from '../lib/gangLocalState';
+import { processGangMaterial, sellGangMaterial, syncGangState } from '../lib/platformApi';
 
 const RAID_CHANCE = 0.05;
 export type SellableGangMaterial = 'blue' | 'gunpowder' | 'steel';
@@ -38,6 +40,7 @@ type Options = {
   setBaniMurdari: Dispatch<SetStateAction<number>>;
   runActivityPresentation: (type: GangWorkType, participantCount: number, complete: () => Promise<string> | string) => Promise<void>;
   pushPopup: (message: string) => void;
+  playerId: string | null;
 };
 
 function randomCrew(members: GangMember[], count: number) {
@@ -65,7 +68,7 @@ export function useGangWorkActions(options: Options) {
   const {
     busy, availableMembers, gangData, maxMembers, transportMembers,
     cashBalance, baniMurdari, setGangData, setTimeFarm, setCashBalance,
-    setBaniMurdari, runActivityPresentation, pushPopup,
+    setBaniMurdari, runActivityPresentation, pushPopup, playerId,
   } = options;
 
   const startCollection = async () => {
@@ -155,7 +158,7 @@ export function useGangWorkActions(options: Options) {
   };
 
   const startProcessing = async (type: GangProcessingType, requestedBatches: number) => {
-    if (busy || availableMembers.length === 0) return;
+    if (busy || availableMembers.length === 0 || !playerId) return;
     const maximum = calculateMaxProcessingBatches(type, gangData, gangData.dirtyBalance);
     const batches = Math.max(0, Math.min(maximum, Math.floor(requestedBatches)));
     if (batches <= 0) {
@@ -163,56 +166,36 @@ export function useGangWorkActions(options: Options) {
       return;
     }
     const recipe = GANG_PROCESSING_RECIPES[type];
-    const inputAmount = recipe.inputPerBatch * batches;
     const outputAmount = recipe.outputPerBatch * batches;
-    const dirtyCost = recipe.dirtyCostPerBatch * batches;
     const participants = randomCrew(availableMembers, Math.max(1, Math.ceil(availableMembers.length * 0.5)));
     const ids = participants.map((member) => member.id);
 
-    setGangData((current) => ({
-      ...current,
-      [recipe.input]: Math.max(0, current[recipe.input] - inputAmount),
-      dirtyBalance: Math.max(0, current.dirtyBalance - dirtyCost),
-      onlineNow: ids.length,
-      members: markMembersWorking(current.members, ids),
-    }));
+    setGangData((current) => ({ ...current, onlineNow: ids.length, members: markMembersWorking(current.members, ids) }));
 
-    await runActivityPresentation(type, ids.length, () => {
-      const raid = Math.random() < RAID_CHANCE;
+    await runActivityPresentation(type, ids.length, async () => {
+      await syncGangState(playerId, gangData);
+      const result = await processGangMaterial(playerId, type, batches, `process_${crypto.randomUUID().replace(/-/g, '')}`);
+      const raid = result.raided;
       setTimeFarm((current) => current + 0.5);
-      setGangData((current) => {
-        const training: MemberTrainingPlan = type === 'white' || type === 'blue'
-          ? { primary: 'streetSmart', secondary: 'leadership' }
-          : { primary: 'tactics', secondary: 'streetSmart' };
-        const fatigue = trainAndFatigue(current.members, ids, training, raid ? 5 : 12, type);
-        let next: GangData = {
-          ...current,
-          [recipe.output]: raid ? current[recipe.output] : current[recipe.output] + outputAmount,
-          onlineNow: 0,
-          members: fatigue.members,
-        };
-        next = appendLog(next, raid ? `Police raid: current ${type} batch lost.` : `+${outputAmount.toLocaleString('en-US')} ${recipe.output}.`, raid ? 'negative' : 'positive');
-        return addFatigueLog(next, fatigue.penalized.map((member) => member.displayName));
-      });
+      setGangData((current) => applyRemoteGangData({ ...current, onlineNow: 0 }, result.gang));
       const text = raid ? 'Police raid. Current batch lost.' : `+${outputAmount.toLocaleString('en-US')} ${recipe.output}`;
       pushPopup(text);
       return text;
     });
   };
 
-  const sellMaterial = (type: SellableGangMaterial, requestedQuantity: number) => {
-    if (busy) return;
+  const sellMaterial = async (type: SellableGangMaterial, requestedQuantity: number) => {
+    if (busy || !playerId) return;
     const quantity = Math.max(0, Math.min(gangData[type], Math.floor(requestedQuantity)));
     if (quantity <= 0) return;
-    const price = type === 'blue' ? 2300 : type === 'gunpowder' ? 5000 : 6000;
-    const gain = quantity * price;
-    setGangData((current) => appendLog({
-      ...current,
-      [type]: Math.max(0, current[type] - quantity),
-      dirtyBalance: current.dirtyBalance + gain,
-      dirtyEarned: current.dirtyEarned + gain,
-    }, `Sold ${quantity.toLocaleString('en-US')} ${type} for ${gain.toLocaleString('en-US')} dirty.`, 'positive'));
-    pushPopup(`+${gain.toLocaleString('en-US')} dirty`);
+    try {
+      await syncGangState(playerId, gangData);
+      const result = await sellGangMaterial(playerId, type, quantity, `sell_${crypto.randomUUID().replace(/-/g, '')}`);
+      setGangData((current) => applyRemoteGangData(current, result.gang));
+      pushPopup(`+${result.payout.toLocaleString('en-US')} dirty`);
+    } catch (error) {
+      pushPopup(error instanceof Error ? error.message : 'Gang sell failed.');
+    }
   };
 
   const deposit = (currency: Currency, amount: number) => {

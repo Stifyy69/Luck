@@ -26,6 +26,7 @@ export type PlayerLeaderboardResponse = { metric: PlayerLeaderboardMetric; metri
 export type GangLeaderboardResponse = { metric: GangLeaderboardMetric; metricLabel: string; summary: { totalGangs: number; totalMembers: number; totalDirtyEarned: number; totalStockValue: number; activeRecent: number }; gangs: LeaderboardGang[] };
 
 export type ServerGangState = {
+  stateVersion: number;
   playerId: string; name: string; gangLevelIndex: number; gangLevel: string; members: GangMember[]; membersCount: number; activeWorkers: number;
   leaves: number; whitePacks: number; bluePacks: number; sulfur: number; ironOre: number; gunpowder: number; steel: number;
   cleanBalance: number; dirtyBalance: number; dirtyEarned: number; stockValue: number; dismissalPressure: number; lastDismissalAt: number;
@@ -37,4 +38,6 @@ export const fetchPlayerLeaderboard = (metric: PlayerLeaderboardMetric) => reque
 export const fetchGangLeaderboard = (metric: GangLeaderboardMetric) => request<GangLeaderboardResponse>(`/api/leaderboards/gangs?${new URLSearchParams({ metric })}`);
 export async function fetchGangState(playerId: string) { const payload = await request<{ gang: ServerGangState | null }>(`/api/gangs/state?${new URLSearchParams({ playerId })}`); return payload.gang; }
 export function syncGangState(playerId: string, gangData: Record<string, unknown>) { return request<{ ok: true; gang: ServerGangState }>('/api/gangs/sync', { method: 'POST', body: JSON.stringify({ playerId, gangData }) }); }
+export async function sellGangMaterial(playerId: string, material: 'blue' | 'gunpowder' | 'steel', quantity: number, operationId: string) { const payload = await request<{ ok: true; gang: ServerGangState; stateVersion: number; payout: number }>('/api/gangs/sell', { method: 'POST', body: JSON.stringify({ playerId, material, quantity, operationId }) }); return payload; }
+export async function processGangMaterial(playerId: string, recipe: 'white' | 'blue' | 'gunpowder' | 'steel', batches: number, operationId: string) { const payload = await request<{ ok: true; gang: ServerGangState; stateVersion: number; outputAdded: number; raided: boolean }>('/api/gangs/process', { method: 'POST', body: JSON.stringify({ playerId, recipe, batches, operationId }) }); return payload; }
 export async function upgradeGangState(playerId: string) { const payload = await request<{ ok: true; gang: ServerGangState }>('/api/gangs/upgrade', { method: 'POST', body: JSON.stringify({ playerId }) }); return payload.gang; }
