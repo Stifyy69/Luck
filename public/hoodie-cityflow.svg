@@ -1,0 +1,6 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180' viewBox='0 0 320 180'>
+  <defs><linearGradient id='g' x1='0' x2='1'><stop stop-color='#ff8a2a'/><stop offset='1' stop-color='#ffd95a'/></linearGradient></defs>
+  <rect width='320' height='180' rx='18' fill='#1f1920'/>
+  <path d='M90 130 L110 65 L135 50 L160 62 L185 50 L210 65 L230 130 Z' fill='url(#g)' opacity='0.9'/>
+  <text x='160' y='155' text-anchor='middle' fill='#f8f6f2' font-size='20' font-family='Arial' font-weight='700'>HOODIE</text>
+</svg>

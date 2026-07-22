@@ -1,0 +1,6 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180' viewBox='0 0 320 180'>
+  <defs><linearGradient id='g2' x1='0' x2='1'><stop stop-color='#ff6b57'/><stop offset='1' stop-color='#ffb347'/></linearGradient></defs>
+  <rect width='320' height='180' rx='18' fill='#231a1a'/>
+  <path d='M105 130 L120 70 L150 50 L170 50 L200 70 L215 130 L185 130 L178 82 L160 85 L142 82 L135 130 Z' fill='url(#g2)'/>
+  <text x='160' y='156' text-anchor='middle' fill='#f8f6f2' font-size='20' font-family='Arial' font-weight='700'>JACHETĂ</text>
+</svg>
