@@ -78,7 +78,7 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
     load().catch(() => {});
     const timer = window.setInterval(() => {
       if (!cancelled) load().catch(() => {});
-    }, 2500);
+    }, 10_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -94,8 +94,8 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
 
   return (
     <>
-      <div className="fixed left-[64px] right-4 top-4 z-[65] md:left-[272px] lg:left-[278px]">
-        <div className="rounded-[20px] border border-white/[0.07] bg-[#0a0d11]/95 px-3 py-2.5 shadow-2xl backdrop-blur-xl">
+      <div className="fixed left-[68px] right-4 top-4 z-[65] md:left-[280px] lg:left-[288px]">
+        <div className="rounded-[20px] border border-white/[0.07] bg-[#090d0a]/95 px-3 py-2.5 shadow-2xl backdrop-blur-xl">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[var(--accent)] text-sm font-black text-[#10140b]">
               {progress?.level || 1}
