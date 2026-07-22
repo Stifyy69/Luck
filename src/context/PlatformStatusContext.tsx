@@ -80,7 +80,7 @@ export function PlatformStatusProvider({ children }: { children: React.ReactNode
   }, [player?.activeBoosts]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 

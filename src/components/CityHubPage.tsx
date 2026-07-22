@@ -249,32 +249,41 @@ export default function CityHubPage({ onNavigate }: CityHubPageProps) {
   return (
     <div className="min-h-screen px-4 pb-10 pt-6 sm:px-6 md:px-8 md:pb-12 md:pt-8">
       <div className="mx-auto max-w-[1220px] space-y-5">
-        <section className="game-panel relative overflow-hidden p-5 sm:p-7 lg:p-8">
-          <div className="pointer-events-none absolute right-[-140px] top-[-180px] h-[430px] w-[430px] rounded-full bg-[var(--accent)] opacity-[0.055] blur-3xl" />
-          <div className="relative grid gap-7 lg:grid-cols-[1.12fr_0.88fr] lg:items-end">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="section-kicker">City hub</p>
-                <span className="rounded-full border border-[rgba(114,227,154,0.2)] bg-[rgba(114,227,154,0.06)] px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.13em] text-[var(--money)]">City online</span>
-              </div>
-              <h1 className="display-title mt-5">{greeting}, {displayName}.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/43">Your City Level now connects every career. Complete work, open the next job and build toward Gangs at Level 15.</p>
-              <div className="mt-7 flex flex-wrap gap-3">
-                <button type="button" onClick={() => onNavigate(objective.path)} className="btn-primary rounded-2xl px-6 py-3.5 text-sm">{objective.action}</button>
-                <button type="button" onClick={reload} disabled={playerLoading || loadingCareers} className="btn-ghost rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
-                  <span className="inline-flex items-center gap-2"><CityIcon name="refresh" className="h-4 w-4" />Refresh city</span>
-                </button>
-                <button type="button" onClick={() => replayTutorial().catch(() => {})} disabled={tutorialBusy} className="btn-ghost rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">Replay tutorial</button>
-              </div>
+        <section className="city-hub-hero game-panel">
+          <div className="city-hub-copy">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="city-online-dot" aria-hidden="true" />
+              <p className="section-kicker">City online · live progression</p>
             </div>
-
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 lg:grid-cols-2">
-              <HubStat icon="star" label="City level" value={`Level ${cityProgress?.level || 1}`} />
-              <HubStat icon="wallet" label="Clean money" value={`${fmt(player?.cleanMoney || 0)} $`} tone="money" />
-              <HubStat icon="car" label="Current ride" value={currentVehicle} />
-              <HubStat icon="garage" label="Owned vehicles" value={String(player?.ownedVehicles.length || 0)} />
+            <h1>
+              <span>{greeting},</span>
+              <em>{displayName}.</em>
+            </h1>
+            <p>Your city is moving. Complete the recommended activity, grow your account and unlock the next system without losing sight of what matters now.</p>
+            <div className="mt-7 flex flex-wrap gap-3">
+              <button type="button" onClick={() => onNavigate(objective.path)} className="btn-primary rounded-2xl px-6 py-3.5 text-sm">
+                <span className="inline-flex items-center gap-2">{objective.action}<CityIcon name="route" className="h-4 w-4" /></span>
+              </button>
+              <button type="button" onClick={reload} disabled={playerLoading || loadingCareers} className="btn-ghost rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
+                <span className="inline-flex items-center gap-2"><CityIcon name="refresh" className="h-4 w-4" />Refresh city</span>
+              </button>
+              <button type="button" onClick={() => replayTutorial().catch(() => {})} disabled={tutorialBusy} className="btn-ghost rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">Replay tutorial</button>
             </div>
           </div>
+
+          <CityLevelOrbit
+            level={cityProgress?.level || 1}
+            percent={cityProgress?.progressPercent || 0}
+            xpToNext={cityProgress?.xpToNext || 0}
+            nextUnlock={cityProgress?.nextUnlock?.label || 'All careers open'}
+          />
+        </section>
+
+        <section className="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="City overview">
+          <HubStat icon="wallet" label="Clean money" value={`${fmt(player?.cleanMoney || 0)} $`} tone="money" />
+          <HubStat icon="star" label="City level" value={`Level ${cityProgress?.level || 1}`} />
+          <HubStat icon="car" label="Current ride" value={currentVehicle} />
+          <HubStat icon="garage" label="Owned vehicles" value={String(player?.ownedVehicles.length || 0)} />
         </section>
 
         {(playerError || careerError) && (
@@ -282,6 +291,47 @@ export default function CityHubPage({ onNavigate }: CityHubPageProps) {
             {playerError || careerError}
           </section>
         )}
+
+        <section className="space-y-4">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <p className="section-kicker">Priority queue</p>
+              <h2 className="mt-2 text-3xl font-black tracking-[-0.05em] text-white">What deserves attention now</h2>
+            </div>
+            <button type="button" onClick={() => onNavigate('/profile')} className="btn-ghost hidden rounded-xl px-3 py-2 text-[10px] sm:inline-flex">View city activity</button>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-3">
+            <PriorityCard
+              index="01"
+              kicker="Best next move"
+              title={objective.title}
+              description={objective.progressLabel}
+              value={objective.action}
+              icon={objective.icon}
+              onClick={() => onNavigate(objective.path)}
+            />
+            <PriorityCard
+              index="02"
+              kicker="Market signal"
+              title={(player?.ownedVehicles.length || 0) > 0 ? 'Your garage has market value' : 'Your first vehicle is waiting'}
+              description={`${player?.ownedVehicles.length || 0} vehicles · ${player?.inventory.length || 0} inventory stacks`}
+              value="Open market"
+              icon="market"
+              tone="info"
+              onClick={() => onNavigate((player?.ownedVehicles.length || 0) > 0 ? '/cnn' : '/showroom')}
+            />
+            <PriorityCard
+              index="03"
+              kicker="Gang status"
+              title={careerAccessForPath('/gangs', cityProgress)?.unlocked ? 'Organization access is ready' : 'Build toward City Level 15'}
+              description={careerAccessForPath('/gangs', cityProgress)?.unlocked ? 'Review stock, crew and operations' : `${cityProgress?.progressPercent || 0}% through the current level`}
+              value="View gang"
+              icon="gangs"
+              tone="violet"
+              onClick={() => onNavigate('/gangs')}
+            />
+          </div>
+        </section>
 
         <section className="game-panel-soft overflow-hidden">
           <div className="grid lg:grid-cols-[0.72fr_1.28fr]">
@@ -385,10 +435,59 @@ export default function CityHubPage({ onNavigate }: CityHubPageProps) {
 
 function HubStat({ icon, label, value, tone = 'default' }: { icon: CityIconName; label: string; value: string; tone?: 'default' | 'money' }) {
   return (
-    <div className="rounded-[18px] border border-white/[0.07] bg-black/20 p-4">
-      <div className="flex items-center gap-2 text-white/28"><CityIcon name={icon} className="h-4 w-4" /><p className="text-[9px] font-black uppercase tracking-[0.13em]">{label}</p></div>
-      <p className={`mt-3 truncate text-sm font-black ${tone === 'money' ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p>
+    <div className="city-hub-stat game-card">
+      <span><CityIcon name={icon} className="h-5 w-5" /></span>
+      <div className="min-w-0">
+        <p>{label}</p>
+        <strong className={tone === 'money' ? 'text-[var(--money)]' : 'text-white'}>{value}</strong>
+      </div>
     </div>
+  );
+}
+
+function CityLevelOrbit({ level, percent, xpToNext, nextUnlock }: { level: number; percent: number; xpToNext: number; nextUnlock: string }) {
+  return (
+    <div className="city-level-orbit" aria-label={`City Level ${level}, ${percent}% complete`}>
+      <div className="city-level-ring" style={{ background: `conic-gradient(var(--accent) 0 ${percent}%, rgba(255,255,255,.055) ${percent}% 100%)` }}>
+        <div>
+          <span>City level</span>
+          <strong>{level}</strong>
+          <small>{xpToNext > 0 ? `${fmt(xpToNext)} XP to next` : 'Maximum level'}</small>
+        </div>
+      </div>
+      <div className="city-orbit-chip city-orbit-next">
+        <CityIcon name="star" className="h-4 w-4" />
+        <span><small>Next unlock</small><strong>{nextUnlock}</strong></span>
+      </div>
+      <div className="city-orbit-chip city-orbit-pace">
+        <CityIcon name="leaderboard" className="h-4 w-4" />
+        <span><small>Level progress</small><strong>{percent}% complete</strong></span>
+      </div>
+    </div>
+  );
+}
+
+function PriorityCard({ index, kicker, title, description, value, icon, tone = 'accent', onClick }: {
+  index: string;
+  kicker: string;
+  title: string;
+  description: string;
+  value: string;
+  icon: CityIconName;
+  tone?: 'accent' | 'info' | 'violet';
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} className={`city-priority-card city-priority-${tone}`}>
+      <span className="city-priority-icon"><CityIcon name={icon} className="h-5 w-5" /></span>
+      <span className="city-priority-index">{index}</span>
+      <span className="col-span-2 min-w-0">
+        <small>{kicker}</small>
+        <strong>{title}</strong>
+        <p>{description}</p>
+      </span>
+      <span className="city-priority-action">{value}<CityIcon name="route" className="h-4 w-4" /></span>
+    </button>
   );
 }
 
