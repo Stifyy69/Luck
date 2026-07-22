@@ -24,6 +24,7 @@ const {
   syncGang,
   updateAdminDisplayName,
   updateAdminNumericField,
+  upgradeGang,
 } = require('./store.cjs');
 
 function playerIdFromRequest(req, payload = null) {
@@ -119,6 +120,16 @@ function installPlatformSystems(app, express) {
       return res.json({ ok: true, gang: await syncGang(playerId, req.body?.gangData || {}) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : 'gang sync failed' });
+    }
+  });
+
+  app.post('/api/gangs/upgrade', async (req, res) => {
+    try {
+      const playerId = playerIdFromRequest(req);
+      if (!playerId) return res.status(400).json({ error: 'playerId required' });
+      return res.json({ ok: true, gang: await upgradeGang(playerId) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'gang upgrade failed' });
     }
   });
 

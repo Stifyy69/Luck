@@ -49,6 +49,7 @@ function applyServerGang(remote: ServerGangState) {
   const nextGangData = {
     ...local,
     name: remote.name,
+    levelIndex: remote.gangLevelIndex,
     members,
     frunze: remote.leaves,
     white: remote.whitePacks,
@@ -61,11 +62,16 @@ function applyServerGang(remote: ServerGangState) {
     dirtyBalance: remote.dirtyBalance,
     dirtyEarned: remote.dirtyEarned,
     onlineNow: remote.activeWorkers,
+    dismissalPressure: remote.dismissalPressure,
+    lastDismissalAt: remote.lastDismissalAt,
+    activityLog: remote.activityLog,
+    battleHistory: remote.battleHistory,
+    battleReputation: remote.battleReputation,
+    defensiveCrewIds: remote.defensiveCrewIds,
+    battleBoardSeed: remote.battleBoardSeed,
     lastLeaveAt: remote.lastLeaveAt,
     serverUpdatedAt: remote.updatedAt,
     recruitmentBoard: Array.isArray(local.recruitmentBoard) ? local.recruitmentBoard : [],
-    dismissalPressure: Number(local.dismissalPressure || 0),
-    lastDismissalAt: Number(local.lastDismissalAt || 0),
     removedEventMemberIds: [...removedEventMemberIds],
   };
   const nextState = { ...state, gangData: nextGangData };

@@ -28,7 +28,7 @@ import { startGameSync } from './lib/gameSync';
 type RoutePath =
   | '/city' | '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher'
   | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/leaderboards' | '/adminpanelv2'
-  | '/gangs' | '/gangs/work' | '/gangs/members' | '/gangs/recruitment' | '/gangs/storage' | '/gangs/finance';
+  | '/gangs' | '/gangs/work' | '/gangs/members' | '/gangs/recruitment' | '/gangs/storage' | '/gangs/finance' | '/gangs/battles';
 type NavItem = { path: RoutePath; label: string; icon: CityIconName; hint?: string; unlockLevel?: number; vipOnly?: boolean };
 type NavGroup = { label: string; items: NavItem[] };
 
@@ -39,11 +39,12 @@ const GANG_ROUTES: Record<string, GangSection> = {
   '/gangs/recruitment': 'recruitment',
   '/gangs/storage': 'storage',
   '/gangs/finance': 'finance',
+  '/gangs/battles': 'battles',
 };
 
 const VALID_ROUTES: RoutePath[] = [
   '/city', '/ruleta', '/farmat', '/sleep', '/pilot', '/pizzer', '/fisher', '/showroom', '/inventory', '/owned', '/profile', '/cnn',
-  '/leaderboards', '/adminpanelv2', '/gangs', '/gangs/work', '/gangs/members', '/gangs/recruitment', '/gangs/storage', '/gangs/finance',
+  '/leaderboards', '/adminpanelv2', '/gangs', '/gangs/work', '/gangs/members', '/gangs/recruitment', '/gangs/storage', '/gangs/finance', '/gangs/battles',
 ];
 
 const NAV_GROUPS: NavGroup[] = [
@@ -70,6 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
     { path: '/gangs/recruitment', label: 'Recruitment', icon: 'gangs', unlockLevel: 15 },
     { path: '/gangs/storage', label: 'Storage', icon: 'inventory', unlockLevel: 15 },
     { path: '/gangs/finance', label: 'Finance', icon: 'market', unlockLevel: 15 },
+    { path: '/gangs/battles', label: 'Battles', icon: 'alert', unlockLevel: 15 },
   ] },
 ];
 
@@ -179,7 +181,7 @@ export default function App() {
     if (path === '/showroom') return <ShowroomPage />;
     if (path === '/inventory' || path === '/owned') return <InventoryPage />;
     if (path === '/profile') return <MyProfilePage />;
-    if (path.startsWith('/gangs')) return <GangsPage section={GANG_ROUTES[path] || 'overview'} />;
+    if (path.startsWith('/gangs')) return <GangsPage section={GANG_ROUTES[path] || 'overview'} onNavigate={navigateLoose} />;
     if (path === '/leaderboards') return <LeaderboardsPage />;
     if (path === '/cnn') return <CNNMarketplace />;
     if (path === '/adminpanelv2') return <AdminPanelV2 />;

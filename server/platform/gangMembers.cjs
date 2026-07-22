@@ -3,18 +3,19 @@ const crypto = require('crypto');
 const SKILLS = Object.freeze(['shooting', 'farming', 'tactics', 'recruiting', 'leadership', 'streetSmart']);
 const RARITIES = new Set(['COMMON', 'RARE', 'EPIC', 'LEGENDARY', 'MYTHIC']);
 const SOURCES = new Set(['STARTER', 'RECRUITMENT', 'ADMIN_EVENT']);
+const STATUSES = new Set(['AVAILABLE', 'WORKING', 'INJURED']);
 
 const FIRST_NAMES = ['Enzo', 'Darius', 'Marcus', 'Rico', 'Mihai', 'Tavi', 'Nico', 'Victor', 'Dante', 'Razvan', 'Fabian', 'Theo'];
 const NICKNAMES = ['Ghost', 'Frost', 'Flame', 'Viper', 'Smoke', 'Ace', 'Wolf', 'Shadow', 'Nova', 'Razor', 'Storm', 'Saint'];
 const LAST_NAMES = ['Ionescu', 'Popa', 'Marin', 'Stan', 'Dobre', 'Matei', 'Toma', 'Rusu', 'Petrescu', 'Stoica', 'Roman', 'Neagu'];
 
 const BONUS_LABELS = Object.freeze({
-  shooting: ['Event Sharp Shooter', 'Prepared for future combat systems.'],
+  shooting: ['Event Sharp Shooter', 'Improves direct combat power.'],
   farming: ['Event Heavy Harvester', 'Collects extra leaves during gang farming.'],
-  tactics: ['Event Tactical Mind', 'Prepared for future heists and operations.'],
-  recruiting: ['Event Talent Spotter', 'Improves the quality of normal recruitment candidates.'],
-  leadership: ['Event Natural Leader', 'Improves the output of the active crew.'],
-  streetSmart: ['Event Street Connected', 'Can trigger extra opportunities during gang work.'],
+  tactics: ['Event Tactical Mind', 'Improves battle positioning and processing.'],
+  recruiting: ['Event Talent Spotter', 'Improves normal recruitment candidates.'],
+  leadership: ['Event Natural Leader', 'Improves the active crew.'],
+  streetSmart: ['Event Street Connected', 'Reduces operation and battle risk.'],
 });
 
 function safeNumber(value, fallback = 0) {
@@ -55,6 +56,9 @@ function legacyMemberFromName(name, index) {
     joinedAt: Date.now(),
     status: 'AVAILABLE',
     avatarSeed: index % 12,
+    lastWorkType: null,
+    consecutiveWorkRuns: 0,
+    injuredUntilGameHour: 0,
   };
 }
 
@@ -93,6 +97,11 @@ function sanitizeMember(value, index = 0, allowMythicIds = new Set()) {
       })
     : [];
 
+  const injuredUntilGameHour = Math.max(0, safeNumber(value.injuredUntilGameHour, 0));
+  let status = STATUSES.has(String(value.status)) ? String(value.status) : 'AVAILABLE';
+  if (injuredUntilGameHour > 0) status = 'INJURED';
+  if (status === 'INJURED' && injuredUntilGameHour <= 0) status = 'AVAILABLE';
+
   return {
     id,
     firstName,
@@ -107,8 +116,11 @@ function sanitizeMember(value, index = 0, allowMythicIds = new Set()) {
     skills,
     bonuses,
     joinedAt: clampInteger(value.joinedAt || Date.now(), 0, Number.MAX_SAFE_INTEGER),
-    status: value.status === 'WORKING' ? 'WORKING' : 'AVAILABLE',
+    status,
     avatarSeed: clampInteger(value.avatarSeed, 0, 99),
+    lastWorkType: value.lastWorkType ? sanitizeText(value.lastWorkType, 40, '') : null,
+    consecutiveWorkRuns: clampInteger(value.consecutiveWorkRuns, 0, 1),
+    injuredUntilGameHour,
   };
 }
 
@@ -176,6 +188,9 @@ function createAdminEventMember(customName = '') {
     joinedAt: Date.now(),
     status: 'AVAILABLE',
     avatarSeed: Math.floor(Math.random() * 12),
+    lastWorkType: null,
+    consecutiveWorkRuns: 0,
+    injuredUntilGameHour: 0,
   };
 }
 

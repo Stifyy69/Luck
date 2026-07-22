@@ -11,11 +11,13 @@ import {
 
 export default function GangMemberCard({
   member,
+  currentGameHour,
   disabled,
   onDismiss,
   onSupport,
 }: {
   member: GangMember;
+  currentGameHour: number;
   disabled: boolean;
   onDismiss: (member: GangMember) => void;
   onSupport: (member: GangMember) => void;
@@ -24,6 +26,8 @@ export default function GangMemberCard({
   const xpNeeded = memberXpForNextLevel(member.level);
   const xpPercent = member.level >= 50 ? 100 : Math.min(100, Math.round((member.xp / xpNeeded) * 100));
   const initials = `${member.firstName.slice(0, 1)}${member.nickname.slice(0, 1)}`.toUpperCase();
+  const injuryHours = Math.max(0, Math.ceil(member.injuredUntilGameHour - currentGameHour));
+  const status = injuryHours > 0 ? 'INJURED' : member.status;
 
   return (
     <article className={`overflow-hidden rounded-[22px] border ${RARITY_STYLES[member.rarity]}`}>
@@ -37,9 +41,7 @@ export default function GangMemberCard({
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-current/20 bg-black/20 px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em]">{RARITY_LABELS[member.rarity]}</span>
               {member.source === 'ADMIN_EVENT' ? <span className="rounded-full border border-rose-300/20 bg-rose-400/[0.08] px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] text-rose-100">Event exclusive</span> : null}
-              <span className={`rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] ${member.status === 'WORKING' ? 'border-emerald-300/20 bg-emerald-400/[0.08] text-emerald-100' : 'border-white/10 bg-white/[0.035] text-white/40'}`}>
-                {member.status === 'WORKING' ? 'Working' : 'Available'}
-              </span>
+              <span className={`rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] ${statusClass(status)}`}>{status === 'INJURED' ? `${injuryHours}h injured` : status === 'WORKING' ? 'Working' : 'Available'}</span>
             </div>
             <h3 className="mt-2 truncate text-base font-black tracking-[-0.025em] text-white">{member.displayName}</h3>
             <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.13em] text-white/35">{getMemberRole(member)} · Lv. {member.level}</p>
@@ -49,6 +51,8 @@ export default function GangMemberCard({
         <div className="mt-4 grid grid-cols-2 gap-2">
           <StatPill label="Loyalty" value={`${member.loyalty}%`} tone={member.loyalty < 45 ? 'danger' : member.loyalty < 65 ? 'warning' : 'normal'} />
           <StatPill label="Main skill" value={`${SKILL_LABELS[primarySkill]} ${member.skills[primarySkill]}`} />
+          <StatPill label="Last work" value={formatWork(member.lastWorkType)} />
+          <StatPill label="Fatigue" value={`${member.consecutiveWorkRuns}/2`} tone={member.consecutiveWorkRuns >= 1 ? 'warning' : 'normal'} />
         </div>
 
         <div className="mt-3">
@@ -76,7 +80,7 @@ export default function GangMemberCard({
               </div>
             ))}
           </div>
-        ) : <p className="mt-3 rounded-xl border border-dashed border-white/[0.08] px-3 py-3 text-center text-[9px] font-bold uppercase tracking-[0.12em] text-white/22">No permanent bonus</p>}
+        ) : null}
 
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button type="button" disabled={disabled || member.loyalty >= 100} onClick={() => onSupport(member)} className="rounded-xl border border-emerald-300/15 bg-emerald-400/[0.055] px-3 py-2.5 text-[10px] font-black uppercase tracking-[0.1em] text-emerald-100/80 disabled:opacity-30">Buy support</button>
@@ -90,4 +94,15 @@ export default function GangMemberCard({
 function StatPill({ label, value, tone = 'normal' }: { label: string; value: string; tone?: 'normal' | 'warning' | 'danger' }) {
   const toneClass = tone === 'danger' ? 'text-red-200' : tone === 'warning' ? 'text-amber-200' : 'text-white/75';
   return <div className="rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2.5"><p className="text-[8px] font-black uppercase tracking-[0.12em] text-white/25">{label}</p><p className={`mt-1 truncate text-xs font-black ${toneClass}`}>{value}</p></div>;
+}
+
+function statusClass(status: GangMember['status']) {
+  if (status === 'INJURED') return 'border-red-300/20 bg-red-400/[0.08] text-red-100';
+  if (status === 'WORKING') return 'border-emerald-300/20 bg-emerald-400/[0.08] text-emerald-100';
+  return 'border-white/10 bg-white/[0.035] text-white/40';
+}
+
+function formatWork(value: string | null) {
+  if (!value) return 'None';
+  return value.replace(/([A-Z])/g, ' $1').replace(/^./, (char) => char.toUpperCase()).slice(0, 24);
 }
