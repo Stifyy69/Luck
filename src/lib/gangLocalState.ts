@@ -45,17 +45,13 @@ export function buildInitialGangData(saved: any): GangData {
   const members = migrateGangMembers(raw.members);
   const maxMembers = getGangLevel(levelIndex).maxMembers;
   const formed = Boolean(String(raw.name || '').trim());
-  const savedBoard = migrateGangMembers(raw.recruitmentBoard)
-    .filter((member) => member.rarity !== 'MYTHIC' && member.source !== 'ADMIN_EVENT');
-
+  const savedBoard = migrateGangMembers(raw.recruitmentBoard).filter((member) => member.rarity !== 'MYTHIC' && member.source !== 'ADMIN_EVENT');
   return {
     stateVersion: Math.max(0, Math.floor(safeNumber(raw.stateVersion))),
     name: String(raw.name || '').slice(0, 48),
     levelIndex,
     members,
-    recruitmentBoard: formed && members.length < maxMembers
-      ? (savedBoard.length >= 3 ? savedBoard.slice(0, 3) : createRecruitmentBoard(members, 3))
-      : [],
+    recruitmentBoard: formed && members.length < maxMembers ? (savedBoard.length >= 3 ? savedBoard.slice(0, 3) : createRecruitmentBoard(members, 3)) : [],
     frunze: Math.max(0, safeNumber(raw.frunze ?? raw.leaves)),
     white: Math.max(0, safeNumber(raw.white ?? raw.whitePacks)),
     blue: Math.max(0, safeNumber(raw.blue ?? raw.bluePacks)),
@@ -68,14 +64,9 @@ export function buildInitialGangData(saved: any): GangData {
     dirtyEarned,
     lastLeaveAt: Math.max(0, safeNumber(raw.lastLeaveAt, Date.now())),
     onlineNow: Math.max(0, safeNumber(raw.onlineNow)),
-    dismissalPressure: decayDismissalPressure(
-      Math.max(0, safeNumber(raw.dismissalPressure)),
-      Math.max(0, safeNumber(raw.lastDismissalAt)),
-    ),
+    dismissalPressure: decayDismissalPressure(Math.max(0, safeNumber(raw.dismissalPressure)), Math.max(0, safeNumber(raw.lastDismissalAt))),
     lastDismissalAt: Math.max(0, safeNumber(raw.lastDismissalAt)),
-    removedEventMemberIds: Array.isArray(raw.removedEventMemberIds)
-      ? raw.removedEventMemberIds.map(String).slice(0, 100)
-      : [],
+    removedEventMemberIds: Array.isArray(raw.removedEventMemberIds) ? raw.removedEventMemberIds.map(String).slice(0, 100) : [],
     serverUpdatedAt: raw.serverUpdatedAt ? String(raw.serverUpdatedAt) : null,
     activityLog: migrateGangActivityLog(raw.activityLog),
     battleHistory: migrateBattleHistory(raw.battleHistory),
@@ -87,45 +78,41 @@ export function buildInitialGangData(saved: any): GangData {
 
 export function applyRemoteGangData(current: GangData, remote: ServerGangState | Record<string, any>): GangData {
   const raw = remote as Record<string, any>;
+  const remoteVersion = Math.max(0, Math.floor(safeNumber(remote.stateVersion, current.stateVersion)));
+  if (remoteVersion < current.stateVersion) return current;
   const members = migrateGangMembers(remote.members);
-  const levelIndex = normalizeGangLevelIndex(remote.gangLevelIndex, remote.dirtyEarned);
+  const levelIndex = normalizeGangLevelIndex(remote.gangLevelIndex ?? raw.levelIndex, remote.dirtyEarned ?? raw.dirtyEarned);
   const maxMembers = getGangLevel(levelIndex).maxMembers;
   const memberIds = new Set(members.map((member) => member.id));
   const removedEventMemberIds = new Set(current.removedEventMemberIds);
   const filteredMembers = members.filter((member) => !removedEventMemberIds.has(member.id));
-  const board = filteredMembers.length >= maxMembers
-    ? []
-    : current.recruitmentBoard.length >= 3
-      ? current.recruitmentBoard.slice(0, 3)
-      : createRecruitmentBoard(filteredMembers, 3);
+  const board = filteredMembers.length >= maxMembers ? [] : current.recruitmentBoard.length >= 3 ? current.recruitmentBoard.slice(0, 3) : createRecruitmentBoard(filteredMembers, 3);
 
   return {
     ...current,
-    stateVersion: Math.max(current.stateVersion, Math.floor(safeNumber(remote.stateVersion, current.stateVersion))),
-    name: String(remote.name || current.name).slice(0, 48),
+    stateVersion: remoteVersion,
+    name: String(remote.name ?? current.name).slice(0, 48),
     levelIndex,
     members: filteredMembers,
     recruitmentBoard: board,
-    frunze: Math.max(0, safeNumber(remote.leaves ?? raw.frunze, current.frunze)),
-    white: Math.max(0, safeNumber(remote.whitePacks ?? raw.white, current.white)),
-    blue: Math.max(0, safeNumber(remote.bluePacks ?? raw.blue, current.blue)),
-    sulfur: Math.max(0, safeNumber(remote.sulfur, current.sulfur)),
-    ironOre: Math.max(0, safeNumber(remote.ironOre, current.ironOre)),
-    gunpowder: Math.max(0, safeNumber(remote.gunpowder, current.gunpowder)),
-    steel: Math.max(0, safeNumber(remote.steel, current.steel)),
-    cleanBalance: Math.max(0, safeNumber(remote.cleanBalance, current.cleanBalance)),
-    dirtyBalance: Math.max(0, safeNumber(remote.dirtyBalance, current.dirtyBalance)),
-    dirtyEarned: Math.max(0, safeNumber(remote.dirtyEarned, current.dirtyEarned)),
+    frunze: Math.max(0, safeNumber(remote.leaves ?? raw.frunze, 0)),
+    white: Math.max(0, safeNumber(remote.whitePacks ?? raw.white, 0)),
+    blue: Math.max(0, safeNumber(remote.bluePacks ?? raw.blue, 0)),
+    sulfur: Math.max(0, safeNumber(remote.sulfur, 0)),
+    ironOre: Math.max(0, safeNumber(remote.ironOre, 0)),
+    gunpowder: Math.max(0, safeNumber(remote.gunpowder, 0)),
+    steel: Math.max(0, safeNumber(remote.steel, 0)),
+    cleanBalance: Math.max(0, safeNumber(remote.cleanBalance, 0)),
+    dirtyBalance: Math.max(0, safeNumber(remote.dirtyBalance, 0)),
+    dirtyEarned: Math.max(0, safeNumber(remote.dirtyEarned, 0)),
     onlineNow: Math.max(0, safeNumber(remote.activeWorkers ?? raw.onlineNow, 0)),
-    dismissalPressure: Math.max(0, safeNumber(remote.dismissalPressure, current.dismissalPressure)),
-    lastDismissalAt: Math.max(0, safeNumber(remote.lastDismissalAt, current.lastDismissalAt)),
-    activityLog: migrateGangActivityLog(remote.activityLog ?? current.activityLog),
-    battleHistory: migrateBattleHistory(remote.battleHistory ?? current.battleHistory),
-    battleReputation: Math.max(0, safeNumber(remote.battleReputation, current.battleReputation)),
-    defensiveCrewIds: Array.isArray(remote.defensiveCrewIds)
-      ? remote.defensiveCrewIds.map(String).filter((id: string) => memberIds.has(id)).slice(0, 5)
-      : current.defensiveCrewIds.filter((id) => memberIds.has(id)),
-    battleBoardSeed: Math.max(1, Math.floor(safeNumber(remote.battleBoardSeed, current.battleBoardSeed))),
+    dismissalPressure: Math.max(0, safeNumber(remote.dismissalPressure, 0)),
+    lastDismissalAt: Math.max(0, safeNumber(remote.lastDismissalAt, 0)),
+    activityLog: migrateGangActivityLog(remote.activityLog ?? []),
+    battleHistory: migrateBattleHistory(remote.battleHistory ?? []),
+    battleReputation: Math.max(0, safeNumber(remote.battleReputation, 0)),
+    defensiveCrewIds: Array.isArray(remote.defensiveCrewIds) ? remote.defensiveCrewIds.map(String).filter((id: string) => memberIds.has(id)).slice(0, 5) : [],
+    battleBoardSeed: Math.max(1, Math.floor(safeNumber(remote.battleBoardSeed, 1))),
     lastLeaveAt: Math.max(0, safeNumber(remote.lastLeaveAt, current.lastLeaveAt)),
     serverUpdatedAt: remote.updatedAt ? String(remote.updatedAt) : current.serverUpdatedAt,
   };
