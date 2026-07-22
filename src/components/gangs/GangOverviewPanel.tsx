@@ -1,5 +1,5 @@
 import type { GangActivityLogEntry } from '../../lib/gangActivity';
-import type { GangUpgradeCost } from '../../lib/gangProgression';
+import { getGangLevel, type GangUpgradeCost } from '../../lib/gangProgression';
 import GangActivityLog from './GangActivityLog';
 
 export default function GangOverviewPanel({
@@ -35,85 +35,70 @@ export default function GangOverviewPanel({
   activityLog: GangActivityLogEntry[];
   onUpgrade: () => void;
 }) {
+  const nextLevel = upgradeCost ? getGangLevel(upgradeCost.to).name : null;
   return (
-    <div className="space-y-5">
-      <section className="game-panel overflow-hidden p-5 sm:p-7">
-        <p className="section-kicker">Gang overview</p>
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-4xl font-black tracking-[-0.05em] text-white">{name}</h1>
-            <p className="mt-2 text-sm font-black text-white/42">{level}</p>
+    <div className="space-y-4">
+      <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="game-panel p-5 sm:p-6">
+          <p className="section-kicker">Gang status</p>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 className="text-3xl font-black tracking-[-0.045em] text-white">{name}</h1>
+              <p className="mt-1 text-xs font-black uppercase tracking-[0.12em] text-white/35">{level}</p>
+            </div>
+            <span className="rounded-full border border-white/[0.08] bg-black/20 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.11em] text-white/45">{memberCount}/{maxMembers} members</span>
           </div>
-          <span className="w-fit rounded-full border border-white/[0.08] bg-white/[0.035] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.13em] text-white/55">
-            {memberCount}/{maxMembers} members
-          </span>
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <Money label="Gang clean" value={cleanBalance} tone="clean" />
+            <Money label="Gang dirty" value={dirtyBalance} tone="dirty" />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Mini label="Working" value={String(currentWorking)} />
+            <Mini label="Loyalty" value={`${averageLoyalty}%`} />
+            <Mini label="Storage" value={stockValue.toLocaleString('en-US')} />
+            <Mini label="Reputation" value={battleReputation.toLocaleString('en-US')} />
+          </div>
         </div>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <MoneyCard label="Gang clean" value={cleanBalance} tone="clean" />
-          <MoneyCard label="Gang dirty" value={dirtyBalance} tone="dirty" />
-        </div>
-      </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Working" value={String(currentWorking)} />
-        <StatCard label="Average loyalty" value={`${averageLoyalty}%`} />
-        <StatCard label="Storage value" value={`${stockValue.toLocaleString('en-US')} $`} />
-        <StatCard label="Battle reputation" value={battleReputation.toLocaleString('en-US')} />
-      </section>
-
-      <section className="game-panel-soft p-5 sm:p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="section-kicker">Next level</p>
-            <h2 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">{upgradeCost ? 'Upgrade requirements' : 'Maximum level'}</h2>
+        <div className="game-panel p-5 sm:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="section-kicker">Next level</p>
+              <h2 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">{nextLevel ? `Upgrade to ${nextLevel}` : 'Maximum level reached'}</h2>
+            </div>
+            {upgradeCost ? <button type="button" disabled={!canUpgrade} onClick={onUpgrade} className="btn-primary rounded-xl px-4 py-2.5 text-[10px] disabled:cursor-not-allowed disabled:opacity-30">Upgrade Gang</button> : null}
           </div>
           {upgradeCost ? (
-            <button type="button" onClick={onUpgrade} className={`rounded-xl px-5 py-3 text-xs font-black uppercase tracking-[0.12em] ${canUpgrade ? 'btn-primary' : 'btn-ghost'}`}>
-              Upgrade gang
-            </button>
-          ) : null}
+            <div className="mt-5 space-y-3">
+              <Requirement label="Dirty" current={dirtyBalance} required={upgradeCost.dirtyCash} />
+              <Requirement label="Leaves" current={resources.frunze} required={upgradeCost.leaves} />
+              <Requirement label="White" current={resources.white} required={upgradeCost.white} />
+              <Requirement label="Blue" current={resources.blue} required={upgradeCost.blue} />
+            </div>
+          ) : <div className="mt-6 rounded-xl border border-white/[0.07] bg-black/20 px-4 py-8 text-center text-sm font-bold text-white/30">No further Gang upgrades.</div>}
         </div>
-        {upgradeCost ? (
-          <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Requirement label="Dirty" value={upgradeCost.dirtyCash} ready={dirtyBalance >= upgradeCost.dirtyCash} />
-            <Requirement label="Leaves" value={upgradeCost.leaves} ready={resources.frunze >= upgradeCost.leaves} />
-            <Requirement label="White" value={upgradeCost.white} ready={resources.white >= upgradeCost.white} />
-            <Requirement label="Blue" value={upgradeCost.blue} ready={resources.blue >= upgradeCost.blue} />
-          </div>
-        ) : null}
       </section>
-
       <GangActivityLog entries={activityLog} />
     </div>
   );
 }
 
-function MoneyCard({ label, value, tone }: { label: string; value: number; tone: 'clean' | 'dirty' }) {
-  const toneClass = tone === 'clean'
-    ? 'border-emerald-300/15 bg-emerald-400/[0.055] text-emerald-100'
-    : 'border-amber-300/15 bg-amber-400/[0.055] text-amber-100';
-  return (
-    <div className={`rounded-[22px] border p-5 ${toneClass}`}>
-      <p className="text-[9px] font-black uppercase tracking-[0.17em] opacity-55">{label}</p>
-      <p className="mt-3 text-3xl font-black tracking-[-0.045em]">{value.toLocaleString('en-US')} $</p>
-    </div>
-  );
+function Money({ label, value, tone }: { label: string; value: number; tone: 'clean' | 'dirty' }) {
+  const className = tone === 'clean' ? 'border-emerald-300/12 bg-emerald-400/[0.045] text-emerald-100' : 'border-amber-300/12 bg-amber-400/[0.045] text-amber-100';
+  return <div className={`rounded-[18px] border p-4 ${className}`}><p className="text-[8px] font-black uppercase tracking-[0.13em] opacity-50">{label}</p><p className="mt-2 text-xl font-black tracking-[-0.03em]">{value.toLocaleString('en-US')} $</p></div>;
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="game-panel-soft p-4 text-center">
-      <p className="text-[9px] font-black uppercase tracking-[0.15em] text-white/25">{label}</p>
-      <p className="mt-2 text-lg font-black text-white">{value}</p>
-    </div>
-  );
+function Mini({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-xl border border-white/[0.07] bg-black/20 px-3 py-3"><p className="text-[8px] font-black uppercase tracking-[0.1em] text-white/25">{label}</p><p className="mt-1 truncate text-xs font-black text-white/72">{value}</p></div>;
 }
 
-function Requirement({ label, value, ready }: { label: string; value: number; ready: boolean }) {
+function Requirement({ label, current, required }: { label: string; current: number; required: number }) {
+  const percent = Math.max(0, Math.min(100, Math.round((current / Math.max(1, required)) * 100)));
+  const ready = current >= required;
   return (
-    <div className={`rounded-xl border px-3 py-3 ${ready ? 'border-emerald-300/15 bg-emerald-400/[0.045]' : 'border-white/[0.07] bg-black/20'}`}>
-      <p className="text-[8px] font-black uppercase tracking-[0.12em] text-white/28">{label}</p>
-      <p className={`mt-1 text-sm font-black ${ready ? 'text-emerald-100' : 'text-white/72'}`}>{value.toLocaleString('en-US')}</p>
+    <div>
+      <div className="flex items-center justify-between gap-3 text-[9px] font-black uppercase tracking-[0.1em]"><span className={ready ? 'text-emerald-100' : 'text-white/42'}>{label}</span><span className="text-white/50">{current.toLocaleString('en-US')} / {required.toLocaleString('en-US')}</span></div>
+      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-white/[0.07]"><div className={`h-full rounded-full ${ready ? 'bg-emerald-300' : 'bg-[var(--accent)]'}`} style={{ width: `${percent}%` }} /></div>
     </div>
   );
 }

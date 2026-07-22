@@ -38,16 +38,14 @@ function readGangData() {
 function applyServerGang(remote: ServerGangState) {
   const state = readStoredState() || {};
   const local = state.gangData && typeof state.gangData === 'object' ? state.gangData : {};
-  const removedEventMemberIds = new Set(
-    Array.isArray(local.removedEventMemberIds)
-      ? local.removedEventMemberIds.map((value: unknown) => String(value))
-      : [],
-  );
-  const members = Array.isArray(remote.members)
-    ? remote.members.filter((member) => !removedEventMemberIds.has(String(member?.id || '')))
-    : [];
+  const localVersion = Math.max(0, Math.floor(Number(local.stateVersion || 0)));
+  const remoteVersion = Math.max(0, Math.floor(Number(remote.stateVersion || 0)));
+  if (remoteVersion < localVersion) return local;
+  const removedEventMemberIds = new Set(Array.isArray(local.removedEventMemberIds) ? local.removedEventMemberIds.map((value: unknown) => String(value)) : []);
+  const members = Array.isArray(remote.members) ? remote.members.filter((member) => !removedEventMemberIds.has(String(member?.id || ''))) : [];
   const nextGangData = {
     ...local,
+    stateVersion: remoteVersion,
     name: remote.name,
     levelIndex: remote.gangLevelIndex,
     members,
@@ -74,8 +72,7 @@ function applyServerGang(remote: ServerGangState) {
     recruitmentBoard: Array.isArray(local.recruitmentBoard) ? local.recruitmentBoard : [],
     removedEventMemberIds: [...removedEventMemberIds],
   };
-  const nextState = { ...state, gangData: nextGangData };
-  writeStoredState(nextState);
+  writeStoredState({ ...state, gangData: nextGangData });
   window.dispatchEvent(new Event('cityflow-gang-updated'));
   return nextGangData;
 }
@@ -84,21 +81,27 @@ export default function GangSyncBridge() {
   const { playerId } = usePlayer();
   const lastPayloadRef = useRef('');
   const initializedRef = useRef(false);
+  const syncingRef = useRef(false);
 
   useEffect(() => {
     if (!playerId) return;
     let cancelled = false;
 
     const sync = async () => {
-      if (!initializedRef.current || cancelled) return;
+      if (!initializedRef.current || cancelled || syncingRef.current) return;
       const gangData = readGangData();
       if (!gangData) return;
       const serialized = JSON.stringify(gangData);
       if (serialized === lastPayloadRef.current) return;
-      const payload = await syncGangState(playerId, gangData);
-      if (cancelled) return;
-      const merged = applyServerGang(payload.gang);
-      lastPayloadRef.current = JSON.stringify(merged);
+      syncingRef.current = true;
+      try {
+        const payload = await syncGangState(playerId, gangData);
+        if (cancelled) return;
+        const applied = applyServerGang(payload.gang);
+        lastPayloadRef.current = JSON.stringify(applied);
+      } finally {
+        syncingRef.current = false;
+      }
     };
 
     const initialize = async () => {
@@ -106,19 +109,25 @@ export default function GangSyncBridge() {
         const remote = await fetchGangState(playerId);
         if (cancelled) return;
         if (remote?.name) {
-          const merged = applyServerGang(remote);
-          lastPayloadRef.current = JSON.stringify(merged);
+          const applied = applyServerGang(remote);
+          lastPayloadRef.current = JSON.stringify(applied);
+          initializedRef.current = true;
+          return;
         }
       } catch {}
       initializedRef.current = true;
       await sync().catch(() => {});
     };
 
-    initialize().catch(() => {});
-    const timer = window.setInterval(() => sync().catch(() => {}), 5000);
+    const handleLocalChange = () => { void sync().catch(() => {}); };
+    window.addEventListener('cityflow-gang-local-change', handleLocalChange);
+    void initialize();
+    const timer = window.setInterval(() => void sync().catch(() => {}), 5000);
     return () => {
       cancelled = true;
       initializedRef.current = false;
+      syncingRef.current = false;
+      window.removeEventListener('cityflow-gang-local-change', handleLocalChange);
       window.clearInterval(timer);
     };
   }, [playerId]);
