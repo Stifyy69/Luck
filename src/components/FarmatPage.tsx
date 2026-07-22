@@ -407,14 +407,27 @@ export default function FarmatPage() {
   );
 }
 
-function StatCard({ label, value, money = false }: { label: string; value: number; money?: boolean }) {
+function HeroStat({ label, value, money = false }: { label: string; value: string; money?: boolean }) {
+  return <div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-[0.15em] text-white/25">{label}</p><p className={`mt-1 truncate text-sm font-black ${money ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p></div>;
+}
+
+function ProcessStat({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 text-center"><p className="text-[9px] font-black uppercase tracking-[0.12em] text-white/24">{label}</p><p className="mt-1 truncate text-xs font-black text-white">{value}</p></div>;
+}
+
+function SaleCard({ title, subtitle, value, status, disabled, onClick, warning = false, money = false }: { title: string; subtitle: string; value: string; status: string; disabled: boolean; onClick: () => void; warning?: boolean; money?: boolean }) {
   return (
-    <div className="rounded-xl border border-white/15 bg-black/25 p-3 text-center">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-white/45">{label}</p>
-      <p className="mt-1 text-xl font-black text-white">
-        {value.toLocaleString('ro-RO')}
-        {money ? ' $' : ''}
-      </p>
-    </div>
+    <article className="game-card p-5">
+      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/27">Sales route</p>
+      <h3 className="mt-1 text-xl font-black text-white">{title}</h3>
+      <p className="mt-2 min-h-[36px] text-xs leading-relaxed text-white/42">{subtitle}</p>
+      <p className={`mt-4 text-lg font-black ${money ? 'text-[var(--money)]' : warning ? 'text-[var(--warning)]' : 'text-[var(--accent)]'}`}>{value}</p>
+      <p className="mt-1 text-xs text-white/35">{status}</p>
+      <button type="button" onClick={onClick} disabled={disabled} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-35">Run route</button>
+    </article>
   );
+}
+
+function ModalStat({ label, value, money = false }: { label: string; value: string; money?: boolean }) {
+  return <div className="rounded-[17px] border border-white/[0.07] bg-black/20 p-4"><p className="text-[9px] font-black uppercase tracking-[0.13em] text-white/25">{label}</p><p className={`mt-1 text-base font-black ${money ? 'text-[var(--money)]' : 'text-white'}`}>{value}</p></div>;
 }

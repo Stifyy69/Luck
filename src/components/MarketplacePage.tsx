@@ -105,9 +105,9 @@ export default function MarketplacePage() {
           </div>
 
           <div className="mt-6 hud-card p-4">
-            <p className="text-sm font-black uppercase tracking-[0.12em] text-white/65">Inventar (marketplace)</p>
+            <p className="text-sm font-black uppercase tracking-[0.12em] text-white/65">Inventory (marketplace)</p>
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {inventory.length === 0 ? <p className="text-sm text-white/60">Inventarul este gol.</p> : inventory.map((item) => (
+              {inventory.length === 0 ? <p className="text-sm text-white/60">Inventoryul este gol.</p> : inventory.map((item) => (
                 <div key={item.item_key} className="rounded-lg border border-white/10 bg-black/20 p-2">
                   <p className="text-sm font-bold">{item.item_name}</p>
                   <p className="text-xs text-white/60">{item.item_type}</p>

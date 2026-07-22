@@ -1,0 +1,32 @@
+import type { GangActivityLogEntry } from './gangActivity';
+import type { GangBattleHistoryEntry } from './gangBattles';
+import type { GangMember } from './gangMembers';
+import type { GangLevelIndex } from './gangProgression';
+
+export type GangData = {
+  name: string;
+  levelIndex: GangLevelIndex;
+  members: GangMember[];
+  recruitmentBoard: GangMember[];
+  frunze: number;
+  white: number;
+  blue: number;
+  sulfur: number;
+  ironOre: number;
+  gunpowder: number;
+  steel: number;
+  cleanBalance: number;
+  dirtyBalance: number;
+  dirtyEarned: number;
+  lastLeaveAt: number;
+  onlineNow: number;
+  dismissalPressure: number;
+  lastDismissalAt: number;
+  removedEventMemberIds: string[];
+  serverUpdatedAt: string | null;
+  activityLog: GangActivityLogEntry[];
+  battleHistory: GangBattleHistoryEntry[];
+  battleReputation: number;
+  defensiveCrewIds: string[];
+  battleBoardSeed: number;
+};
