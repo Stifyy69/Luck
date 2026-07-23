@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePlatformStatus } from '../../context/PlatformStatusContext';
 import { usePlayer } from '../../hooks/usePlayer';
+import { subscribeCareerRewards, type CareerRewardReceipt } from '../../lib/careerRewards';
 import { CITY_UNLOCKS, readPlayerCityProgress, type CityProgress, type CityUnlock } from '../../lib/cityProgress';
 import { fetchCityProgress, subscribeCityProgress, type CityProgressEventDetail } from '../../lib/cityProgressApi';
 import AccountHud from '../AccountHud';
@@ -24,16 +25,24 @@ function formatRemaining(milliseconds: number) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+function formatMoney(receipt: CareerRewardReceipt) {
+  if (typeof receipt.money !== 'number') return null;
+  const suffix = receipt.moneyType === 'dirty' ? 'dirty' : receipt.moneyType === 'carry' ? 'carry value' : 'clean';
+  return `+${receipt.money.toLocaleString('en-US')} $ ${suffix}`;
+}
+
 export default function CityProgressHud({ currentLabel, onNavigate }: CityProgressHudProps) {
   const { playerId, player } = usePlayer();
   const { status } = usePlatformStatus();
   const playerProgress = readPlayerCityProgress(player);
   const [progress, setProgress] = useState<CityProgress | null>(playerProgress);
   const [xpToast, setXpToast] = useState<number | null>(null);
+  const [careerReceipt, setCareerReceipt] = useState<CareerRewardReceipt | null>(null);
   const [levelUp, setLevelUp] = useState<LevelUpState | null>(null);
   const initializedRef = useRef(false);
   const previousLevelRef = useRef<number | null>(playerProgress?.level || null);
   const previousXpRef = useRef<number | null>(playerProgress?.xp || null);
+  const careerTimerRef = useRef<number | null>(null);
 
   const applyProgress = (detail: CityProgressEventDetail) => {
     const next = detail.progress;
@@ -71,6 +80,16 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
 
   useEffect(() => subscribeCityProgress(applyProgress), []);
 
+  useEffect(() => subscribeCareerRewards((receipt) => {
+    if (careerTimerRef.current) window.clearTimeout(careerTimerRef.current);
+    setCareerReceipt(receipt);
+    careerTimerRef.current = window.setTimeout(() => setCareerReceipt(null), receipt.detail ? 4800 : 3400);
+  }), []);
+
+  useEffect(() => () => {
+    if (careerTimerRef.current) window.clearTimeout(careerTimerRef.current);
+  }, []);
+
   useEffect(() => {
     if (!playerId) return;
     let cancelled = false;
@@ -91,6 +110,7 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
   }, [progress]);
 
   const mainUnlock = levelUp?.unlocks?.[0] || null;
+  const receiptMoney = careerReceipt ? formatMoney(careerReceipt) : null;
 
   return (
     <>
@@ -112,10 +132,7 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
               </div>
 
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
-                <div
-                  className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-700 ease-out"
-                  style={{ width: `${progress?.progressPercent || 0}%` }}
-                />
+                <div className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-700 ease-out" style={{ width: `${progress?.progressPercent || 0}%` }} />
               </div>
 
               <div className="mt-1.5 flex min-w-0 items-center justify-between gap-3">
@@ -137,6 +154,22 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
         {xpToast ? (
           <div className="animate-toast-in pointer-events-none absolute left-1/2 top-[72px] -translate-x-1/2 rounded-full border border-[rgba(211,255,81,0.25)] bg-[#11170d]/95 px-4 py-2 text-[11px] font-black uppercase tracking-[0.13em] text-[var(--accent)] shadow-2xl">
             +{xpToast} City XP
+          </div>
+        ) : null}
+
+        {careerReceipt ? (
+          <div className="animate-toast-in pointer-events-none absolute left-1/2 top-[112px] w-[calc(100%-1rem)] max-w-lg -translate-x-1/2 rounded-[18px] border border-white/[0.1] bg-[#0b100c]/97 px-4 py-3 shadow-2xl backdrop-blur-xl">
+            <div className="flex items-start gap-3">
+              <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_14px_rgba(211,255,81,0.42)]" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/30">{careerReceipt.title}</p>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm font-black">
+                  {receiptMoney ? <span className={careerReceipt.moneyType === 'dirty' ? 'text-amber-100' : careerReceipt.moneyType === 'carry' ? 'text-sky-100' : 'text-[var(--money)]'}>{receiptMoney}</span> : null}
+                  {typeof careerReceipt.careerXp === 'number' ? <span className="text-[var(--accent)]">+{careerReceipt.careerXp} {careerReceipt.careerLabel || 'Career XP'}</span> : null}
+                </div>
+                {careerReceipt.detail ? <p className="mt-1 text-[10px] leading-4 text-white/38">{careerReceipt.detail}</p> : null}
+              </div>
+            </div>
           </div>
         ) : null}
       </div>
@@ -169,9 +202,7 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
             </div>
 
             <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
-              {mainUnlock ? (
-                <button type="button" onClick={() => { setLevelUp(null); onNavigate(mainUnlock.path); }} className="btn-primary rounded-2xl px-7 py-3.5 text-sm">View {mainUnlock.label}</button>
-              ) : null}
+              {mainUnlock ? <button type="button" onClick={() => { setLevelUp(null); onNavigate(mainUnlock.path); }} className="btn-primary rounded-2xl px-7 py-3.5 text-sm">View {mainUnlock.label}</button> : null}
               <button type="button" onClick={() => setLevelUp(null)} className="btn-ghost rounded-2xl px-7 py-3.5 text-sm">Continue</button>
             </div>
           </div>
