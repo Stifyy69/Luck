@@ -10,6 +10,15 @@ function sequence(...values) {
   return () => values[Math.min(index++, values.length - 1)];
 }
 
+function rouletteRouteSource() {
+  const serverSource = fs.readFileSync(path.join(__dirname, '../../server.cjs'), 'utf8');
+  const start = serverSource.indexOf("app.post('/api/roulette/spin'");
+  const end = serverSource.indexOf("app.post('/api/mystery/open'", start);
+  assert.notEqual(start, -1, 'Roulette spin route is missing');
+  assert.notEqual(end, -1, 'Roulette route boundary is missing');
+  return serverSource.slice(start, end);
+}
+
 test('weighted selection reaches rewards in every tier', () => {
   assert.equal(pickWeightedReward(sequence(0.01, 0)).rewardType, 'SOUVENIR_VEHICLE');
   assert.equal(pickWeightedReward(sequence(0.05, 0)).rewardType, 'VIP_GOLD');
@@ -39,4 +48,19 @@ test('Roulette V2 keeps the exact server reward pool and unchanged tier weights'
   assert.match(rouletteUi, /spinResult\.player\.cleanMoney/);
   assert.match(rouletteUi, /spinResult\.player\.flowCoins/);
   assert.match(rouletteUi, /spinResult\.player\.rouletteFragments/);
+});
+
+test('every Roulette reward category has an atomic server grant path', () => {
+  const route = rouletteRouteSource();
+  assert.match(route, /clean_money = clean_money - \$1/);
+  assert.match(route, /flow_coins = flow_coins - \$1/);
+  assert.match(route, /roulette_fragments = roulette_fragments - \$1/);
+  assert.match(route, /clean_money = clean_money \+ \$1/);
+  assert.match(route, /flow_coins = flow_coins \+ \$1/);
+  assert.match(route, /roulette_fragments = roulette_fragments \+ \$1/);
+  assert.match(route, /INSERT INTO owned_vehicles/);
+  assert.match(route, /purchase_source/);
+  assert.match(route, /'ROULETTE'/);
+  assert.match(route, /addInventoryItem\(db, playerId, reward\.rewardType, payout, metadata\)/);
+  assert.match(route, /SELECT clean_money, flow_coins, roulette_fragments FROM players/);
 });
