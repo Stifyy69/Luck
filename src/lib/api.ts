@@ -38,7 +38,7 @@ import {
 } from './careerRewards';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
-export type SessionUser = { id: number; username: string; email: string; playerId: string; isGuest?: boolean };
+export type SessionUser = { id: number; username: string; email: string; playerId: string; cityId: number | null; isGuest?: boolean };
 
 async function resolveApiError(res: Response): Promise<string> {
   try {

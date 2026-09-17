@@ -20,7 +20,7 @@ export default function MobileDock({ path, onNavigate, onOpenMenu }: MobileDockP
       {ITEMS.map((item) => {
         const active = item.path === '/gangs' ? path.startsWith('/gangs') : path === item.path;
         return (
-          <button key={item.path} type="button" className={active ? 'active' : ''} onClick={() => onNavigate(item.path)} aria-current={active ? 'page' : undefined}>
+          <button key={item.path} type="button" className={active ? 'active' : ''} onClick={() => onNavigate(item.path)} aria-current={active ? 'page' : undefined} data-tutorial-target={item.path === '/pizzer' ? 'pizzer-nav' : undefined}>
             <CityIcon name={item.icon} className="h-[18px] w-[18px]" />
             <span>{item.label}</span>
           </button>

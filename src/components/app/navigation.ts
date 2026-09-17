@@ -3,7 +3,7 @@ import type { CityIconName } from '../ui/CityIcon';
 
 export type RoutePath =
   | '/city' | '/ruleta' | '/farmat' | '/sleep' | '/pilot' | '/pizzer' | '/fisher'
-  | '/showroom' | '/inventory' | '/owned' | '/profile' | '/cnn' | '/leaderboards' | '/adminpanelv2'
+  | '/showroom' | '/inventory' | '/owned' | '/profile' | '/account' | '/cnn' | '/leaderboards' | '/adminpanelv2'
   | '/gangs' | '/gangs/work' | '/gangs/members' | '/gangs/recruitment' | '/gangs/storage' | '/gangs/finance' | '/gangs/battles';
 
 export type NavItem = {
@@ -59,6 +59,7 @@ export const NAV_GROUPS: NavGroup[] = [
 const VALID_ROUTES = NAV_GROUPS.flatMap((group) => group.items.map((item) => item.path)).concat([
   '/city',
   '/profile',
+  '/account',
   '/adminpanelv2',
 ] as RoutePath[]);
 
@@ -79,6 +80,7 @@ export function accessPathForRoute(path: RoutePath) {
 export function labelForRoute(path: RoutePath) {
   if (path === '/city') return 'City Hub';
   if (path === '/profile') return 'My Profile';
+  if (path === '/account') return 'Account';
   if (path === '/adminpanelv2') return 'Control Center';
   return NAV_GROUPS.flatMap((group) => group.items).find((item) => item.path === path)?.label || 'CityFlow';
 }

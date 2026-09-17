@@ -33,14 +33,19 @@ const InventoryPage = lazy(() => import('./components/InventoryPage'));
 const MyProfilePage = lazy(() => import('./components/MyProfilePage'));
 const CityHubPage = lazy(() => import('./components/CityHubPage'));
 const LeaderboardsPage = lazy(() => import('./components/LeaderboardsPage'));
+const AccountPage = lazy(() => import('./components/AccountPage'));
 
 export default function App() {
-  const { player } = usePlayer();
+  const { player, session } = usePlayer();
   const { status } = usePlatformStatus();
   const playerCityProgress = readPlayerCityProgress(player);
   const [cityProgress, setCityProgress] = useState<CityProgress | null>(playerCityProgress);
   const [path, setPath] = useState<RoutePath>(normalizePath(window.location.pathname || '/city'));
   const [menuOpen, setMenuOpen] = useState(false);
+  const tutorial = cityProgress?.tutorial;
+  const accountRequired = Boolean(session?.isGuest && tutorial && (
+    tutorial.completedAt || tutorial.skippedAt
+  ));
 
   useEffect(() => {
     const nextPath = normalizePath(window.location.pathname || path);
@@ -82,6 +87,7 @@ export default function App() {
   }, [cityProgress, status.vip.active]);
 
   const goTo = (nextPath: RoutePath) => {
+    if (accountRequired && nextPath !== '/account') nextPath = '/account';
     if (nextPath === path) return;
     window.history.pushState({}, '', nextPath);
     setPath(nextPath);
@@ -90,6 +96,12 @@ export default function App() {
   const navigateLoose = (nextPath: string) => goTo(normalizePath(nextPath));
 
   const currentLabel = useMemo(() => labelForRoute(path), [path]);
+
+  useEffect(() => {
+    if (!accountRequired || path === '/account') return;
+    window.history.replaceState({}, '', '/account');
+    setPath('/account');
+  }, [accountRequired, path]);
 
   const renderPage = () => {
     const accessPath = accessPathForRoute(path);
@@ -120,12 +132,17 @@ export default function App() {
     if (path === '/showroom') return <ShowroomPage />;
     if (path === '/inventory' || path === '/owned') return <InventoryPage />;
     if (path === '/profile') return <MyProfilePage />;
+    if (path === '/account') return <AccountPage forced={accountRequired} onNavigate={navigateLoose} />;
     if (path.startsWith('/gangs')) return <GangsPage section={GANG_ROUTES[path] || 'overview'} onNavigate={navigateLoose} />;
     if (path === '/leaderboards') return <LeaderboardsPage />;
     if (path === '/cnn') return <CNNMarketplace />;
     if (path === '/adminpanelv2') return <AdminPanelV2 />;
     return <RouletteDemo />;
   };
+
+  if (path === '/account') {
+    return <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>;
+  }
 
   return (
     <div className="relative min-h-screen">

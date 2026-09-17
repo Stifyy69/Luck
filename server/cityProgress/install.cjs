@@ -112,17 +112,6 @@ function installCityProgress(app, express) {
     }
   });
 
-  app.post('/api/city/tutorial/replay', async (req, res) => {
-    try {
-      const playerId = playerIdFromRequest(req);
-      if (!playerId) return res.status(400).json({ error: 'playerId required' });
-      const progress = await updateTutorial(playerId, 'replay');
-      return res.json({ ok: true, progress });
-    } catch (error) {
-      return res.status(500).json({ error: error instanceof Error ? error.message : 'tutorial replay failed' });
-    }
-  });
-
   app.use('/api/fisher', requirePlayer);
   app.use('/api/pilot', requirePlayer);
 
@@ -159,11 +148,6 @@ async function handleResponse(req, payload) {
   if (path === '/api/bootstrap' && payload && typeof payload === 'object' && !payload.error) {
     const progress = await getCityProgress(playerId);
     return { ...payload, cityProgress: progress, careerAccess: progress.careerAccess };
-  }
-
-  if (path === '/api/player/profile/name' && !payload?.error) {
-    const progress = await advanceTutorialAtLeast(playerId, 2);
-    return { ...payload, cityProgress: progress };
   }
 
   if (path === '/api/pizzer/shift/start' && !payload?.error) {

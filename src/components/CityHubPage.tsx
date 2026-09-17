@@ -8,7 +8,6 @@ import {
   type CityActivityEntry,
   type CityActivityTone,
 } from '../lib/cityActivity';
-import { replayCityTutorial } from '../lib/cityProgressApi';
 import { careerAccessForPath, readPlayerCityProgress } from '../lib/cityProgress';
 import type { FisherStateResponse, PilotStateResponse, PizzerStateResponse } from '../types/game';
 import CityIcon, { type CityIconName } from './ui/CityIcon';
@@ -61,7 +60,7 @@ function toneClasses(tone: CityActivityTone) {
 }
 
 export default function CityHubPage({ onNavigate }: CityHubPageProps) {
-  const { playerId, player, loading: playerLoading, error: playerError, refresh } = usePlayer();
+  const { playerId, player, error: playerError } = usePlayer();
   const cityProgress = readPlayerCityProgress(player);
   const [pizzer, setPizzer] = useState<PizzerStateResponse | null>(null);
   const [pilot, setPilot] = useState<PilotStateResponse | null>(null);
@@ -69,7 +68,6 @@ export default function CityHubPage({ onNavigate }: CityHubPageProps) {
   const [activities, setActivities] = useState<CityActivityEntry[]>([]);
   const [loadingCareers, setLoadingCareers] = useState(true);
   const [careerError, setCareerError] = useState<string | null>(null);
-  const [tutorialBusy, setTutorialBusy] = useState(false);
 
   const fisherUnlocked = Boolean(careerAccessForPath('/fisher', cityProgress)?.unlocked);
   const pilotUnlocked = Boolean(careerAccessForPath('/pilot', cityProgress)?.unlocked);
@@ -154,30 +152,16 @@ export default function CityHubPage({ onNavigate }: CityHubPageProps) {
     setActivities(readCityActivity(playerId));
   }, [fisher, pilot, pizzer, playerId]);
 
-  const displayName = String(player?.displayName || player?.playerId || 'Citizen');
+  const displayName = String(player?.displayName || 'Unknown');
   const greeting = useMemo(() => greetingForHour(new Date().getHours()), []);
   const deliveries = Number(pizzer?.progress.totalDeliveries || 0);
   const courierLevel = Number(pizzer?.progress.level || 1);
   const pilotLevel = Number(pilot?.progress.level || 1);
   const fisherLevel = Number(fisher?.progress.level || 1);
-  const profileReady = Boolean(String(player?.displayName || '').trim());
   const firstDeliveryComplete = deliveries > 0;
   const currentVehicle = pizzer?.vehicleLabel || (courierLevel >= 34 ? 'Delivery Car' : courierLevel >= 17 ? 'Scooter Courier' : 'Bicycle Courier');
 
   const objective = useMemo<Objective>(() => {
-    if (!profileReady) {
-      return {
-        kicker: 'Identity required',
-        title: 'Choose your city name',
-        description: 'Your profile name appears across careers, rankings and future social systems.',
-        progress: 0,
-        progressLabel: 'Profile incomplete',
-        action: 'Open profile',
-        path: '/profile',
-        icon: 'profile',
-      };
-    }
-
     if (!firstDeliveryComplete) {
       return {
         kicker: 'First city objective',
@@ -228,23 +212,7 @@ export default function CityHubPage({ onNavigate }: CityHubPageProps) {
       path: '/cnn',
       icon: 'market',
     };
-  }, [cityProgress, firstDeliveryComplete, pizzer?.shiftState, player, profileReady]);
-
-  const reload = () => {
-    refresh();
-    loadHub().catch(() => setCareerError('Career progress could not be loaded.'));
-  };
-
-  const replayTutorial = async () => {
-    if (tutorialBusy) return;
-    setTutorialBusy(true);
-    try {
-      await replayCityTutorial(playerId);
-      onNavigate('/city');
-    } finally {
-      setTutorialBusy(false);
-    }
-  };
+  }, [cityProgress, firstDeliveryComplete, pizzer?.shiftState, player]);
 
   return (
     <div className="min-h-screen px-4 pb-10 pt-6 sm:px-6 md:px-8 md:pb-12 md:pt-8">
@@ -264,10 +232,6 @@ export default function CityHubPage({ onNavigate }: CityHubPageProps) {
               <button type="button" onClick={() => onNavigate(objective.path)} className="btn-primary rounded-2xl px-6 py-3.5 text-sm">
                 <span className="inline-flex items-center gap-2">{objective.action}<CityIcon name="route" className="h-4 w-4" /></span>
               </button>
-              <button type="button" onClick={reload} disabled={playerLoading || loadingCareers} className="btn-ghost rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
-                <span className="inline-flex items-center gap-2"><CityIcon name="refresh" className="h-4 w-4" />Refresh city</span>
-              </button>
-              <button type="button" onClick={() => replayTutorial().catch(() => {})} disabled={tutorialBusy} className="btn-ghost rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">Replay tutorial</button>
             </div>
           </div>
 

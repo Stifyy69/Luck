@@ -42,7 +42,7 @@ export async function fetchCityProgress(playerId: string): Promise<CityProgress>
   return payload.progress;
 }
 
-async function tutorialAction(playerId: string, action: 'advance' | 'complete' | 'skip' | 'replay', step?: number) {
+async function tutorialAction(playerId: string, action: 'advance' | 'complete' | 'skip', step?: number) {
   const payload = await request<{ progress: CityProgress }>(`/api/city/tutorial/${action}`, {
     method: 'POST',
     body: JSON.stringify({ playerId, ...(typeof step === 'number' ? { step } : {}) }),
@@ -54,4 +54,3 @@ async function tutorialAction(playerId: string, action: 'advance' | 'complete' |
 export const advanceCityTutorial = (playerId: string, step?: number) => tutorialAction(playerId, 'advance', step);
 export const completeCityTutorial = (playerId: string) => tutorialAction(playerId, 'complete');
 export const skipCityTutorial = (playerId: string) => tutorialAction(playerId, 'skip');
-export const replayCityTutorial = (playerId: string) => tutorialAction(playerId, 'replay');

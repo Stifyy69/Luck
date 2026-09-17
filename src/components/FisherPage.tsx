@@ -97,7 +97,7 @@ export default function FisherPage() {
     return () => window.clearInterval(timer);
   }, [state, loadState]);
 
-  const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
+  const displayName = useMemo(() => String(player?.displayName || 'Unknown'), [player]);
   const readableState = STATE_LABELS[String(state?.shiftState || 'IDLE')] || String(state?.shiftState || 'Idle').replace(/_/g, ' ');
   const nextCarryCapacity = Math.min(100, Number(state?.carryCapacityKg ?? 20) + 5);
   const canUpgradeCarry = state?.shiftState === 'IDLE' && Number(state?.carryCapacityKg ?? 20) < 100;

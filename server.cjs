@@ -385,6 +385,17 @@ async function initDb() {
 
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS player_id TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_guest BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS city_public_id_seq START WITH 100 MINVALUE 100;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS city_id BIGINT;`);
+  await pool.query(`
+    SELECT setval(
+      'city_public_id_seq',
+      COALESCE((SELECT MAX(city_id) FROM users WHERE city_id IS NOT NULL), 100),
+      EXISTS(SELECT 1 FROM users WHERE city_id IS NOT NULL)
+    );
+  `);
+  await pool.query(`UPDATE users SET city_id = nextval('city_public_id_seq') WHERE is_guest = FALSE AND city_id IS NULL;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_city_id_idx ON users(city_id) WHERE city_id IS NOT NULL;`);
   await pool.query(`UPDATE users SET player_id = COALESCE(player_id, 'player_' || id::text) WHERE player_id IS NULL OR player_id = '';`);
   await pool.query(`ALTER TABLE users ALTER COLUMN player_id SET NOT NULL;`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_player_id_idx ON users(player_id);`);
@@ -2382,16 +2393,20 @@ app.post('/api/activity/heartbeat', requireDb, async (req, res) => {
 
 app.post('/api/auth/register', authRateLimit, requireDb, async (req, res) => {
   try {
-    const { username, email, password, passwordConfirm } = req.body || {};
-    if (!username || !email || !password) return res.status(400).json({ error: 'missing fields' });
+    const { username, email, password, passwordConfirm, displayName } = req.body || {};
+    if (!username || !email || !password || !displayName) return res.status(400).json({ error: 'missing fields' });
     if (password !== passwordConfirm) return res.status(400).json({ error: 'password mismatch' });
     const safeUsername = String(username).trim();
     const safeEmail = String(email).trim().toLowerCase();
+    const safeDisplayName = String(displayName).trim().slice(0, 32);
     if (!/^[a-zA-Z0-9_]{3,24}$/.test(safeUsername)) {
       return res.status(400).json({ error: 'username must contain 3-24 letters, numbers or underscores' });
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail) || safeEmail.length > 254) {
       return res.status(400).json({ error: 'invalid email' });
+    }
+    if (safeDisplayName.length < 2) {
+      return res.status(400).json({ error: 'display name must contain at least 2 characters' });
     }
     validatePassword(password);
     const passwordHash = await hashPassword(password);
@@ -2400,26 +2415,30 @@ app.post('/api/auth/register', authRateLimit, requireDb, async (req, res) => {
     const user = await withTransaction(async (db) => {
       if (existingSession?.isGuest) {
         const upgraded = await db.query(
-          `UPDATE users SET username = $2, email = $3, password = $4, is_guest = FALSE
+          `UPDATE users SET username = $2, email = $3, password = $4, is_guest = FALSE, city_id = nextval('city_public_id_seq')
            WHERE id = $1 AND is_guest = TRUE
-           RETURNING id, username, email, player_id`,
+           RETURNING id, username, email, player_id, city_id`,
           [existingSession.id, safeUsername, safeEmail, passwordHash],
         );
         if (!upgraded.rows[0]) throw new Error('guest account upgrade failed');
+        await db.query(`UPDATE players SET display_name = $2, updated_at = NOW() WHERE player_id = $1`, [existingSession.playerId, safeDisplayName]);
         return upgraded.rows[0];
       }
       const inserted = await db.query(
-        `INSERT INTO users (username, email, password, player_id, is_guest) VALUES ($1, $2, $3, $4, FALSE) RETURNING id, username, email, player_id`,
+        `INSERT INTO users (username, email, password, player_id, is_guest, city_id)
+         VALUES ($1, $2, $3, $4, FALSE, nextval('city_public_id_seq'))
+         RETURNING id, username, email, player_id, city_id`,
         [safeUsername, safeEmail, passwordHash, playerId],
       );
       const created = inserted.rows[0];
       await db.query(`INSERT INTO user_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [created.id]);
       await ensurePlayer(db, created.player_id);
+      await db.query(`UPDATE players SET display_name = $2, updated_at = NOW() WHERE player_id = $1`, [created.player_id, safeDisplayName]);
       return created;
     });
 
     createUserSession(res, Number(user.id));
-    return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
+    return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id, cityId: Number(user.city_id), isGuest: false } });
   } catch (error) {
     if (error?.code === '23505') return res.status(409).json({ error: 'username or email already exists' });
     return res.status(400).json({ error: error instanceof Error ? error.message : 'register failed' });
@@ -2446,7 +2465,7 @@ app.post('/api/auth/guest', authRateLimit, requireDb, async (req, res) => {
       return inserted.rows[0];
     });
     createUserSession(res, Number(user.id));
-    return res.json({ ok: true, user: { id: Number(user.id), username: user.username, email: user.email, playerId: user.player_id, isGuest: true } });
+    return res.json({ ok: true, user: { id: Number(user.id), username: user.username, email: user.email, playerId: user.player_id, cityId: null, isGuest: true } });
   } catch (error) {
     return res.status(500).json({ error: 'guest session failed' });
   }
@@ -2455,7 +2474,7 @@ app.post('/api/auth/guest', authRateLimit, requireDb, async (req, res) => {
 app.post('/api/auth/login', authRateLimit, requireDb, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
-  const result = await pool.query(`SELECT id, username, email, password, player_id FROM users WHERE username = $1`, [String(username).trim()]);
+  const result = await pool.query(`SELECT id, username, email, password, player_id, city_id FROM users WHERE username = $1 AND is_guest = FALSE`, [String(username).trim()]);
   const user = result.rows[0];
   if (!user) {
     await hashPassword(String(password).slice(0, 200).padEnd(10, 'x'));
@@ -2470,7 +2489,7 @@ app.post('/api/auth/login', authRateLimit, requireDb, async (req, res) => {
 
   createUserSession(res, Number(user.id));
 
-  return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id } });
+  return res.json({ ok: true, user: { id: user.id, username: user.username, email: user.email, playerId: user.player_id, cityId: Number(user.city_id), isGuest: false } });
 });
 
 app.post('/api/auth/logout', (_req, res) => {
@@ -3043,7 +3062,7 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
     const usedSlots = vehiclesRes.rows.length;
     const playerState = {
       playerId: player.player_id,
-      displayName: player.display_name || player.player_id,
+      displayName: player.display_name || 'Unknown',
       cleanMoney: Number(player.clean_money),
       flowCoins: player.flow_coins,
       rouletteFragments: player.roulette_fragments,
@@ -3088,7 +3107,7 @@ app.get('/api/player/profile', requireDb, async (req, res) => {
     const { playerId } = req.query;
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
     const player = await ensurePlayer(pool, playerId);
-    res.json({ playerId: player.player_id, displayName: player.display_name || player.player_id });
+    res.json({ playerId: player.player_id, displayName: player.display_name || 'Unknown' });
   } catch (error) {
     res.status(500).json({ error: 'profile fetch failed' });
   }

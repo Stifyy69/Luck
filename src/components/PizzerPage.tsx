@@ -156,7 +156,7 @@ export default function PizzerPage() {
   const canPack = state?.shiftState === 'PACKING_ORDER';
   const canDeliver = state?.shiftState === 'DELIVERY_ACTIVE';
   const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
-  const displayName = useMemo(() => String(player?.displayName || 'Player'), [player]);
+  const displayName = useMemo(() => String(player?.displayName || 'Unknown'), [player]);
   const currentVehicle = useMemo(() => fleetVehicleForLevel(progress?.level ?? 1), [progress?.level]);
   const fleetPreview = useMemo(
     () => FLEET.find((vehicle) => vehicle.id === fleetPreviewId) || currentVehicle,
@@ -355,6 +355,7 @@ export default function PizzerPage() {
 
             <button
               type="button"
+              data-tutorial-target="pizzer-start"
               onClick={() => chooseNextRun().catch(() => {})}
               disabled={busy || underRepair || canPack || canDeliver}
               className="btn-primary mt-7 min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-35"
@@ -492,7 +493,7 @@ export default function PizzerPage() {
                     </div>
                   </div>
 
-                  <button type="button" onClick={() => selectOrder(option).catch(() => {})} disabled={busy} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-40">
+                  <button type="button" data-tutorial-target="pizzer-order" onClick={() => selectOrder(option).catch(() => {})} disabled={busy} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-40">
                     Accept and prepare
                   </button>
                 </article>
@@ -578,7 +579,7 @@ export default function PizzerPage() {
                   <div className="mt-5">
                     <QualityBar label="Vehicle condition" value={100 - active.damagePercent} tone={active.damagePercent >= 30 ? 'danger' : 'good'} />
                   </div>
-                  <button type="button" onClick={() => handover().catch(() => {})} disabled={busy || underRepair || !canDeliver} className="btn-primary mt-6 w-full rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
+                  <button type="button" data-tutorial-target="pizzer-handover" onClick={() => handover().catch(() => {})} disabled={busy || underRepair || !canDeliver} className="btn-primary mt-6 w-full rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
                     Complete delivery
                   </button>
                 </div>

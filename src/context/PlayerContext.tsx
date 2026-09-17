@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, type SessionUser } from '../lib/api';
 import type { PlayerState } from '../types/game';
 
 const PLAYER_KEY = 'luck_player_id_v1';
@@ -21,6 +21,7 @@ export function getPlayerId(): string {
 export interface PlayerContextValue {
   playerId: string;
   player: PlayerState | null;
+  session: SessionUser | null;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -29,6 +30,7 @@ export interface PlayerContextValue {
 export const PlayerContext = createContext<PlayerContextValue>({
   playerId: '',
   player: null,
+  session: null,
   loading: false,
   error: null,
   refresh: () => {},
@@ -37,6 +39,7 @@ export const PlayerContext = createContext<PlayerContextValue>({
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [playerId, setPlayerIdState] = useState(getPlayerId);
   const [player, setPlayer] = useState<PlayerState | null>(null);
+  const [session, setSession] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,6 +64,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     api.ensureSession()
       .then(async (session) => {
+        setSession(session);
         const sessionPlayerId = String(session.playerId || '');
         if (!sessionPlayerId) throw new Error('Authenticated account has no player profile');
         if (sessionPlayerId !== playerId) {
@@ -70,9 +74,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return api.bootstrap(sessionPlayerId);
       })
       .then((data) => setPlayer(data))
-      .catch((e: unknown) =>
-        setError(e instanceof Error ? e.message : 'Failed to load player data'),
-      )
+      .catch((e: unknown) => {
+        setSession(null);
+        setError(e instanceof Error ? e.message : 'Failed to load player data');
+      })
       .finally(() => setLoading(false));
   }, [playerId]);
 
@@ -95,7 +100,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   return (
-    <PlayerContext.Provider value={{ playerId, player, loading, error, refresh }}>
+    <PlayerContext.Provider value={{ playerId, player, session, loading, error, refresh }}>
       {children}
     </PlayerContext.Provider>
   );

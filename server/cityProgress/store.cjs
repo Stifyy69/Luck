@@ -186,7 +186,6 @@ async function reconcileTutorial(db, playerId, row) {
   const facts = await db.query(
     `
       SELECT
-        COALESCE(NULLIF(TRIM(p.display_name), ''), '') AS display_name,
         COALESCE(pp.pizzer_total_deliveries, 0) AS deliveries
       FROM players p
       LEFT JOIN player_pizzer_progress pp ON pp.player_id = p.player_id
@@ -197,7 +196,6 @@ async function reconcileTutorial(db, playerId, row) {
 
   const fact = facts.rows[0] || {};
   let requiredStep = Number(row.tutorial_step || 0);
-  if (String(fact.display_name || '').trim()) requiredStep = Math.max(requiredStep, 2);
   if (Number(fact.deliveries || 0) > 0) requiredStep = Math.max(requiredStep, 6);
 
   if (requiredStep === Number(row.tutorial_step || 0)) return row;
@@ -302,17 +300,6 @@ async function updateTutorial(playerId, action, requestedStep = null) {
         `
           UPDATE player_city_progress
           SET tutorial_skipped_at = NOW(), tutorial_completed_at = NULL, updated_at = NOW()
-          WHERE player_id = $1
-          RETURNING *
-        `,
-        [playerId],
-      );
-      row = result.rows[0];
-    } else if (action === 'replay') {
-      const result = await db.query(
-        `
-          UPDATE player_city_progress
-          SET tutorial_step = 0, tutorial_completed_at = NULL, tutorial_skipped_at = NULL, tutorial_version = 1, updated_at = NOW()
           WHERE player_id = $1
           RETURNING *
         `,
