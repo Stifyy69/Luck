@@ -103,17 +103,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   useEffect(() => {
-    const syncCityProgress = () => refresh();
     const syncSession = () => {
       sessionRef.current = null;
       refresh();
     };
     const syncPlayer = () => refresh();
-    window.addEventListener('city-progress-updated', syncCityProgress as EventListener);
     window.addEventListener('luck-session-changed', syncSession as EventListener);
     window.addEventListener('cityflow-player-refresh', syncPlayer as EventListener);
     return () => {
-      window.removeEventListener('city-progress-updated', syncCityProgress as EventListener);
       window.removeEventListener('luck-session-changed', syncSession as EventListener);
       window.removeEventListener('cityflow-player-refresh', syncPlayer as EventListener);
     };
