@@ -24,6 +24,8 @@ const PACKING_STEPS = [
   { key: 'CONFIRM_ORDER', label: 'Checking receipt' },
 ];
 
+const AUTO_DISPATCH_SCROLL_KEY = 'cityflow-pizzer-auto-dispatch-scroll';
+
 const FLEET: FleetVehicle[] = [
   {
     id: 'bicycle',
@@ -185,6 +187,13 @@ export default function PizzerPage() {
     }, 120);
   }, []);
 
+  useEffect(() => {
+    if (!canShowOptions || options.length === 0) return;
+    if (sessionStorage.getItem(AUTO_DISPATCH_SCROLL_KEY) !== '1') return;
+    sessionStorage.removeItem(AUTO_DISPATCH_SCROLL_KEY);
+    scrollToDispatch();
+  }, [canShowOptions, options.length, scrollToDispatch]);
+
   const startShift = async () => {
     if (busy) return;
     setBusy(true);
@@ -294,6 +303,13 @@ export default function PizzerPage() {
       if (payload.cityProgress) publishCityProgress(payload.cityProgress as CityProgress, payload.cityReward as CityProgressReward | undefined);
       setState(payload.state);
       setAcceptedOption(null);
+      if (!payload.result.accident) {
+        sessionStorage.setItem(AUTO_DISPATCH_SCROLL_KEY, '1');
+        api
+          .pizzerOrderOptions(playerId)
+          .then((data: { options: PizzerOrderOption[] }) => setOptions(data.options || []))
+          .catch(() => {});
+      }
       refresh();
       if (payload.result.accident) {
         const repairLabel = payload.state.repairLabel || 'Repairing vehicle';
@@ -309,15 +325,6 @@ export default function PizzerPage() {
         }
         pushPopup(messages.join(' '));
       }
-      window.setTimeout(() => {
-        api
-          .pizzerOrderOptions(playerId)
-          .then((data: { options: PizzerOrderOption[] }) => {
-            setOptions(data.options || []);
-            scrollToDispatch();
-          })
-          .catch(() => {});
-      }, 550);
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Customer handoff failed', true);
     } finally {
