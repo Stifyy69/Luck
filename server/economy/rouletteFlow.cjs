@@ -145,7 +145,7 @@ async function startRouletteSpin(playerId, costType, operationId) {
     );
     if (duplicate.rows[0]) {
       const playerResult = await db.query(`SELECT clean_money, flow_coins, roulette_fragments FROM players WHERE player_id = $1`, [safePlayerId]);
-      return spinView(duplicate.rows[0], playerResult.rows[0] || {} , Boolean(duplicate.rows[0].claimed_at));
+      return spinView(duplicate.rows[0], playerResult.rows[0] || {}, Boolean(duplicate.rows[0].claimed_at));
     }
 
     await db.query(`INSERT INTO players (player_id, clean_money) VALUES ($1, 69) ON CONFLICT (player_id) DO NOTHING`, [safePlayerId]);
@@ -275,6 +275,10 @@ async function claimRouletteSpin(playerId, spinId) {
 
 function installRouletteFlow(app, requirePlayer, createRateLimiter) {
   const rateLimit = createRateLimiter({ windowMs: 60_000, max: 20, key: (req) => req.playerId || req.ip });
+
+  app.post('/api/roulette/spin', requirePlayer, (_req, res) => {
+    return res.status(410).json({ error: 'use roulette reveal flow' });
+  });
 
   app.post('/api/roulette/start', requirePlayer, rateLimit, async (req, res) => {
     try {
