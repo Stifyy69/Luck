@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { fetchAdminVehicleStock, updateAdminVehicleStock } from '../../lib/adminApi';
 import type { AdminVehicleStockItem, AdminVehicleStockResponse } from '../../lib/adminTypes';
 
@@ -199,6 +199,6 @@ export default function AdminVehicleStock() {
   );
 }
 
-function Control({ label, children }: { label: string; children: React.ReactNode }) {
+function Control({ label, children }: { label: string; children: ReactNode }) {
   return <label className="block"><span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.13em] text-white/28">{label}</span>{children}</label>;
 }
