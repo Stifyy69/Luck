@@ -295,6 +295,9 @@ export default function PizzerPage() {
       setState(payload.state);
       setAcceptedOption(null);
       refresh();
+      window.setTimeout(() => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 80);
       if (payload.result.accident) {
         const repairLabel = payload.state.repairLabel || 'Repairing vehicle';
         const repairSec = payload.state.repairSecondsLeft || 10;
