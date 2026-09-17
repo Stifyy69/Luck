@@ -3,25 +3,25 @@ const CITY_MAX_LEVEL = 50;
 const CITY_LEVEL_START_XP = [
   0,
   0,
-  400,
   800,
-  1500,
-  2500,
-  4000,
-  6000,
-  8500,
-  11500,
-  15000,
-  21000,
-  29000,
-  39000,
-  51000,
+  2000,
+  3800,
+  6200,
+  9000,
+  12500,
+  16500,
+  20500,
+  25000,
+  32000,
+  40000,
+  48000,
+  56500,
   65000,
 ];
 
 let runningThreshold = CITY_LEVEL_START_XP[15];
 for (let level = 16; level <= CITY_MAX_LEVEL; level += 1) {
-  runningThreshold += 9000 + (level - 16) * 500;
+  runningThreshold += 11000 + (level - 16) * 750;
   CITY_LEVEL_START_XP[level] = runningThreshold;
 }
 
@@ -33,10 +33,18 @@ const CAREER_UNLOCKS = [
   { key: 'GANGS', label: 'Gangs', level: 15, path: '/gangs' },
 ];
 
+const PILOT_ROUTE_XP = Object.freeze({
+  ROUTE_1: 120,
+  ROUTE_2: 170,
+  ROUTE_3: 240,
+  ROUTE_4: 320,
+  ROUTE_5: 450,
+});
+
 const CITY_XP_REWARDS = Object.freeze({
   PIZZER_DELIVERY: 100,
-  FISHER_CATCH: 80,
-  PILOT_FLIGHT: 220,
+  FISHER_CATCH: 120,
+  PILOT_FLIGHT: 120,
   CAYO_COLLECT: 15,
   CAYO_PROCESS: 25,
   CAYO_REFINE: 40,
@@ -71,24 +79,48 @@ function nextUnlockForLevel(level) {
   return CAREER_UNLOCKS.find((unlock) => unlock.level > Number(level || 1)) || null;
 }
 
-function buildCareerAccess(level, vipActive) {
+function requirementReason(cityOk, cityLevel, careerOk, careerLabel, careerLevel) {
+  if (!cityOk && !careerOk) return `Reach City Level ${cityLevel} and ${careerLabel} Level ${careerLevel}`;
+  if (!cityOk) return `Reach City Level ${cityLevel}`;
+  if (!careerOk) return `Reach ${careerLabel} Level ${careerLevel}`;
+  return null;
+}
+
+function buildCareerAccess(level, vipActive, careerLevels = {}) {
   const currentLevel = Math.max(1, Number(level || 1));
+  const pizzerLevel = Math.max(1, Number(careerLevels.pizzerLevel || 1));
+  const fisherLevel = Math.max(1, Number(careerLevels.fisherLevel || 1));
+  const pilotLevel = Math.max(1, Number(careerLevels.pilotLevel || 1));
+
+  const fisherCityOk = currentLevel >= 3;
+  const fisherCareerOk = pizzerLevel >= 3;
+  const pilotCityOk = currentLevel >= 6;
+  const pilotCareerOk = fisherLevel >= 4;
+  const cayoCityOk = currentLevel >= 10;
+  const cayoCareerOk = pilotLevel >= 5;
+
   return {
     pizzer: { unlocked: true, requiredLevel: 1, reason: null },
     fisher: {
-      unlocked: currentLevel >= 3,
+      unlocked: fisherCityOk && fisherCareerOk,
       requiredLevel: 3,
-      reason: currentLevel >= 3 ? null : 'Reach City Level 3',
+      requiredCareerLevel: 3,
+      requiredCareer: 'Pizza Courier',
+      reason: requirementReason(fisherCityOk, 3, fisherCareerOk, 'Pizza Courier', 3),
     },
     pilot: {
-      unlocked: currentLevel >= 6,
+      unlocked: pilotCityOk && pilotCareerOk,
       requiredLevel: 6,
-      reason: currentLevel >= 6 ? null : 'Reach City Level 6',
+      requiredCareerLevel: 4,
+      requiredCareer: 'Fisher',
+      reason: requirementReason(pilotCityOk, 6, pilotCareerOk, 'Fisher', 4),
     },
     cayo: {
-      unlocked: currentLevel >= 10,
+      unlocked: cayoCityOk && cayoCareerOk,
       requiredLevel: 10,
-      reason: currentLevel >= 10 ? null : 'Reach City Level 10',
+      requiredCareerLevel: 5,
+      requiredCareer: 'Pilot',
+      reason: requirementReason(cayoCityOk, 10, cayoCareerOk, 'Pilot', 5),
     },
     gangs: {
       unlocked: currentLevel >= 15,
@@ -109,6 +141,7 @@ module.exports = {
   CITY_LEVEL_START_XP,
   CITY_MAX_LEVEL,
   CITY_XP_REWARDS,
+  PILOT_ROUTE_XP,
   buildCareerAccess,
   cityLevelFromXp,
   cityLevelStartXp,
