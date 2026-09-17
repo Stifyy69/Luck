@@ -26,6 +26,7 @@ async function ensureSchema() {
 
   schemaPromise = (async () => {
     await ensureCityProgressSchema();
+    await pool.query(`ALTER TABLE players ALTER COLUMN clean_money SET DEFAULT 69;`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS player_gangs (
         player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
@@ -109,7 +110,7 @@ async function withTransaction(work) {
 }
 
 async function ensurePlayer(db, playerId) {
-  await db.query(`INSERT INTO players (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`, [playerId]);
+  await db.query(`INSERT INTO players (player_id, clean_money) VALUES ($1, 69) ON CONFLICT (player_id) DO NOTHING`, [playerId]);
 }
 
 async function ensureCityProgress(db, playerId) {
