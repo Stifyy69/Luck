@@ -77,7 +77,7 @@ export default function PilotPage() {
   }, [state, loadState]);
 
   const progress = state?.progress;
-  const displayName = useMemo(() => String(player?.displayName || player?.playerId || playerId), [player, playerId]);
+  const displayName = useMemo(() => String(player?.displayName || 'Unknown'), [player]);
   const canStartShift = state?.shiftState === 'IDLE';
 
   const xpPercent = useMemo(() => {

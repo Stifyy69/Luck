@@ -77,6 +77,7 @@ export default function AppSidebar({ path, open, progress, onNavigate, onClose, 
                       label={item.label}
                       locked={locked}
                       badge={locked ? (item.vipOnly ? 'VIP' : `Lv ${item.unlockLevel}`) : item.hint}
+                      tutorialTarget={item.path === '/pizzer' ? 'pizzer-nav' : undefined}
                       onClick={() => onNavigate(item.path)}
                     />
                   );
@@ -116,13 +117,15 @@ type NavButtonProps = {
   label: string;
   locked?: boolean;
   onClick: () => void;
+  tutorialTarget?: string;
 };
 
-function NavButton({ active, badge, description, icon, label, locked = false, onClick }: NavButtonProps) {
+function NavButton({ active, badge, description, icon, label, locked = false, onClick, tutorialTarget }: NavButtonProps) {
   return (
     <button
       type="button"
       onClick={onClick}
+      data-tutorial-target={tutorialTarget}
       aria-current={active ? 'page' : undefined}
       className={`city-nav-button ${active ? 'active' : ''} ${locked ? 'locked' : ''}`}
     >

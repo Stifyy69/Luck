@@ -67,7 +67,7 @@ async function authenticateUserRequest(req, db) {
   const userId = verifyUserToken(req.cookies?.[COOKIE_NAME]);
   if (!userId) return null;
   const result = await db.query(
-    `SELECT id, username, email, player_id, is_guest FROM users WHERE id = $1`,
+    `SELECT id, username, email, player_id, is_guest, city_id FROM users WHERE id = $1`,
     [userId],
   );
   const user = result.rows[0];
@@ -78,7 +78,39 @@ async function authenticateUserRequest(req, db) {
     email: user.email,
     playerId: String(user.player_id),
     isGuest: Boolean(user.is_guest),
+    cityId: user.city_id === null || user.city_id === undefined ? null : Number(user.city_id),
   };
+}
+
+const VISITOR_ALLOWED_PATHS = [
+  '/api/bootstrap',
+  '/api/city/',
+  '/api/activity/heartbeat',
+  '/api/stats/sync',
+  '/api/platform/status',
+];
+
+function visitorPathAllowed(pathname) {
+  return VISITOR_ALLOWED_PATHS.some((path) => pathname === path || pathname.startsWith(path));
+}
+
+async function visitorNeedsAccount(req, db, user) {
+  if (!user?.isGuest) return false;
+  const pathname = String(req.originalUrl || req.path || '').split('?')[0];
+  if (pathname === '/api/player/profile/name') return true;
+  if (visitorPathAllowed(pathname)) return false;
+
+  const result = await db.query(
+    `SELECT tutorial_step, tutorial_completed_at, tutorial_skipped_at
+     FROM player_city_progress
+     WHERE player_id = $1`,
+    [user.playerId],
+  );
+  const tutorial = result.rows[0];
+  if (!tutorial) return false;
+  return Number(tutorial.tutorial_step || 0) >= 6
+    || Boolean(tutorial.tutorial_completed_at)
+    || Boolean(tutorial.tutorial_skipped_at);
 }
 
 function requestedPlayerId(req) {
@@ -91,6 +123,14 @@ function requireAuthenticatedPlayer(db) {
       if (!db) return res.status(503).json({ error: 'database unavailable' });
       const user = req.authUser || await authenticateUserRequest(req, db);
       if (!user) return res.status(401).json({ error: 'authentication required' });
+
+      if (await visitorNeedsAccount(req, db, user)) {
+        return res.status(403).json({
+          error: 'account required',
+          code: 'ACCOUNT_REQUIRED',
+          message: 'Create an account to keep your Visitor progress and continue playing.',
+        });
+      }
 
       const suppliedPlayerId = requestedPlayerId(req);
       if (suppliedPlayerId && suppliedPlayerId !== user.playerId) {
@@ -118,4 +158,5 @@ module.exports = {
   signUserToken,
   userAuthConfigurationReady,
   verifyUserToken,
+  visitorNeedsAccount,
 };

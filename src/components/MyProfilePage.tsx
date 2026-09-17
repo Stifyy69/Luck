@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
-import { replayCityTutorial } from '../lib/cityProgressApi';
 import { readPlayerCityProgress } from '../lib/cityProgress';
 import SharedStatsPanel from './SharedStatsPanel';
 
@@ -16,14 +15,14 @@ function initials(value: string) {
 }
 
 export default function MyProfilePage() {
-  const { player, playerId, refresh } = usePlayer();
+  const { player, playerId, session, refresh } = usePlayer();
   const [editing, setEditing] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [saving, setSaving] = useState(false);
-  const [tutorialBusy, setTutorialBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const displayName = String(player?.displayName || 'Player');
+  const displayName = String(player?.displayName || 'Unknown');
+  const visitor = Boolean(session?.isGuest);
   const cityProgress = readPlayerCityProgress(player);
   const fleetValue = useMemo(
     () => (player?.ownedVehicles || []).reduce((total, vehicle) => total + Number(vehicle.purchasePrice || 0), 0),
@@ -63,19 +62,6 @@ export default function MyProfilePage() {
     }
   };
 
-  const replayTutorial = async () => {
-    if (tutorialBusy) return;
-    setTutorialBusy(true);
-    setError(null);
-    try {
-      await replayCityTutorial(playerId);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Could not restart tutorial.');
-    } finally {
-      setTutorialBusy(false);
-    }
-  };
-
   return (
     <div className="min-h-screen px-4 pb-10 pt-20 sm:px-6 md:px-8 md:pb-12 md:pt-8">
       <div className="mx-auto max-w-[1220px] space-y-5">
@@ -99,7 +85,7 @@ export default function MyProfilePage() {
                   <p className="text-xs font-bold uppercase tracking-[0.16em] text-white/34">Citizen profile</p>
                   <h1 className="mt-1 truncate text-4xl font-black tracking-[-0.055em] text-white sm:text-5xl">{displayName}</h1>
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-white/42">
-                    <span>City ID {player?.playerId || playerId}</span>
+                    <span>{visitor ? 'Visitor' : `ID #${session?.cityId}`}</span>
                     <span className="hidden h-1 w-1 rounded-full bg-white/20 sm:block" />
                     <span>{player?.ownedVehicles?.length || 0} vehicles owned</span>
                     <span className="hidden h-1 w-1 rounded-full bg-white/20 sm:block" />
@@ -109,8 +95,9 @@ export default function MyProfilePage() {
               </div>
 
               <div className="mt-7 flex flex-wrap gap-3">
-                <button type="button" onClick={openRename} className="btn-primary rounded-2xl px-5 py-3 text-sm">Edit identity</button>
-                <button type="button" onClick={() => replayTutorial().catch(() => {})} disabled={tutorialBusy} className="btn-ghost rounded-2xl px-5 py-3 text-sm disabled:opacity-40">{tutorialBusy ? 'Loading tutorial...' : 'Replay tutorial'}</button>
+                {visitor
+                  ? <a href="/account" className="btn-primary rounded-2xl px-5 py-3 text-sm no-underline">Create account</a>
+                  : <button type="button" onClick={openRename} className="btn-primary rounded-2xl px-5 py-3 text-sm">Edit identity</button>}
                 <a href="/inventory" className="btn-ghost rounded-2xl px-5 py-3 text-sm no-underline">Open inventory</a>
                 <a href="/showroom" className="btn-ghost rounded-2xl px-5 py-3 text-sm no-underline">Visit showroom</a>
               </div>

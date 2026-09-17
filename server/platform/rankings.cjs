@@ -80,6 +80,7 @@ async function loadPlayerDataset() {
     LEFT JOIN player_pilot_progress pip ON pip.player_id = p.player_id
     LEFT JOIN vehicle_totals vt ON vt.player_id = p.player_id
     LEFT JOIN inventory_totals it ON it.player_id = p.player_id
+    WHERE u.is_guest = FALSE
   `);
 
   return result.rows.map((row) => {
