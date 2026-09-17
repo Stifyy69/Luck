@@ -73,6 +73,25 @@ async function ensureSchema() {
     `);
 
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS roulette_pending_spins (
+        player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+        spin_token TEXT UNIQUE NOT NULL,
+        cost_type TEXT NOT NULL,
+        cost_amount BIGINT NOT NULL,
+        reward_type TEXT NOT NULL,
+        reward_name TEXT NOT NULL,
+        reward_subtitle TEXT NOT NULL DEFAULT '',
+        reward_tier TEXT NOT NULL,
+        reward_emoji TEXT NOT NULL DEFAULT '🎁',
+        payout BIGINT NOT NULL DEFAULT 0,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        claim_result JSONB,
+        claimed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS admin_action_log (
         id BIGSERIAL PRIMARY KEY,
         admin_name TEXT NOT NULL,
@@ -85,6 +104,7 @@ async function ensureSchema() {
 
     await pool.query(`CREATE INDEX IF NOT EXISTS player_gangs_rank_idx ON player_gangs(dirty_earned DESC, updated_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS admin_action_log_recent_idx ON admin_action_log(created_at DESC);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS roulette_pending_spins_claim_idx ON roulette_pending_spins(player_id, claimed_at);`);
   })().catch((error) => {
     schemaPromise = null;
     throw error;
