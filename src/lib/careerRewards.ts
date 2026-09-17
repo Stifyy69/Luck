@@ -7,8 +7,8 @@ export type CareerRewardReceipt = {
   money?: number;
   moneyType?: 'clean' | 'dirty' | 'carry';
   careerXp?: number;
+  cityXp?: number;
   careerLabel?: string;
-  detail?: string;
 };
 
 const EVENT_NAME = 'career-reward-confirmed';
@@ -23,6 +23,10 @@ function rewardId(kind: CareerRewardKind) {
 function safeNumber(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function cityXpFrom(payload: Record<string, any>) {
+  return Math.max(0, Math.floor(safeNumber(payload?.cityReward?.awardedXp)));
 }
 
 export function exactXpDelta(progression: unknown, fallback: unknown = 0) {
@@ -58,10 +62,11 @@ export function publishPizzerReward(payload: UnknownRecord) {
   if (!result?.delivered || result?.accident) return;
   publishCareerReward({
     kind: 'PIZZER',
-    title: 'Pizza run confirmed',
+    title: 'Delivery complete',
     money: Math.max(0, Math.floor(safeNumber(result.breakdown?.totalReward))),
     moneyType: 'clean',
     careerXp: exactXpDelta(result.progression, result.breakdown?.xpGained),
+    cityXp: cityXpFrom(payload),
     careerLabel: 'Courier XP',
   });
 }
@@ -71,12 +76,12 @@ export function publishFisherCatchReward(payload: UnknownRecord) {
   if (!result?.caught) return;
   publishCareerReward({
     kind: 'FISHER_CATCH',
-    title: 'Catch confirmed',
+    title: 'Catch complete',
     money: Math.max(0, Math.floor(safeNumber(result.breakdown?.totalReward))),
     moneyType: 'carry',
     careerXp: exactXpDelta(result.progression, result.breakdown?.xpGained),
+    cityXp: cityXpFrom(payload),
     careerLabel: 'Fisher XP',
-    detail: 'The fish value is stored in your carry. Sell the carry to receive clean money.',
   });
 }
 
@@ -88,7 +93,6 @@ export function publishFisherSaleReward(payload: UnknownRecord) {
     title: 'Catch sold',
     money: soldValue,
     moneyType: 'clean',
-    detail: 'The exact server payout was added to your clean balance.',
   });
 }
 
@@ -97,10 +101,11 @@ export function publishPilotReward(payload: UnknownRecord) {
   if (!result?.completed) return;
   publishCareerReward({
     kind: 'PILOT',
-    title: 'Flight confirmed',
+    title: 'Flight complete',
     money: Math.max(0, Math.floor(safeNumber(result.breakdown?.totalCash))),
     moneyType: 'clean',
     careerXp: exactXpDelta(result.progression, result.breakdown?.totalXp),
+    cityXp: cityXpFrom(payload),
     careerLabel: 'Pilot XP',
   });
 }
@@ -110,7 +115,7 @@ export function publishCayoSaleReward(payload: UnknownRecord) {
   if (!payout || payload?.raided) return;
   publishCareerReward({
     kind: 'CAYO_SALE',
-    title: 'Cayo sale confirmed',
+    title: 'Cayo sale complete',
     money: payout,
     moneyType: 'dirty',
   });
@@ -121,7 +126,7 @@ export function publishCayoConversionReward(payload: UnknownRecord) {
   if (!cleanGained) return;
   publishCareerReward({
     kind: 'CAYO_CONVERT',
-    title: 'Cayo conversion confirmed',
+    title: 'Conversion complete',
     money: cleanGained,
     moneyType: 'clean',
   });
