@@ -3715,7 +3715,6 @@ app.post('/api/pizzer/orders/options', requireDb, async (req, res) => {
     if (session.shiftState !== 'SELECTING_ORDER') {
       return res.status(400).json({ error: 'not ready to pick order' });
     }
-    enforcePizzerActionCooldown(session);
 
     const now = Date.now();
     if (!session.orderOptions.length || now - Number(session.optionsGeneratedAt || 0) > PIZZER_CONFIG.optionsCooldownMs) {
