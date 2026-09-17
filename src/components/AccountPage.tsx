@@ -53,7 +53,6 @@ export default function AccountPage({ forced = false, onNavigate }: AccountPageP
       if (!response.ok || !payload?.user) throw new Error(String(payload?.error || 'Authentication failed.'));
 
       setPlayerId(payload.user.playerId);
-      window.dispatchEvent(new Event('luck-session-changed'));
       window.location.assign('/city');
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Authentication failed.');

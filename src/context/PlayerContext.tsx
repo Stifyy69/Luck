@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, type SessionUser } from '../lib/api';
 import type { PlayerState } from '../types/game';
 
@@ -42,6 +42,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const sessionRef = useRef<SessionUser | null>(null);
+  const sessionRequestRef = useRef<Promise<SessionUser> | null>(null);
 
   useEffect(() => {
     const syncPlayerId = () => {
@@ -59,13 +61,28 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
   }, [playerId]);
 
+  const loadSession = useCallback(() => {
+    if (!sessionRequestRef.current) {
+      sessionRequestRef.current = api.ensureSession().finally(() => {
+        sessionRequestRef.current = null;
+      });
+    }
+    return sessionRequestRef.current;
+  }, []);
+
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    api.ensureSession()
-      .then(async (session) => {
-        setSession(session);
-        const sessionPlayerId = String(session.playerId || '');
+    const knownSession = sessionRef.current;
+    const sessionPromise = knownSession && knownSession.playerId === playerId
+      ? Promise.resolve(knownSession)
+      : loadSession();
+
+    sessionPromise
+      .then(async (nextSession) => {
+        sessionRef.current = nextSession;
+        setSession(nextSession);
+        const sessionPlayerId = String(nextSession.playerId || '');
         if (!sessionPlayerId) throw new Error('Authenticated account has no player profile');
         if (sessionPlayerId !== playerId) {
           localStorage.setItem(PLAYER_KEY, sessionPlayerId);
@@ -79,7 +96,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setError(e instanceof Error ? e.message : 'Failed to load player data');
       })
       .finally(() => setLoading(false));
-  }, [playerId]);
+  }, [loadSession, playerId]);
 
   useEffect(() => {
     refresh();
@@ -87,7 +104,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const syncCityProgress = () => refresh();
-    const syncSession = () => refresh();
+    const syncSession = () => {
+      sessionRef.current = null;
+      refresh();
+    };
     const syncPlayer = () => refresh();
     window.addEventListener('city-progress-updated', syncCityProgress as EventListener);
     window.addEventListener('luck-session-changed', syncSession as EventListener);
