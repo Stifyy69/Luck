@@ -5,6 +5,8 @@ export type CareerAccessKey = 'pizzer' | 'fisher' | 'pilot' | 'cayo' | 'gangs' |
 export type CareerAccessEntry = {
   unlocked: boolean;
   requiredLevel: number | null;
+  requiredCareer?: string;
+  requiredCareerLevel?: number;
   vipOnly?: boolean;
   reason: string | null;
 };
@@ -36,6 +38,11 @@ export type CityProgress = {
   nextUnlock: CityUnlock | null;
   vipActive: boolean;
   careerAccess: Record<CareerAccessKey, CareerAccessEntry>;
+  careerLevels?: {
+    pizzerLevel: number;
+    fisherLevel: number;
+    pilotLevel: number;
+  };
   tutorial: CityTutorialState;
 };
 
