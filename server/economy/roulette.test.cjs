@@ -10,13 +10,16 @@ function sequence(...values) {
   return () => values[Math.min(index++, values.length - 1)];
 }
 
-function rouletteRouteSource() {
-  const serverSource = fs.readFileSync(path.join(__dirname, '../../server.cjs'), 'utf8');
-  const start = serverSource.indexOf("app.post('/api/roulette/spin'");
-  const end = serverSource.indexOf("app.post('/api/mystery/open'", start);
-  assert.notEqual(start, -1, 'Roulette spin route is missing');
-  assert.notEqual(end, -1, 'Roulette route boundary is missing');
-  return serverSource.slice(start, end);
+const rouletteUi = fs.readFileSync(path.join(__dirname, '../../src/components/RouletteDemo.tsx'), 'utf8');
+const rouletteFlow = fs.readFileSync(path.join(__dirname, './rouletteFlow.cjs'), 'utf8');
+const platformInstall = fs.readFileSync(path.join(__dirname, '../platform/install.cjs'), 'utf8');
+
+function functionSource(source, startNeedle, endNeedle) {
+  const start = source.indexOf(startNeedle);
+  assert.notEqual(start, -1, `Missing ${startNeedle}`);
+  const end = source.indexOf(endNeedle, start + startNeedle.length);
+  assert.notEqual(end, -1, `Missing ${endNeedle}`);
+  return source.slice(start, end);
 }
 
 test('weighted selection reaches rewards in every tier', () => {
@@ -37,30 +40,42 @@ test('inventory rewards always grant bounded quantities', () => {
   assert.equal(rewardPayout(cash, () => 0.999999), 50_000);
 });
 
-test('Roulette V2 keeps the exact server reward pool and unchanged tier weights', () => {
+test('Roulette V2 keeps the exact reward pool and unchanged tier weights', () => {
   assert.equal(Object.values(TIER_WEIGHTS).reduce((sum, weight) => sum + weight, 0), 100);
   assert.equal(new Set(REWARDS.map((reward) => reward.name)).size, REWARDS.length);
-  const rouletteUi = fs.readFileSync(path.join(__dirname, '../../src/components/RouletteDemo.tsx'), 'utf8');
   for (const reward of REWARDS) {
     assert.match(rouletteUi, new RegExp(reward.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(rouletteUi, /spinResult\.rewardName/);
-  assert.match(rouletteUi, /spinResult\.player\.cleanMoney/);
-  assert.match(rouletteUi, /spinResult\.player\.flowCoins/);
-  assert.match(rouletteUi, /spinResult\.player\.rouletteFragments/);
 });
 
-test('every Roulette reward category has an atomic server grant path', () => {
-  const route = rouletteRouteSource();
-  assert.match(route, /clean_money = clean_money - \$1/);
-  assert.match(route, /flow_coins = flow_coins - \$1/);
-  assert.match(route, /roulette_fragments = roulette_fragments - \$1/);
-  assert.match(route, /clean_money = clean_money \+ \$1/);
-  assert.match(route, /flow_coins = flow_coins \+ \$1/);
-  assert.match(route, /roulette_fragments = roulette_fragments \+ \$1/);
-  assert.match(route, /INSERT INTO owned_vehicles/);
-  assert.match(route, /purchase_source/);
-  assert.match(route, /'ROULETTE'/);
-  assert.match(route, /addInventoryItem\(db, playerId, reward\.rewardType, payout, metadata\)/);
-  assert.match(route, /SELECT clean_money, flow_coins, roulette_fragments FROM players/);
+test('roulette charges at start but grants only after the reveal claim', () => {
+  const start = functionSource(rouletteFlow, 'async function startRouletteSpin', 'async function claimRouletteSpin');
+  const claim = functionSource(rouletteFlow, 'async function claimRouletteSpin', 'function installRouletteFlow');
+
+  assert.match(start, /roulette_pending_spins/);
+  assert.match(start, /clean_money = clean_money - \$1/);
+  assert.match(start, /flow_coins = flow_coins - \$1/);
+  assert.match(start, /roulette_fragments = roulette_fragments - \$1/);
+  assert.doesNotMatch(start, /clean_money = clean_money \+ \$1/);
+  assert.doesNotMatch(start, /flow_coins = flow_coins \+ \$1/);
+  assert.doesNotMatch(start, /roulette_fragments = roulette_fragments \+ \$1/);
+
+  assert.match(claim, /ready_at/);
+  assert.match(claim, /reveal not finished/);
+  assert.match(claim, /clean_money = clean_money \+ \$1/);
+  assert.match(claim, /flow_coins = flow_coins \+ \$1/);
+  assert.match(claim, /roulette_fragments = roulette_fragments \+ \$1/);
+  assert.match(claim, /INSERT INTO owned_vehicles/);
+  assert.match(claim, /'ROULETTE'/);
+  assert.match(claim, /addInventoryItem\(db, safePlayerId, spin\.reward_type, payout, metadata\)/);
+  assert.match(claim, /claimed_at = NOW\(\)/);
+});
+
+test('roulette UI starts the reveal first and claims the reward after the animation', () => {
+  assert.match(rouletteUi, /api\.rouletteStart/);
+  assert.match(rouletteUi, /SPIN_DURATION_MS \+ 40/);
+  assert.match(rouletteUi, /api\.rouletteClaim/);
+  assert.doesNotMatch(rouletteUi, /api\.rouletteSpin\(/);
+  assert.match(platformInstall, /installRouletteFlow\(app, requirePlayer, createRateLimiter\)/);
 });
