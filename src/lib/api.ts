@@ -39,6 +39,7 @@ import {
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
 export type SessionUser = { id: number; username: string; email: string; playerId: string; cityId: number | null; isGuest?: boolean };
+export type RouletteFlowResult = SpinResult & { spinId: string; readyAt: string; claimed?: boolean };
 
 async function resolveApiError(res: Response): Promise<string> {
   try {
@@ -95,6 +96,10 @@ export const api = {
     post<ShowroomBuyResult>('/api/showroom/buy', { playerId, modelId, useVoucher: useVoucher ?? false }),
   rouletteSpin: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments') =>
     post<SpinResult>('/api/roulette/spin', { playerId, costType }),
+  rouletteStart: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments', operationId: string) =>
+    post<RouletteFlowResult>('/api/roulette/start', { playerId, costType, operationId }),
+  rouletteClaim: (playerId: string, spinId: string) =>
+    post<RouletteFlowResult>('/api/roulette/claim', { playerId, spinId }),
   mysteryOpen: (playerId: string) => post<MysteryOpenResult>('/api/mystery/open', { playerId }),
   inventoryUse: (playerId: string, itemId: number) => post<InventoryUseResult>('/api/inventory/use', { playerId, itemId }),
   inventoryApplyXenon: (playerId: string, itemId: number, vehicleId: number) =>
