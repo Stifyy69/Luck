@@ -38,6 +38,8 @@ import {
 } from './careerRewards';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
+const PIZZER_PACKING_STEPS = ['PICK_BOXES', 'ADD_DRINKS', 'CONFIRM_ORDER'] as const;
+
 export type SessionUser = { id: number; username: string; email: string; playerId: string; cityId: number | null; isGuest?: boolean };
 export type RouletteFlowResult = SpinResult & { spinId: string; readyAt: string; claimed?: boolean };
 
@@ -76,6 +78,36 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
   return res.json() as Promise<T>;
 }
 
+async function autoDispatchPizzer(playerId: string, state: PizzerStateResponse): Promise<PizzerStateResponse> {
+  if (state.shiftState !== 'SELECTING_ORDER' || Number(state.repairSecondsLeft || 0) > 0) return state;
+
+  const data = await post<{ options: PizzerOrderOption[] }>('/api/pizzer/orders/options', { playerId });
+  const options = data.options || [];
+  if (options.length === 0) throw new Error('no delivery available');
+
+  const option = options[Math.floor(Math.random() * options.length)];
+  let next = await post<PizzerStateResponse>('/api/pizzer/order/select', { playerId, orderId: option.orderId });
+  for (const stepKey of PIZZER_PACKING_STEPS) {
+    next = await post<PizzerStateResponse>('/api/pizzer/packing/step', { playerId, stepKey });
+  }
+  return next;
+}
+
+async function pizzerStateWithAutoDispatch(playerId: string): Promise<PizzerStateResponse> {
+  const state = await get<PizzerStateResponse>('/api/pizzer/state', { playerId });
+  return autoDispatchPizzer(playerId, state);
+}
+
+async function legacyPizzerOptions(playerId: string): Promise<{ options: PizzerOrderOption[] }> {
+  try {
+    return await post<{ options: PizzerOrderOption[] }>('/api/pizzer/orders/options', { playerId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    if (message.includes('not ready to pick order') || message.includes('not selecting order')) return { options: [] };
+    throw error;
+  }
+}
+
 export const api = {
   ensureSession: async () => {
     const current = await fetch(`${BASE}/api/auth/me`, { credentials: 'include' });
@@ -94,8 +126,6 @@ export const api = {
   showroom: () => get<ShowroomResponse>('/api/showroom'),
   showroomBuy: (playerId: string, modelId: number, useVoucher?: boolean) =>
     post<ShowroomBuyResult>('/api/showroom/buy', { playerId, modelId, useVoucher: useVoucher ?? false }),
-  rouletteSpin: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments') =>
-    post<SpinResult>('/api/roulette/spin', { playerId, costType }),
   rouletteStart: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments', operationId: string) =>
     post<RouletteFlowResult>('/api/roulette/start', { playerId, costType, operationId }),
   rouletteClaim: (playerId: string, spinId: string) =>
@@ -160,16 +190,22 @@ export const api = {
   playerProfile: (playerId: string) => get<PlayerProfileResponse>('/api/player/profile', { playerId }),
   playerRename: (playerId: string, displayName: string) => post<{ ok: boolean; displayName: string }>('/api/player/profile/name', { playerId, displayName }),
 
-  pizzerState: (playerId: string) => get<PizzerStateResponse>('/api/pizzer/state', { playerId }),
-  pizzerShiftStart: (playerId: string) => post<PizzerStateResponse>('/api/pizzer/shift/start', { playerId }),
+  pizzerState: (playerId: string) => pizzerStateWithAutoDispatch(playerId),
+  pizzerShiftStart: async (playerId: string) => {
+    const state = await post<PizzerStateResponse>('/api/pizzer/shift/start', { playerId });
+    return autoDispatchPizzer(playerId, state);
+  },
   pizzerShiftEnd: (playerId: string) => post<PizzerStateResponse>('/api/pizzer/shift/end', { playerId }),
-  pizzerOrderOptions: (playerId: string) => post<{ options: PizzerOrderOption[] }>('/api/pizzer/orders/options', { playerId }),
+  pizzerOrderOptions: (playerId: string) => legacyPizzerOptions(playerId),
   pizzerOrderSelect: (playerId: string, orderId: string) => post<PizzerStateResponse>('/api/pizzer/order/select', { playerId, orderId }),
   pizzerPackingStep: (playerId: string, stepKey: string) => post<PizzerStateResponse>('/api/pizzer/packing/step', { playerId, stepKey }),
   pizzerDamageReport: (playerId: string, damageDelta: number) => post<PizzerStateResponse>('/api/pizzer/delivery/report-damage', { playerId, damageDelta }),
   pizzerHandover: async (playerId: string, handoverVariant: string) => {
     const payload = await post<{ state: PizzerStateResponse; result: PizzerDeliveryResult; cityProgress?: unknown; cityReward?: unknown }>('/api/pizzer/delivery/handover', { playerId, handoverVariant });
     publishPizzerReward(payload);
+    if (payload.result?.delivered && !payload.result?.accident) {
+      payload.state = await autoDispatchPizzer(playerId, payload.state);
+    }
     return payload;
   },
 
