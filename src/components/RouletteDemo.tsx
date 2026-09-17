@@ -68,12 +68,18 @@ function formatNumber(value: number) {
   return value.toLocaleString('en-US');
 }
 
+function operationId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `roulette_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function RouletteDemo() {
   const { player, playerId, refresh } = usePlayer();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const currentIndexRef = useRef(START_INDEX);
   const timersRef = useRef<number[]>([]);
+  const spinLockRef = useRef(false);
 
   const [viewportWidth, setViewportWidth] = useState(920);
   const [translateX, setTranslateX] = useState(getTranslateForIndex(START_INDEX, 920));
@@ -190,7 +196,9 @@ export default function RouletteDemo() {
   };
 
   const handleSpin = async (costType: CostType) => {
-    if (!playerId || !player || isSpinning || !viewportWidth || !canAfford(costType)) return;
+    if (!playerId || !player || spinLockRef.current || isSpinning || !viewportWidth || !canAfford(costType)) return;
+    spinLockRef.current = true;
+    setIsSpinning(true);
     clearScheduledTasks();
     setErrorMessage(null);
 
@@ -199,8 +207,14 @@ export default function RouletteDemo() {
 
     let spinResult;
     try {
-      spinResult = await api.rouletteSpin(playerId, costType === 'cash' ? 'cash' : costType === 'ogc' ? 'flowcoins' : 'fragments');
+      spinResult = await api.rouletteStart(
+        playerId,
+        costType === 'cash' ? 'cash' : costType === 'ogc' ? 'flowcoins' : 'fragments',
+        operationId(),
+      );
     } catch (error) {
+      setIsSpinning(false);
+      spinLockRef.current = false;
       setErrorMessage(error instanceof Error ? error.message : 'Spin failed');
       return;
     }
@@ -224,30 +238,48 @@ export default function RouletteDemo() {
     const deltaToWinner = (resolvedWinnerIndex - currentRewardIndex + rewards.length) % rewards.length;
     const extraLoops = MIN_EXTRA_LOOPS + Math.floor(Math.random() * (MAX_EXTRA_LOOPS - MIN_EXTRA_LOOPS + 1));
     const targetIndex = currentIndexRef.current + extraLoops * rewards.length + deltaToWinner;
+    const nextSpinCount = spinCount + 1;
 
     setActiveCost(costType);
     setSelectedReward(null);
     setShowWinModal(false);
     setHighlightIndex(null);
-    setIsSpinning(true);
-    setSpinCount((count) => count + 1);
+    setSpinCount(nextSpinCount);
     currentIndexRef.current = targetIndex;
     setTranslateX(getTranslateForIndex(targetIndex, viewportWidth));
     scheduleSpinSounds();
 
-    scheduleTask(() => {
-      setIsSpinning(false);
-      setSelectedReward(winner);
-      setHighlightIndex(targetIndex);
-      setNearVehicleIndex(null);
-      setLatestWins((current) => [winner, ...current].slice(0, 5));
-      if ((spinCount + 1) % 5 === 0 && winner.name !== 'Vehicul Suvenir') {
-        const neighbor = targetIndex + (Math.random() > 0.5 ? 1 : -1);
-        if ((trackRewards[neighbor] || {}).name === 'Vehicul Suvenir') setNearVehicleIndex(neighbor);
+    const finishClaim = async (attempt = 0) => {
+      try {
+        const claimed = await api.rouletteClaim(playerId, spinResult.spinId);
+        setCashBalance(Number(claimed.player.cleanMoney || 0));
+        setFlowCoinsBalance(Number(claimed.player.flowCoins || 0));
+        setFragments(Number(claimed.player.rouletteFragments || 0));
+        setIsSpinning(false);
+        spinLockRef.current = false;
+        setSelectedReward(winner);
+        setHighlightIndex(targetIndex);
+        setNearVehicleIndex(null);
+        setLatestWins((current) => [winner, ...current].slice(0, 5));
+        if (nextSpinCount % 5 === 0 && winner.name !== 'Vehicul Suvenir') {
+          const neighbor = targetIndex + (Math.random() > 0.5 ? 1 : -1);
+          if ((trackRewards[neighbor] || {}).name === 'Vehicul Suvenir') setNearVehicleIndex(neighbor);
+        }
+        playWinSound();
+        setShowWinModal(true);
+        refresh();
+      } catch (error) {
+        if (attempt < 4) {
+          scheduleTask(() => { void finishClaim(attempt + 1); }, attempt === 0 ? 300 : 900);
+          return;
+        }
+        setIsSpinning(false);
+        spinLockRef.current = false;
+        setErrorMessage(error instanceof Error ? error.message : 'Reward claim failed');
       }
-      playWinSound();
-      refresh();
-    }, SPIN_DURATION_MS + 40);
+    };
+
+    scheduleTask(() => { void finishClaim(); }, SPIN_DURATION_MS + 40);
 
     scheduleTask(() => {
       const safeBase = rewards.length * 20;
@@ -257,8 +289,6 @@ export default function RouletteDemo() {
       setNearVehicleIndex((current) => current === targetIndex - 1 ? normalizedIndex - 1 : current === targetIndex + 1 ? normalizedIndex + 1 : null);
       setTranslateX(getTranslateForIndex(normalizedIndex, viewportWidth));
     }, SPIN_DURATION_MS + 160);
-
-    scheduleTask(() => setShowWinModal(true), SPIN_DURATION_MS + 220);
   };
 
   useEffect(() => {
@@ -267,7 +297,7 @@ export default function RouletteDemo() {
       const target = event.target;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
       event.preventDefault();
-      if (!isSpinning && canAfford(activeCost)) void handleSpin(activeCost);
+      if (!isSpinning && !spinLockRef.current && canAfford(activeCost)) void handleSpin(activeCost);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -283,8 +313,7 @@ export default function RouletteDemo() {
           <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-2xl">
               <p className="section-kicker">Roulette V2</p>
-              <h1 className="display-title mt-4">Spin for a server-confirmed reward.</h1>
-              <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/42">The server selects and grants the reward first. The animation only reveals the result already saved to your account.</p>
+              <h1 className="display-title mt-4">Spin the roulette.</h1>
             </div>
             <div className="grid grid-cols-3 gap-2 lg:min-w-[430px]">
               <WalletStat label="Clean" value={`${formatNumber(cashBalance)} $`} />
@@ -337,7 +366,7 @@ export default function RouletteDemo() {
         </section>
       </div>
 
-      {showWinModal && selectedReward ? <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/85 p-4 backdrop-blur-xl"><div className="game-panel w-full max-w-md p-6"><p className="section-kicker text-center">Reward confirmed</p><div className={`mt-5 rounded-[24px] border p-5 ${tierStyles[selectedReward.tier]}`}><div className="flex h-28 items-center justify-center rounded-[20px] border border-white/[0.06] bg-black/20 text-7xl">{selectedReward.emoji}</div><p className="mt-5 text-[9px] font-black uppercase tracking-[0.16em] opacity-55">{rarityLabel[selectedReward.tier]}</p><h3 className="mt-2 text-3xl font-black tracking-[-0.04em] text-white">{selectedReward.name}</h3><p className="mt-2 text-sm text-white/55">{selectedReward.subtitle}</p></div><p className="mt-4 text-center text-xs text-white/32">The reward was granted by the server before this reveal.</p><button type="button" onClick={() => setShowWinModal(false)} className="btn-primary mt-5 w-full rounded-2xl px-5 py-3.5 text-sm">Continue</button></div></div> : null}
+      {showWinModal && selectedReward ? <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/85 p-4 backdrop-blur-xl"><div className="game-panel w-full max-w-md p-6"><p className="section-kicker text-center">Reward confirmed</p><div className={`mt-5 rounded-[24px] border p-5 ${tierStyles[selectedReward.tier]}`}><div className="flex h-28 items-center justify-center rounded-[20px] border border-white/[0.06] bg-black/20 text-7xl">{selectedReward.emoji}</div><p className="mt-5 text-[9px] font-black uppercase tracking-[0.16em] opacity-55">{rarityLabel[selectedReward.tier]}</p><h3 className="mt-2 text-3xl font-black tracking-[-0.04em] text-white">{selectedReward.name}</h3><p className="mt-2 text-sm text-white/55">{selectedReward.subtitle}</p></div><button type="button" onClick={() => setShowWinModal(false)} className="btn-primary mt-5 w-full rounded-2xl px-5 py-3.5 text-sm">Continue</button></div></div> : null}
     </div>
   );
 }
