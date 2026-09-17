@@ -36,11 +36,6 @@ export default function AccountPage({ forced = false, onNavigate }: AccountPageP
     event.preventDefault();
     if (submitting) return;
 
-    if (mode === 'login' && session?.isGuest) {
-      const confirmed = window.confirm('Logging in will open your existing account. The temporary Visitor tutorial reward will not be merged into it. Continue?');
-      if (!confirmed) return;
-    }
-
     setSubmitting(true);
     setError(null);
     try {
@@ -87,14 +82,14 @@ export default function AccountPage({ forced = false, onNavigate }: AccountPageP
         <section className="game-panel flex flex-col justify-between overflow-hidden p-7 sm:p-9">
           <div>
             <span className="inline-flex h-14 w-14 items-center justify-center rounded-[20px] bg-[var(--accent)] text-lg font-black text-[#10140b]">CF</span>
-            <p className="section-kicker mt-8">Visitor checkpoint</p>
-            <h1 className="mt-3 text-4xl font-black tracking-[-0.055em] sm:text-5xl">Keep what you earned.</h1>
-            <p className="mt-4 max-w-md text-sm leading-6 text-white/45">Create an account to keep your tutorial reward, progress and identity. Your permanent number is assigned only after registration.</p>
+            <p className="section-kicker mt-8">Welcome to CityFlow</p>
+            <h1 className="mt-3 text-4xl font-black tracking-[-0.055em] sm:text-5xl">Create your identity.</h1>
+            <p className="mt-4 max-w-md text-sm leading-6 text-white/45">Create an account or log in before entering the city. Your tutorial starts immediately after authentication.</p>
           </div>
 
           <div className="mt-10 space-y-3">
-            <Benefit icon="check" title="Visitor progress preserved" detail="Your money, XP and first delivery stay on the same profile." />
             <Benefit icon="profile" title="Permanent player identity" detail="Your account receives the next available ID # number." />
+            <Benefit icon="check" title="Guided first steps" detail="The tutorial introduces the city and your first career." />
             <Benefit icon="inventory" title="Persistent city" detail="Inventory, garage and career history remain available after login." />
           </div>
         </section>
@@ -119,13 +114,11 @@ export default function AccountPage({ forced = false, onNavigate }: AccountPageP
             <Field label="Password"><input required minLength={10} className="input-dark w-full rounded-2xl px-4 py-3 text-sm outline-none" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Minimum 10 characters" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} /></Field>
             {mode === 'register' ? <Field label="Confirm password"><input required minLength={10} className="input-dark w-full rounded-2xl px-4 py-3 text-sm outline-none" type="password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} placeholder="Repeat password" autoComplete="new-password" /></Field> : null}
 
-            {mode === 'login' && session?.isGuest ? <p className="rounded-2xl border border-amber-300/15 bg-amber-300/[0.055] px-4 py-3 text-xs leading-5 text-amber-100/70">Login opens your existing profile. The temporary Visitor reward is not merged into an existing account.</p> : null}
             {error ? <p className="rounded-2xl border border-red-400/20 bg-red-500/[0.07] px-4 py-3 text-sm font-semibold text-red-200">{error}</p> : null}
 
             <button type="submit" disabled={submitting} className="btn-primary w-full rounded-2xl px-5 py-4 text-sm disabled:opacity-45">
               {submitting ? 'Connecting...' : mode === 'register' ? 'Create account and receive ID' : 'Log in to existing account'}
             </button>
-            {!forced ? <button type="button" onClick={() => onNavigate('/city')} className="btn-ghost w-full rounded-2xl px-5 py-3 text-sm">Back to city</button> : null}
           </form>
         </section>
       </div>

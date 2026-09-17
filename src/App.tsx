@@ -36,16 +36,13 @@ const LeaderboardsPage = lazy(() => import('./components/LeaderboardsPage'));
 const AccountPage = lazy(() => import('./components/AccountPage'));
 
 export default function App() {
-  const { player, session } = usePlayer();
+  const { player, session, loading } = usePlayer();
   const { status } = usePlatformStatus();
   const playerCityProgress = readPlayerCityProgress(player);
   const [cityProgress, setCityProgress] = useState<CityProgress | null>(playerCityProgress);
   const [path, setPath] = useState<RoutePath>(normalizePath(window.location.pathname || '/city'));
   const [menuOpen, setMenuOpen] = useState(false);
-  const tutorial = cityProgress?.tutorial;
-  const accountRequired = Boolean(session?.isGuest && tutorial && (
-    tutorial.completedAt || tutorial.skippedAt
-  ));
+  const accountRequired = Boolean(session?.isGuest);
 
   useEffect(() => {
     const nextPath = normalizePath(window.location.pathname || path);
@@ -139,6 +136,14 @@ export default function App() {
     if (path === '/adminpanelv2') return <AdminPanelV2 />;
     return <RouletteDemo />;
   };
+
+  if (loading) {
+    return <PageFallback />;
+  }
+
+  if (accountRequired) {
+    return <Suspense fallback={<PageFallback />}><AccountPage forced onNavigate={navigateLoose} /></Suspense>;
+  }
 
   if (path === '/account') {
     return <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>;

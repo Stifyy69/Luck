@@ -23,8 +23,8 @@ type TargetRect = { left: number; top: number; width: number; height: number };
 const COPY: Record<number, TutorialCopy> = {
   0: {
     kicker: 'Welcome to CityFlow',
-    title: 'Start as a Visitor.',
-    description: 'Complete your first delivery, learn the city and create your permanent identity only after you have earned your first reward.',
+    title: 'Start your journey.',
+    description: 'Learn the city, complete your first delivery and unlock your first career step.',
     icon: 'home',
     action: 'Start tutorial',
   },
@@ -87,7 +87,7 @@ function visibleTarget(name: string) {
 }
 
 export default function CityTutorialOverlay({ path, onNavigate }: CityTutorialOverlayProps) {
-  const { playerId, player } = usePlayer();
+  const { playerId, player, session } = usePlayer();
   const [progress, setProgress] = useState<CityProgress | null>(readPlayerCityProgress(player));
   const [busy, setBusy] = useState(false);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
@@ -150,7 +150,7 @@ export default function CityTutorialOverlay({ path, onNavigate }: CityTutorialOv
       else if (step === 2) onNavigate('/pizzer');
       else if (step === 6) {
         setProgress(await completeCityTutorial(playerId));
-        onNavigate('/account');
+        onNavigate(session?.isGuest ? '/account' : '/city');
       }
     } finally {
       setBusy(false);
@@ -162,7 +162,7 @@ export default function CityTutorialOverlay({ path, onNavigate }: CityTutorialOv
     setBusy(true);
     try {
       setProgress(await skipCityTutorial(playerId));
-      onNavigate('/account');
+      onNavigate(session?.isGuest ? '/account' : '/city');
     } finally {
       setBusy(false);
     }
