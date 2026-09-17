@@ -295,9 +295,6 @@ export default function PizzerPage() {
       setState(payload.state);
       setAcceptedOption(null);
       refresh();
-      window.setTimeout(() => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 80);
       if (payload.result.accident) {
         const repairLabel = payload.state.repairLabel || 'Repairing vehicle';
         const repairSec = payload.state.repairSecondsLeft || 10;
@@ -315,7 +312,10 @@ export default function PizzerPage() {
       window.setTimeout(() => {
         api
           .pizzerOrderOptions(playerId)
-          .then((data: { options: PizzerOrderOption[] }) => setOptions(data.options || []))
+          .then((data: { options: PizzerOrderOption[] }) => {
+            setOptions(data.options || []);
+            scrollToDispatch();
+          })
           .catch(() => {});
       }, 550);
     } catch (e) {
@@ -356,15 +356,22 @@ export default function PizzerPage() {
               Pick a contract, let the kitchen prepare it automatically and protect the order until the final handoff.
             </p>
 
-            <button
-              type="button"
-              data-tutorial-target="pizzer-start"
-              onClick={() => chooseNextRun().catch(() => {})}
-              disabled={busy || underRepair || canPack || canDeliver}
-              className="btn-primary mt-7 min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              {busy && canStart ? 'Loading dispatch...' : canShowOptions ? 'View available runs' : 'Choose next run'}
-            </button>
+            <div className="mt-7 flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                data-tutorial-target="pizzer-start"
+                onClick={() => chooseNextRun().catch(() => {})}
+                disabled={busy || underRepair || canPack || canDeliver}
+                className="btn-primary min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                {busy && canStart ? 'Loading dispatch...' : canShowOptions ? 'View available runs' : 'Choose next run'}
+              </button>
+              {!canStart && (
+                <button type="button" onClick={() => endShift().catch(() => {})} disabled={busy} className="btn-danger rounded-2xl px-5 py-3.5 text-sm disabled:opacity-35">
+                  Clock out
+                </button>
+              )}
+            </div>
 
             <div className="mt-7 grid grid-cols-2 gap-3 border-t border-white/[0.07] pt-6 sm:grid-cols-4">
               <HeroStat label="Courier" value={displayName} />
@@ -404,11 +411,6 @@ export default function PizzerPage() {
               <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Your next vehicle unlock</h2>
               <p className="mt-2 text-sm text-white/38">Vehicles unlock automatically with courier level. Select a card to inspect its route benefits.</p>
             </div>
-            {!canStart && (
-              <button type="button" onClick={() => endShift().catch(() => {})} disabled={busy} className="btn-danger rounded-2xl px-4 py-2.5 text-xs disabled:opacity-35">
-                Clock out
-              </button>
-            )}
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-3">
