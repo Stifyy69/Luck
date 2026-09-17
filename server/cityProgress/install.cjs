@@ -153,10 +153,10 @@ async function normalizeCareerReward(playerId, path, payload) {
 
 function normalizeOptionXp(path, payload) {
   if (!payload || typeof payload !== 'object') return payload;
-  if (path === '/api/pizzer/order/options' && Array.isArray(payload.options)) {
+  if (path === '/api/pizzer/orders/options' && Array.isArray(payload.options)) {
     return { ...payload, options: payload.options.map((option) => ({ ...option, estimatedXp: CITY_XP_REWARDS.PIZZER_DELIVERY })) };
   }
-  if (path === '/api/fisher/spot/options' && Array.isArray(payload.options)) {
+  if (path === '/api/fisher/spots/options' && Array.isArray(payload.options)) {
     return { ...payload, options: payload.options.map((option) => ({ ...option, estimatedXp: CITY_XP_REWARDS.FISHER_CATCH })) };
   }
   return payload;
@@ -280,7 +280,10 @@ async function handleResponse(req, originalPayload) {
     return { ...payload, cityProgress: progress, careerAccess: progress.careerAccess };
   }
 
-  if (payload?.cityReward) return payload;
+  if (payload?.cityReward) {
+    const progress = await getCityProgress(playerId);
+    return { ...payload, cityProgress: progress };
+  }
 
   if (path === '/api/pizzer/shift/start' && !payload?.error) {
     const progress = await advanceTutorialAtLeast(playerId, 4);
