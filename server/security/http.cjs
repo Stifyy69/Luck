@@ -73,7 +73,11 @@ function installHttpSecurity(app) {
   app.disable('x-powered-by');
   app.use(securityHeaders);
   app.use(corsMiddleware);
-  app.use('/api', createRateLimiter({ windowMs: 60_000, max: 180 }));
+  // The game keeps several read-only UI states fresh in the background.
+  // Sensitive endpoints have their own tighter per-player limits, so this
+  // guard must stay high enough that normal gameplay and multiple open tabs
+  // cannot lock a real player out with a 429 response.
+  app.use('/api', createRateLimiter({ windowMs: 60_000, max: 1_200 }));
 }
 
 module.exports = {
