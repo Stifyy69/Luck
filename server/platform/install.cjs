@@ -34,6 +34,8 @@ const {
   upgradeGang,
 } = require('./store.cjs');
 const { pool } = require('./db.cjs');
+const { listVehicleStock, updateVehicleStock } = require('./vehicleStock.cjs');
+const { installRouletteFlow } = require('../economy/rouletteFlow.cjs');
 const { createRateLimiter } = require('../security/http.cjs');
 const { requireAuthenticatedPlayer } = require('../security/userAuth.cjs');
 
@@ -45,6 +47,7 @@ function playerIdFromRequest(req, payload = null) {
       || req.params?.playerId
       || payload?.playerId
       || payload?.state?.playerId
+      || payload?.user?.playerId
       || '',
   ).trim();
 }
@@ -75,6 +78,8 @@ function installPlatformSystems(app, express) {
   const requirePlayer = requireAuthenticatedPlayer(pool);
   const adminLoginLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
   const gangActionLimit = createRateLimiter({ windowMs: 60_000, max: 20, key: (req) => req.playerId || req.ip });
+
+  installRouletteFlow(app, requirePlayer, createRateLimiter);
 
   app.post('/api/adminpanelv2/login', adminLoginLimit, (req, res) => {
     if (!adminConfigurationReady()) {
@@ -237,6 +242,22 @@ function installPlatformSystems(app, express) {
     }
   });
 
+  app.get('/api/adminpanelv3/vehicle-stock', requirePlatformAdmin, async (_req, res) => {
+    try {
+      return res.json(await listVehicleStock());
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : 'vehicle stock failed' });
+    }
+  });
+
+  app.post('/api/adminpanelv3/vehicle-stock', requirePlatformAdmin, async (req, res) => {
+    try {
+      return res.json({ ok: true, ...(await updateVehicleStock(ADMIN_USER, req.body || {})) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'vehicle stock update failed' });
+    }
+  });
+
   app.get('/api/adminpanelv3/players/:playerId', requirePlatformAdmin, async (req, res) => {
     try {
       const player = await getAdminPlayerDetail(String(req.params.playerId || ''));
@@ -321,6 +342,17 @@ function installPlatformSystems(app, express) {
 }
 
 async function handlePlatformResponse(req, payload) {
+  if ((req.path === '/api/auth/guest' || req.path === '/api/auth/register') && !payload?.error) {
+    const playerId = playerIdFromRequest(req, payload);
+    if (playerId) {
+      await pool.query(
+        `UPDATE players SET clean_money = 69, updated_at = NOW()
+         WHERE player_id = $1 AND clean_money = 1000000`,
+        [playerId],
+      );
+    }
+  }
+
   if (req.path !== '/api/inventory/use' || payload?.error || !payload?.ok) return payload;
   const playerId = playerIdFromRequest(req, payload);
   if (!playerId) return payload;
