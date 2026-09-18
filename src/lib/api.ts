@@ -66,6 +66,10 @@ export const api = {
   showroom: () => get<ShowroomResponse>('/api/showroom'),
   showroomBuy: (playerId: string, modelId: number, useVoucher?: boolean) =>
     post<ShowroomBuyResult>('/api/showroom/buy', { playerId, modelId, useVoucher: useVoucher ?? false }),
+  roulettePending: async (playerId: string) => {
+    const payload = await get<{ spin: RouletteFlowResult | null }>('/api/roulette/pending', { playerId });
+    return payload.spin;
+  },
   rouletteStart: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments', operationId: string) =>
     post<RouletteFlowResult>('/api/roulette/start', { playerId, costType, operationId }),
   rouletteClaim: (playerId: string, spinId: string) =>
