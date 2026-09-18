@@ -86,9 +86,9 @@ test('roulette start and claim are idempotent and a player cannot orphan multipl
 
 test('roulette pending schema is owned by the V2 flow and migrates the incompatible legacy table', () => {
   assert.doesNotMatch(platformDb, /CREATE TABLE IF NOT EXISTS roulette_pending_spins/);
-  assert.equal(rouletteFlow.includes('DO $'), true);
-  assert.equal(rouletteFlow.includes('END $;'), true);
-  assert.equal(rouletteFlow.includes('DO $\n'), false);
+  assert.equal(rouletteFlow.includes('DO ' + '$$'), true);
+  assert.equal(rouletteFlow.includes('END ' + '$$' + ';'), true);
+  assert.equal(rouletteFlow.includes('DO ' + '$' + '\n'), false);
   assert.match(rouletteFlow, /column_name = 'spin_token'/);
   assert.match(rouletteFlow, /DROP TABLE roulette_pending_spins/);
   assert.match(rouletteFlow, /spin_id TEXT PRIMARY KEY/);
