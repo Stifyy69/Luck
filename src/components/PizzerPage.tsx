@@ -51,6 +51,14 @@ const FLEET: FleetVehicle[] = [
   },
 ];
 
+const PIZZER_ACTIVITY_STAGES = [
+  'Packing pizzas',
+  'Adding drinks',
+  'Checking receipt',
+  'Driving to customer',
+  'Customer reached',
+];
+
 function fmt(n: number) {
   return n.toLocaleString('en-US');
 }
@@ -98,7 +106,12 @@ export default function PizzerPage() {
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState<Popup>(null);
   const [fleetPreviewId, setFleetPreviewId] = useState<FleetVehicle['id']>('bicycle');
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [activityStageIndex, setActivityStageIndex] = useState(0);
+  const [activityProgress, setActivityProgress] = useState(0);
   const activeRef = useRef<HTMLElement | null>(null);
+  const activityOrderRef = useRef<string | null>(null);
+  const activityRunRef = useRef(0);
 
   const pushPopup = useCallback((text: string, isError = false) => {
     setPopup({ text, isError });
@@ -144,6 +157,38 @@ export default function PizzerPage() {
     setFleetPreviewId(currentVehicle.id);
   }, [currentVehicle.id]);
 
+  useEffect(() => {
+    const order = state?.activeOrder;
+    if (!order || state?.shiftState !== 'DELIVERY_ACTIVE' || underRepair) {
+      activityRunRef.current += 1;
+      setActivityOpen(false);
+      if (!order) activityOrderRef.current = null;
+      return;
+    }
+    if (activityOrderRef.current === order.orderId) return;
+
+    activityOrderRef.current = order.orderId;
+    const runId = activityRunRef.current + 1;
+    activityRunRef.current = runId;
+    setActivityOpen(true);
+    setActivityStageIndex(0);
+    setActivityProgress(0);
+
+    const runStages = async () => {
+      for (let index = 0; index < PIZZER_ACTIVITY_STAGES.length; index += 1) {
+        if (activityRunRef.current !== runId) return;
+        setActivityStageIndex(index);
+        setActivityProgress(Math.floor(((index + 1) / PIZZER_ACTIVITY_STAGES.length) * 100));
+        if (index < PIZZER_ACTIVITY_STAGES.length - 1) await wait(850);
+      }
+    };
+
+    void runStages();
+    return () => {
+      if (activityRunRef.current === runId) activityRunRef.current += 1;
+    };
+  }, [state?.activeOrder?.orderId, state?.shiftState, underRepair]);
+
   const xpPercent = useMemo(() => {
     if (!progress) return 0;
     if (!progress.nextLevelXp) return 100;
@@ -176,6 +221,9 @@ export default function PizzerPage() {
     setBusy(true);
     try {
       const next = await api.pizzerShiftEnd(playerId);
+      activityRunRef.current += 1;
+      activityOrderRef.current = null;
+      setActivityOpen(false);
       setState(next);
       pushPopup('Shift closed. Earnings were saved.');
     } catch (e) {
@@ -228,6 +276,72 @@ export default function PizzerPage() {
           <div className="flex items-start gap-3">
             <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${popup.isError ? 'bg-[var(--danger)]' : 'bg-[var(--accent)]'}`} />
             <span>{popup.text}</span>
+          </div>
+        </div>
+      )}
+
+      {activityOpen && active && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 px-4 backdrop-blur-md">
+          <div className="game-panel w-full max-w-4xl overflow-hidden p-5 sm:p-7">
+            <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+              <div>
+                <div className="flex h-[240px] items-center justify-center rounded-[22px] border border-white/[0.08] bg-[#090c09] p-4">
+                  <img src={currentVehicle.image} alt={currentVehicle.label} className="h-full w-full object-contain" />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <MissionStat label="Distance" value={`${fmt(active.distanceMeters)}m`} />
+                  <MissionStat label="Freshness" value={`${active.freshness}%`} good={active.freshness >= 75} />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="section-kicker">Delivery in progress</p>
+                  <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] ${orderTypeTone(active.orderType)}`}>{active.orderType}</span>
+                </div>
+                <h2 className="mt-2 text-4xl font-black tracking-[-0.05em] text-white">{active.targetLabel}</h2>
+                <p className="mt-2 text-sm text-white/42">Your order moves through every preparation and delivery step automatically.</p>
+
+                <div className="mt-6 rounded-[20px] border border-[rgba(211,255,81,0.2)] bg-[rgba(211,255,81,0.055)] p-5">
+                  <p className="text-[10px] font-black uppercase tracking-[0.15em] text-[var(--accent)]">
+                    Stage {Math.min(PIZZER_ACTIVITY_STAGES.length, activityStageIndex + 1)} / {PIZZER_ACTIVITY_STAGES.length}
+                  </p>
+                  <p className="mt-2 text-xl font-black text-white">{PIZZER_ACTIVITY_STAGES[activityStageIndex]}</p>
+                </div>
+
+                <div className="mt-5">
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="font-bold text-white/40">Delivery progress</span>
+                    <span className="font-black text-[var(--accent)]">{activityProgress}%</span>
+                  </div>
+                  <div className="progress-track"><div className="progress-fill" style={{ width: `${clampPercent(activityProgress)}%` }} /></div>
+                </div>
+
+                <div className="mt-5 rounded-[18px] border border-white/[0.07] bg-black/20 p-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/28">Order manifest</p>
+                  <p className="mt-2 text-sm font-bold text-white/70">
+                    {active.pizzas.map((item) => `${item.quantity}x ${item.name}`).join(' · ')}
+                    {active.drinks.length > 0 ? ` · ${active.drinks.map((item) => `${item.quantity}x ${item.name}`).join(' · ')}` : ''}
+                  </p>
+                </div>
+
+                {activityStageIndex === PIZZER_ACTIVITY_STAGES.length - 1 ? (
+                  <button
+                    type="button"
+                    data-tutorial-target="pizzer-handover"
+                    onClick={() => handover().catch(() => {})}
+                    disabled={busy || underRepair}
+                    className="btn-primary mt-6 w-full rounded-2xl px-5 py-3.5 text-sm disabled:opacity-40"
+                  >
+                    {busy ? 'Completing delivery...' : 'Complete delivery'}
+                  </button>
+                ) : (
+                  <div className="mt-6 rounded-2xl border border-white/[0.07] bg-black/20 px-4 py-3 text-center text-xs font-black uppercase tracking-[0.12em] text-white/38">
+                    Automatic step in progress
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
