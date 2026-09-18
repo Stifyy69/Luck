@@ -51,7 +51,7 @@ test('Pizzer and Fisher show full-screen activity stages before the shared rewar
   assert.match(pizzerSource, /Packing pizzas/);
   assert.match(pizzerSource, /Driving to customer/);
   assert.match(pizzerSource, /Customer reached/);
-  assert.match(pizzerSource, />Complete</);
+  assert.match(pizzerSource, /'Complete'/);
   assert.match(pizzerSource, /Complete & end shift/);
   assert.match(pizzerSource, /handover\(false\)/);
   assert.match(pizzerSource, /handover\(true\)/);
