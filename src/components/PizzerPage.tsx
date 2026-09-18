@@ -3,7 +3,7 @@ import { usePlayer } from '../hooks/usePlayer';
 import { api } from '../lib/api';
 import { publishCityProgress } from '../lib/cityProgressApi';
 import type { CityProgress, CityProgressReward } from '../lib/cityProgress';
-import type { PizzerOrderOption, PizzerStateResponse } from '../types/game';
+import type { PizzerStateResponse } from '../types/game';
 
 type Popup = { text: string; isError?: boolean } | null;
 
@@ -17,14 +17,6 @@ type FleetVehicle = {
   contractAccess: string;
   bonus: string;
 };
-
-const PACKING_STEPS = [
-  { key: 'PICK_BOXES', label: 'Packing pizzas' },
-  { key: 'ADD_DRINKS', label: 'Securing drinks' },
-  { key: 'CONFIRM_ORDER', label: 'Checking receipt' },
-];
-
-const AUTO_DISPATCH_SCROLL_KEY = 'cityflow-pizzer-auto-dispatch-scroll';
 
 const FLEET: FleetVehicle[] = [
   {
@@ -79,12 +71,6 @@ function orderTypeTone(orderType: string) {
   return 'border-[rgba(114,183,255,0.28)] bg-[rgba(114,183,255,0.07)] text-[var(--info)]';
 }
 
-function difficultyTone(difficulty: string) {
-  if (difficulty === 'HARD') return 'text-[var(--danger)]';
-  if (difficulty === 'MEDIUM') return 'text-[var(--warning)]';
-  return 'text-[var(--money)]';
-}
-
 function ratingTone(rating: string) {
   if (rating === 'PERFECT') return 'border-[rgba(211,255,81,0.34)] bg-[rgba(211,255,81,0.09)] text-[var(--accent)]';
   if (rating === 'GOOD') return 'border-[rgba(114,227,154,0.28)] bg-[rgba(114,227,154,0.07)] text-[var(--money)]';
@@ -93,7 +79,7 @@ function ratingTone(rating: string) {
 }
 
 function shiftLabel(shiftState?: string) {
-  if (shiftState === 'SELECTING_ORDER') return 'Dispatch board';
+  if (shiftState === 'SELECTING_ORDER') return 'Route pending';
   if (shiftState === 'PACKING_ORDER') return 'Preparing order';
   if (shiftState === 'DELIVERY_ACTIVE') return 'Delivery live';
   if (shiftState === 'DELIVERY_RESULT') return 'Run complete';
@@ -109,14 +95,9 @@ function fleetVehicleForLevel(level: number) {
 export default function PizzerPage() {
   const { player, playerId, refresh } = usePlayer();
   const [state, setState] = useState<PizzerStateResponse | null>(null);
-  const [options, setOptions] = useState<PizzerOrderOption[]>([]);
-  const [acceptedOption, setAcceptedOption] = useState<PizzerOrderOption | null>(null);
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState<Popup>(null);
-  const [autoPreparing, setAutoPreparing] = useState(false);
-  const [preparationStep, setPreparationStep] = useState(0);
   const [fleetPreviewId, setFleetPreviewId] = useState<FleetVehicle['id']>('bicycle');
-  const dispatchRef = useRef<HTMLElement | null>(null);
   const activeRef = useRef<HTMLElement | null>(null);
 
   const pushPopup = useCallback((text: string, isError = false) => {
@@ -128,14 +109,10 @@ export default function PizzerPage() {
     try {
       const next = await api.pizzerState(playerId);
       setState(next);
-      if (next.shiftState === 'SELECTING_ORDER' && options.length === 0 && Number(next.repairSecondsLeft || 0) <= 0) {
-        const data = await api.pizzerOrderOptions(playerId);
-        setOptions(data.options || []);
-      }
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Failed to load courier state', true);
     }
-  }, [playerId, options.length, pushPopup]);
+  }, [playerId, pushPopup]);
 
   useEffect(() => {
     loadState().catch(() => {});
@@ -144,7 +121,7 @@ export default function PizzerPage() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (!state) return;
-      if (state.shiftState === 'DELIVERY_ACTIVE' || state.shiftState === 'PACKING_ORDER') {
+      if (state.shiftState === 'DELIVERY_ACTIVE' || state.shiftState === 'PACKING_ORDER' || state.shiftState === 'SELECTING_ORDER') {
         loadState().catch(() => {});
       }
     }, 1000);
@@ -154,8 +131,6 @@ export default function PizzerPage() {
   const progress = state?.progress;
   const active = state?.activeOrder;
   const canStart = state?.shiftState === 'IDLE';
-  const canShowOptions = state?.shiftState === 'SELECTING_ORDER';
-  const canPack = state?.shiftState === 'PACKING_ORDER';
   const canDeliver = state?.shiftState === 'DELIVERY_ACTIVE';
   const underRepair = Number(state?.repairSecondsLeft || 0) > 0;
   const displayName = useMemo(() => String(player?.displayName || 'Unknown'), [player]);
@@ -175,24 +150,11 @@ export default function PizzerPage() {
     return clampPercent((Number(progress.currentLevelXp || 0) / Math.max(1, Number(progress.nextLevelXp || 1))) * 100);
   }, [progress]);
 
-  const scrollToDispatch = useCallback(() => {
-    window.setTimeout(() => {
-      dispatchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 120);
-  }, []);
-
   const scrollToActive = useCallback(() => {
     window.setTimeout(() => {
       activeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 120);
   }, []);
-
-  useEffect(() => {
-    if (!canShowOptions || options.length === 0) return;
-    if (sessionStorage.getItem(AUTO_DISPATCH_SCROLL_KEY) !== '1') return;
-    sessionStorage.removeItem(AUTO_DISPATCH_SCROLL_KEY);
-    scrollToDispatch();
-  }, [canShowOptions, options.length, scrollToDispatch]);
 
   const startShift = async () => {
     if (busy) return;
@@ -200,35 +162,13 @@ export default function PizzerPage() {
     try {
       const next = await api.pizzerShiftStart(playerId);
       setState(next);
-      const data = await api.pizzerOrderOptions(playerId);
-      setOptions(data.options || []);
-      pushPopup('Dispatch sent the next available runs.');
-      scrollToDispatch();
+      pushPopup('Random delivery assigned. Route started.');
+      scrollToActive();
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Could not start courier shift', true);
     } finally {
       setBusy(false);
     }
-  };
-
-  const chooseNextRun = async () => {
-    if (busy || underRepair) return;
-    if (canStart) {
-      await startShift();
-      return;
-    }
-    if (canShowOptions && options.length === 0) {
-      setBusy(true);
-      try {
-        const data = await api.pizzerOrderOptions(playerId);
-        setOptions(data.options || []);
-      } catch (e) {
-        pushPopup(e instanceof Error ? e.message : 'Could not load contracts', true);
-      } finally {
-        setBusy(false);
-      }
-    }
-    scrollToDispatch();
   };
 
   const endShift = async () => {
@@ -237,58 +177,10 @@ export default function PizzerPage() {
     try {
       const next = await api.pizzerShiftEnd(playerId);
       setState(next);
-      setOptions([]);
-      setAcceptedOption(null);
-      setAutoPreparing(false);
-      setPreparationStep(0);
       pushPopup('Shift closed. Earnings were saved.');
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Could not end courier shift', true);
     } finally {
-      setBusy(false);
-    }
-  };
-
-  const refreshOptions = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const data = await api.pizzerOrderOptions(playerId);
-      setOptions(data.options || []);
-      pushPopup('Dispatch board refreshed.');
-    } catch (e) {
-      pushPopup(e instanceof Error ? e.message : 'Could not refresh contracts', true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const selectOrder = async (option: PizzerOrderOption) => {
-    if (busy) return;
-    setBusy(true);
-    setAcceptedOption(option);
-    setAutoPreparing(true);
-    setPreparationStep(0);
-    try {
-      let next = await api.pizzerOrderSelect(playerId, option.orderId);
-      setState(next);
-      setOptions([]);
-      scrollToActive();
-
-      for (let index = 0; index < PACKING_STEPS.length; index += 1) {
-        setPreparationStep(index);
-        await wait(700);
-        next = await api.pizzerPackingStep(playerId, PACKING_STEPS[index].key);
-        setState(next);
-      }
-
-      setPreparationStep(PACKING_STEPS.length);
-      pushPopup('Order prepared automatically. Route is ready.');
-    } catch (e) {
-      setAcceptedOption(null);
-      pushPopup(e instanceof Error ? e.message : 'Contract preparation failed', true);
-    } finally {
-      setAutoPreparing(false);
       setBusy(false);
     }
   };
@@ -302,14 +194,7 @@ export default function PizzerPage() {
       const payload = await api.pizzerHandover(playerId, 'DOOR');
       if (payload.cityProgress) publishCityProgress(payload.cityProgress as CityProgress, payload.cityReward as CityProgressReward | undefined);
       setState(payload.state);
-      setAcceptedOption(null);
-      if (!payload.result.accident) {
-        sessionStorage.setItem(AUTO_DISPATCH_SCROLL_KEY, '1');
-        api
-          .pizzerOrderOptions(playerId)
-          .then((data: { options: PizzerOrderOption[] }) => setOptions(data.options || []))
-          .catch(() => {});
-      }
+      if (!payload.result.accident) scrollToActive();
       refresh();
       if (payload.result.accident) {
         const repairLabel = payload.state.repairLabel || 'Repairing vehicle';
@@ -358,20 +243,20 @@ export default function PizzerPage() {
               </span>
             </div>
 
-            <h1 className="display-title mt-5">Choose the next run.</h1>
+            <h1 className="display-title mt-5">Deliver. Get paid. Keep moving.</h1>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-white/45">
-              Pick a contract, let the kitchen prepare it automatically and protect the order until the final handoff.
+              The server assigns each route automatically. Complete the handoff and the next delivery starts immediately.
             </p>
 
             <div className="mt-7 flex flex-wrap justify-center gap-3">
               <button
                 type="button"
                 data-tutorial-target="pizzer-start"
-                onClick={() => chooseNextRun().catch(() => {})}
-                disabled={busy || underRepair || canPack || canDeliver}
+                onClick={() => startShift().catch(() => {})}
+                disabled={busy || underRepair || !canStart}
                 className="btn-primary min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-35"
               >
-                {busy && canStart ? 'Loading dispatch...' : canShowOptions ? 'View available runs' : 'Choose next run'}
+                {busy ? 'Starting delivery...' : 'Start delivery'}
               </button>
               {!canStart && (
                 <button type="button" onClick={() => endShift().catch(() => {})} disabled={busy} className="btn-danger rounded-2xl px-5 py-3.5 text-sm disabled:opacity-35">
@@ -457,71 +342,15 @@ export default function PizzerPage() {
           </div>
         </section>
 
-        {canShowOptions && (
-          <section ref={dispatchRef} className="game-panel-soft scroll-mt-24 p-5 sm:p-6">
-            <div className="flex flex-wrap items-end justify-between gap-4 text-center sm:text-left">
-              <div className="w-full sm:w-auto">
-                <p className="section-kicker">Dispatch board</p>
-                <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Choose the next run</h2>
-                <p className="mt-2 text-sm text-white/38">Higher pressure contracts pay more, but give you less room for mistakes.</p>
-              </div>
-              <button type="button" onClick={() => refreshOptions().catch(() => {})} disabled={busy || underRepair} className="btn-ghost mx-auto rounded-2xl px-4 py-2.5 text-xs disabled:opacity-40 sm:mx-0">
-                Refresh board
-              </button>
-            </div>
 
-            <div className="mt-6 grid gap-4 lg:grid-cols-3">
-              {options.map((option, index) => (
-                <article key={option.orderId} className="game-card-interactive flex min-h-[330px] flex-col p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-white/24">Contract {String(index + 1).padStart(2, '0')}</p>
-                      <span className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${orderTypeTone(option.orderType)}`}>
-                        {option.orderType}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/25">Est. payout</p>
-                      <p className="mt-1 text-xl font-black text-[var(--money)]">{fmt(option.estimatedReward)} $</p>
-                      <p className="text-xs font-bold text-[var(--accent)]">+{option.estimatedXp} XP</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 grid grid-cols-3 gap-2 border-y border-white/[0.065] py-4">
-                    <ContractStat label="Distance" value={`${fmt(option.distanceMeters)}m`} />
-                    <ContractStat label="ETA" value={`${option.estimatedTimeSec}s`} />
-                    <ContractStat label="Pressure" value={option.difficulty} tone={difficultyTone(option.difficulty)} />
-                  </div>
-
-                  <div className="mt-4 flex-1">
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/27">Order manifest</p>
-                    <div className="mt-3 space-y-2">
-                      {option.pizzas.map((item) => (
-                        <ManifestRow key={`pizza-${option.orderId}-${item.name}`} quantity={item.quantity} name={item.name} />
-                      ))}
-                      {option.drinks.map((item) => (
-                        <ManifestRow key={`drink-${option.orderId}-${item.name}`} quantity={item.quantity} name={item.name} muted />
-                      ))}
-                    </div>
-                  </div>
-
-                  <button type="button" data-tutorial-target="pizzer-order" onClick={() => selectOrder(option).catch(() => {})} disabled={busy} className="btn-secondary mt-5 w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-40">
-                    Accept and prepare
-                  </button>
-                </article>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {(canPack || canDeliver) && active && (
+        {canDeliver && active && (
           <section ref={activeRef} className="grid scroll-mt-24 gap-5 xl:grid-cols-[1.15fr_0.85fr]">
             <div className="game-panel-soft p-5 sm:p-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="section-kicker">Active contract</p>
                   <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">{active.targetLabel}</h2>
-                  <p className="mt-2 text-sm text-white/38">{autoPreparing ? 'The kitchen is preparing the full order automatically.' : 'The route is active. Protect freshness and vehicle condition.'}</p>
+                  <p className="mt-2 text-sm text-white/38">The route is active. Protect freshness and vehicle condition.</p>
                 </div>
                 <span className={`rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.13em] ${orderTypeTone(active.orderType)}`}>{active.orderType}</span>
               </div>
@@ -529,9 +358,6 @@ export default function PizzerPage() {
               <div className="mt-6 rounded-[20px] border border-white/[0.07] bg-black/20 p-4">
                 <div className="flex items-center justify-between gap-4">
                   <p className="text-[10px] font-black uppercase tracking-[0.15em] text-white/27">Order manifest</p>
-                  {acceptedOption && (
-                    <p className="text-sm font-black text-[var(--money)]">~{fmt(acceptedOption.estimatedReward)} $ · +{acceptedOption.estimatedXp} XP</p>
-                  )}
                 </div>
                 <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
                   <div className="space-y-2.5">
@@ -557,7 +383,7 @@ export default function PizzerPage() {
 
             <div className="game-panel-soft p-5 sm:p-6">
               <p className="section-kicker">Delivery status</p>
-              <h3 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">{autoPreparing ? 'Preparing order' : 'Ready for delivery'}</h3>
+              <h3 className="mt-2 text-2xl font-black tracking-[-0.035em] text-white">Ready for delivery</h3>
 
               <div className="mt-5 flex h-[155px] items-center justify-center rounded-[20px] border border-white/[0.08] bg-[#090c09] p-3">
                 <img src={currentVehicle.image} alt={currentVehicle.label} className="h-full w-full object-contain" />
@@ -570,23 +396,7 @@ export default function PizzerPage() {
                 <p className="text-sm font-black text-[var(--accent)]">Streak {state?.streak ?? 0}</p>
               </div>
 
-              {autoPreparing ? (
-                <div className="mt-5 space-y-3">
-                  {PACKING_STEPS.map((step, index) => {
-                    const done = preparationStep > index;
-                    const activeStep = preparationStep === index;
-                    return (
-                      <div key={step.key} className={`flex items-center gap-3 rounded-[17px] border p-3 ${done ? 'border-[rgba(114,227,154,0.2)] bg-[rgba(114,227,154,0.055)]' : activeStep ? 'border-[rgba(211,255,81,0.28)] bg-[rgba(211,255,81,0.07)]' : 'border-white/[0.065] bg-white/[0.02] opacity-45'}`}>
-                        <span className={`inline-flex h-9 w-9 items-center justify-center rounded-[13px] text-[10px] font-black ${done ? 'bg-[var(--money)] text-[#0b160f]' : activeStep ? 'bg-[var(--accent)] text-[#10140b]' : 'bg-white/[0.05] text-white/35'}`}>
-                          {done ? 'OK' : String(index + 1).padStart(2, '0')}
-                        </span>
-                        <p className="text-sm font-black text-white">{step.label}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="mt-5">
+              <div className="mt-5">
                   <QualityBar label="Freshness" value={active.freshness} tone="good" />
                   <div className="mt-5">
                     <QualityBar label="Vehicle condition" value={100 - active.damagePercent} tone={active.damagePercent >= 30 ? 'danger' : 'good'} />
@@ -594,8 +404,7 @@ export default function PizzerPage() {
                   <button type="button" data-tutorial-target="pizzer-handover" onClick={() => handover().catch(() => {})} disabled={busy || underRepair || !canDeliver} className="btn-primary mt-6 w-full rounded-2xl px-4 py-3.5 text-sm disabled:opacity-40">
                     Complete delivery
                   </button>
-                </div>
-              )}
+              </div>
             </div>
           </section>
         )}
@@ -664,14 +473,6 @@ function FleetDetail({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ContractStat({ label, value, tone = 'text-white' }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="min-w-0 text-center">
-      <p className="text-[9px] font-black uppercase tracking-[0.12em] text-white/24">{label}</p>
-      <p className={`mt-1 truncate text-xs font-black ${tone}`}>{value}</p>
-    </div>
-  );
-}
 
 function ManifestRow({ quantity, name, muted = false }: { quantity: number; name: string; muted?: boolean }) {
   return (
