@@ -15,7 +15,7 @@ type TutorialCopy = {
   description: string;
   icon: CityIconName;
   action: string;
-  target?: 'pizzer-nav' | 'pizzer-start' | 'pizzer-order' | 'pizzer-handover';
+  target?: 'pizzer-nav' | 'pizzer-start' | 'pizzer-handover';
 };
 
 type TargetRect = { left: number; top: number; width: number; height: number };
@@ -46,18 +46,18 @@ const COPY: Record<number, TutorialCopy> = {
   3: {
     kicker: 'Step 3 · Start working',
     title: 'Start your first shift.',
-    description: 'Follow the arrow and press Choose Next Run to open the dispatch board.',
+    description: 'Press Start delivery. The server will assign a random route and start it immediately.',
     icon: 'route',
-    action: 'Choose Next Run',
+    action: 'Start delivery',
     target: 'pizzer-start',
   },
   4: {
-    kicker: 'Step 4 · Dispatch',
-    title: 'Accept your first contract.',
-    description: 'Compare the available runs, then use the highlighted Accept button.',
+    kicker: 'Step 4 · Random route',
+    title: 'Complete your first delivery.',
+    description: 'Your route is already active. Protect the order and use the highlighted handoff button when you are ready.',
     icon: 'package',
-    action: 'Accept contract',
-    target: 'pizzer-order',
+    action: 'Complete delivery',
+    target: 'pizzer-handover',
   },
   5: {
     kicker: 'Step 5 · Delivery',
