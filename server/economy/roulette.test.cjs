@@ -104,6 +104,15 @@ test('vehicle capacity is enforced at claim time so a reserved reward cannot byp
   assert.match(claim, /INSERT INTO owned_vehicles/);
 });
 
+test('roulette winner stays centered without a visible reset and keeps a full-screen win confirmation', () => {
+  assert.match(rouletteUi, /rebaseTrackWithoutAnimation/);
+  assert.match(rouletteUi, /isRebasing \? 'none'/);
+  assert.match(rouletteUi, /You won!/);
+  assert.match(rouletteUi, /fixed inset-0 z-\[260\]/);
+  assert.match(rouletteUi, /const closeWinModal = \(\) =>/);
+  assert.match(rouletteUi, /onClick=\{closeWinModal\}/);
+});
+
 test('roulette UI recovers a pending spin after refresh and retries the idempotent claim', () => {
   assert.match(rouletteUi, /api\.roulettePending/);
   assert.match(rouletteUi, /new Date\(pending\.readyAt\)/);
