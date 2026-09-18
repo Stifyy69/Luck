@@ -20,6 +20,14 @@ const SPOT_ART: Record<string, string> = {
   PREMIUM: '/jobs/fisher/premium-deep-water.svg',
 };
 
+const FISHER_ACTIVITY_STAGES = [
+  'Preparing bait',
+  'Casting line',
+  'Waiting for bite',
+  'Reeling catch',
+  'Landing fish',
+];
+
 const ROD_SHOP = [
   { tier: 1, name: 'Street Rod', price: 10000, bonus: 'Balanced starter rod' },
   { tier: 2, name: 'Lake Rod', price: 50000, bonus: 'Higher chance for bigger fish' },
@@ -54,6 +62,10 @@ export default function FisherPage() {
   const [options, setOptions] = useState<FisherSpotOption[]>([]);
   const [popup, setPopup] = useState<Popup>(null);
   const [busy, setBusy] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [activityStageIndex, setActivityStageIndex] = useState(0);
+  const [activityProgress, setActivityProgress] = useState(0);
+  const activityRunRef = useRef(0);
   const lastOptionsFetchRef = useRef(0);
   const popupTimerRef = useRef<number | null>(null);
   const spotsRef = useRef<HTMLElement | null>(null);
@@ -138,6 +150,8 @@ export default function FisherPage() {
     setBusy(true);
     try {
       const next = await api.fisherShiftEnd(playerId);
+      activityRunRef.current += 1;
+      setActivityOpen(false);
       setState(next);
       setOptions([]);
       pushPopup('Fishing shift ended.');
@@ -180,26 +194,38 @@ export default function FisherPage() {
   const selectDock = async (cellId: number) => {
     if (busy) return;
     setBusy(true);
+    const isTarget = Number(state?.targetDockCell || 0) === Number(cellId);
+    const runId = activityRunRef.current + 1;
+    activityRunRef.current = runId;
+
     try {
-      const isTarget = Number(state?.targetDockCell || 0) === Number(cellId);
       if (isTarget) {
-        pushPopup('Applying bait...');
-        await wait(1200);
-        pushPopup('Fish bite detected...');
-        await wait(1200);
-        pushPopup('Reeling and landing...');
-        await wait(1200);
+        setActivityOpen(true);
+        setActivityStageIndex(0);
+        setActivityProgress(0);
+
+        for (let index = 0; index < FISHER_ACTIVITY_STAGES.length; index += 1) {
+          if (activityRunRef.current !== runId) return;
+          setActivityStageIndex(index);
+          setActivityProgress(Math.floor(((index + 1) / FISHER_ACTIVITY_STAGES.length) * 100));
+          await wait(700);
+        }
       }
+
       const next = await api.fisherDockSelect(playerId, cellId);
       if (next.cityProgress) publishCityProgress(next.cityProgress as CityProgress, next.cityReward as CityProgressReward | undefined);
       setState(next);
+      if (isTarget) {
+        await wait(180);
+        setActivityOpen(false);
+      }
       if (next?.lastResult?.caught) {
-        await wait(350);
         const fish = next.lastResult.fishName || 'Fish';
         const reward = Number(next.lastResult.breakdown?.totalReward || 0);
         pushPopup(`Caught ${fish}. Estimated sale value: ${fmt(reward)} $.`);
       }
     } catch (e) {
+      setActivityOpen(false);
       pushPopup(e instanceof Error ? e.message : 'Dock select failed', true);
     } finally {
       setBusy(false);
@@ -256,6 +282,55 @@ export default function FisherPage() {
       {popup && (
         <div className={`animate-toast-in fixed left-1/2 top-4 z-[140] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-2xl border px-4 py-3 text-sm font-bold shadow-2xl backdrop-blur-xl md:top-6 ${popup.isError ? 'border-red-400/25 bg-[#261113]/95 text-red-100' : 'border-[rgba(211,255,81,0.24)] bg-[#11170d]/95 text-[#edffc0]'}`}>
           {popup.text}
+        </div>
+      )}
+
+      {activityOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 px-4 backdrop-blur-md">
+          <div className="game-panel w-full max-w-4xl overflow-hidden p-5 sm:p-7">
+            <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+              <div>
+                <div className="flex h-[240px] items-center justify-center rounded-[22px] border border-white/[0.08] bg-[#090c09] p-4">
+                  <img
+                    src={SPOT_ART[state?.activeCatch?.spotTier || 'COMMON']}
+                    alt={state?.activeSpotName || state?.activeCatch?.spotName || 'Fishing waters'}
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <MissionStat label="Carry" value={`${(state?.carryWeightKg ?? 0).toFixed(1)} kg`} />
+                  <MissionStat label="Streak" value={String(state?.streak ?? 0)} good />
+                </div>
+              </div>
+
+              <div>
+                <p className="section-kicker">Fishing in progress</p>
+                <h2 className="mt-2 text-4xl font-black tracking-[-0.05em] text-white">
+                  {state?.activeSpotName || state?.activeCatch?.spotName || 'Fishing waters'}
+                </h2>
+                <p className="mt-2 text-sm text-white/42">The catch now moves through the full fishing sequence before the result is revealed.</p>
+
+                <div className="mt-6 rounded-[20px] border border-[rgba(114,183,255,0.22)] bg-[rgba(114,183,255,0.06)] p-5">
+                  <p className="text-[10px] font-black uppercase tracking-[0.15em] text-[var(--info)]">
+                    Stage {Math.min(FISHER_ACTIVITY_STAGES.length, activityStageIndex + 1)} / {FISHER_ACTIVITY_STAGES.length}
+                  </p>
+                  <p className="mt-2 text-xl font-black text-white">{FISHER_ACTIVITY_STAGES[activityStageIndex]}</p>
+                </div>
+
+                <div className="mt-5">
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="font-bold text-white/40">Catch progress</span>
+                    <span className="font-black text-[var(--info)]">{activityProgress}%</span>
+                  </div>
+                  <div className="progress-track"><div className="progress-fill" style={{ width: `${clampPercent(activityProgress)}%` }} /></div>
+                </div>
+
+                <div className="mt-6 rounded-2xl border border-white/[0.07] bg-black/20 px-4 py-3 text-center text-xs font-black uppercase tracking-[0.12em] text-white/38">
+                  Automatic fishing step in progress
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

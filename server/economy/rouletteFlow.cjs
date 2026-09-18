@@ -14,7 +14,7 @@ async function ensureRouletteSchema() {
   await ensureSchema();
   if (rouletteSchemaPromise) return rouletteSchemaPromise;
   rouletteSchemaPromise = pool.query(`
-    DO $
+    DO $$
     BEGIN
       IF to_regclass('public.roulette_pending_spins') IS NOT NULL
          AND EXISTS (
@@ -28,7 +28,7 @@ async function ensureRouletteSchema() {
       THEN
         DROP TABLE roulette_pending_spins;
       END IF;
-    END $;
+    END $$;
 
     CREATE TABLE IF NOT EXISTS roulette_pending_spins (
       spin_id TEXT PRIMARY KEY,
