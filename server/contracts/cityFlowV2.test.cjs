@@ -9,6 +9,7 @@ const { STARTING_CLEAN_MONEY } = require('../platform/constants.cjs');
 const apiSource = fs.readFileSync(path.join(__dirname, '../../src/lib/api.ts'), 'utf8');
 const serverSource = fs.readFileSync(path.join(__dirname, '../../server.cjs'), 'utf8');
 const pizzerSource = fs.readFileSync(path.join(__dirname, '../../src/components/PizzerPage.tsx'), 'utf8');
+const fisherSource = fs.readFileSync(path.join(__dirname, '../../src/components/FisherPage.tsx'), 'utf8');
 const hudSource = fs.readFileSync(path.join(__dirname, '../../src/components/city/CityProgressHud.tsx'), 'utf8');
 const controlsSource = fs.readFileSync(path.join(__dirname, '../../src/components/city/CareerQuickControls.tsx'), 'utf8');
 const sidebarSource = fs.readFileSync(path.join(__dirname, '../../src/components/app/AppSidebar.tsx'), 'utf8');
@@ -42,6 +43,21 @@ test('Pizza Courier receives a random delivery directly from the server instead 
   assert.doesNotMatch(apiSource, /autoDispatchPizzer/);
   assert.doesNotMatch(pizzerSource, /Dispatch board/);
   assert.doesNotMatch(pizzerSource, /Accept and prepare/);
+});
+
+test('Pizzer and Fisher show full-screen activity stages before the shared reward result', () => {
+  assert.match(pizzerSource, /fixed inset-0 z-\[120\]/);
+  assert.match(pizzerSource, /PIZZER_ACTIVITY_STAGES/);
+  assert.match(pizzerSource, /Packing pizzas/);
+  assert.match(pizzerSource, /Driving to customer/);
+  assert.match(pizzerSource, /Customer reached/);
+  assert.match(pizzerSource, /Complete delivery/);
+  assert.match(fisherSource, /fixed inset-0 z-\[120\]/);
+  assert.match(fisherSource, /FISHER_ACTIVITY_STAGES/);
+  assert.match(fisherSource, /Preparing bait/);
+  assert.match(fisherSource, /Waiting for bite/);
+  assert.match(fisherSource, /Reeling catch/);
+  assert.match(fisherSource, /Landing fish/);
 });
 
 test('Pizzer, Fisher and Pilot share full-screen reward feedback and explicit stop controls', () => {
