@@ -342,17 +342,6 @@ function installPlatformSystems(app, express) {
 }
 
 async function handlePlatformResponse(req, payload) {
-  if ((req.path === '/api/auth/guest' || req.path === '/api/auth/register') && !payload?.error) {
-    const playerId = playerIdFromRequest(req, payload);
-    if (playerId) {
-      await pool.query(
-        `UPDATE players SET clean_money = 69, updated_at = NOW()
-         WHERE player_id = $1 AND clean_money = 1000000`,
-        [playerId],
-      );
-    }
-  }
-
   if (req.path !== '/api/inventory/use' || payload?.error || !payload?.ok) return payload;
   const playerId = playerIdFromRequest(req, payload);
   if (!playerId) return payload;
