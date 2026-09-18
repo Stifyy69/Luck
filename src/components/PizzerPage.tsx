@@ -109,9 +109,11 @@ export default function PizzerPage() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [activityStageIndex, setActivityStageIndex] = useState(0);
   const [activityProgress, setActivityProgress] = useState(0);
+  const [activitySequenceNonce, setActivitySequenceNonce] = useState(0);
   const activeRef = useRef<HTMLElement | null>(null);
   const activityOrderRef = useRef<string | null>(null);
   const activityRunRef = useRef(0);
+  const nextActivityTimerRef = useRef<number | null>(null);
 
   const pushPopup = useCallback((text: string, isError = false) => {
     setPopup({ text, isError });
@@ -187,7 +189,11 @@ export default function PizzerPage() {
     return () => {
       if (activityRunRef.current === runId) activityRunRef.current += 1;
     };
-  }, [state?.activeOrder?.orderId, state?.shiftState, underRepair]);
+  }, [state?.activeOrder?.orderId, state?.shiftState, underRepair, activitySequenceNonce]);
+
+  useEffect(() => () => {
+    if (nextActivityTimerRef.current) window.clearTimeout(nextActivityTimerRef.current);
+  }, []);
 
   const xpPercent = useMemo(() => {
     if (!progress) return 0;
@@ -221,6 +227,8 @@ export default function PizzerPage() {
     setBusy(true);
     try {
       const next = await api.pizzerShiftEnd(playerId);
+      if (nextActivityTimerRef.current) window.clearTimeout(nextActivityTimerRef.current);
+      nextActivityTimerRef.current = null;
       activityRunRef.current += 1;
       activityOrderRef.current = null;
       setActivityOpen(false);
@@ -233,21 +241,43 @@ export default function PizzerPage() {
     }
   };
 
-  const handover = async () => {
+  const handover = async (endAfter = false) => {
     if (busy) return;
     setBusy(true);
     try {
-      pushPopup('Completing customer handoff...');
+      pushPopup(endAfter ? 'Completing delivery and ending shift...' : 'Completing customer handoff...');
       await wait(800);
       const payload = await api.pizzerHandover(playerId, 'DOOR');
       if (payload.cityProgress) publishCityProgress(payload.cityProgress as CityProgress, payload.cityReward as CityProgressReward | undefined);
-      setState(payload.state);
-      if (!payload.result.accident) scrollToActive();
+
+      activityRunRef.current += 1;
+      setActivityOpen(false);
+
+      let nextState = payload.state;
+      if (endAfter) {
+        if (nextActivityTimerRef.current) window.clearTimeout(nextActivityTimerRef.current);
+        nextActivityTimerRef.current = null;
+        activityOrderRef.current = null;
+        nextState = await api.pizzerShiftEnd(playerId);
+      } else if (!payload.result.accident && payload.state.activeOrder) {
+        activityOrderRef.current = payload.state.activeOrder.orderId;
+        if (nextActivityTimerRef.current) window.clearTimeout(nextActivityTimerRef.current);
+        nextActivityTimerRef.current = window.setTimeout(() => {
+          activityOrderRef.current = null;
+          nextActivityTimerRef.current = null;
+          setActivitySequenceNonce((current) => current + 1);
+        }, 3400);
+      } else {
+        activityOrderRef.current = null;
+      }
+
+      setState(nextState);
       refresh();
+
       if (payload.result.accident) {
         const repairLabel = payload.state.repairLabel || 'Repairing vehicle';
         const repairSec = payload.state.repairSecondsLeft || 10;
-        pushPopup(`Run failed. ${repairLabel} for ${repairSec}s.`, true);
+        pushPopup(endAfter ? 'Delivery failed. Shift ended.' : `Run failed. ${repairLabel} for ${repairSec}s.`, true);
       } else {
         const messages = [`Run complete: +${fmt(payload.result.breakdown.totalReward)} $ and +${payload.result.breakdown.xpGained} XP.`];
         if (payload.result.progression.levelAfter > payload.result.progression.levelBefore) {
@@ -256,6 +286,7 @@ export default function PizzerPage() {
         if (payload.result.progression.unlockedVehicle) {
           messages.push(`${payload.result.progression.unlockedVehicle} unlocked.`);
         }
+        if (endAfter) messages.push('Shift ended.');
         pushPopup(messages.join(' '));
       }
     } catch (e) {
@@ -326,15 +357,25 @@ export default function PizzerPage() {
                 </div>
 
                 {activityStageIndex === PIZZER_ACTIVITY_STAGES.length - 1 ? (
-                  <button
-                    type="button"
-                    data-tutorial-target="pizzer-handover"
-                    onClick={() => handover().catch(() => {})}
-                    disabled={busy || underRepair}
-                    className="btn-primary mt-6 w-full rounded-2xl px-5 py-3.5 text-sm disabled:opacity-40"
-                  >
-                    {busy ? 'Completing delivery...' : 'Complete delivery'}
-                  </button>
+                  <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      data-tutorial-target="pizzer-handover"
+                      onClick={() => handover(false).catch(() => {})}
+                      disabled={busy || underRepair}
+                      className="btn-primary rounded-2xl px-5 py-3.5 text-sm disabled:opacity-40"
+                    >
+                      {busy ? 'Completing...' : 'Complete'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handover(true).catch(() => {})}
+                      disabled={busy || underRepair}
+                      className="btn-danger rounded-2xl px-5 py-3.5 text-sm disabled:opacity-40"
+                    >
+                      {busy ? 'Completing...' : 'Complete & end shift'}
+                    </button>
+                  </div>
                 ) : (
                   <div className="mt-6 rounded-2xl border border-white/[0.07] bg-black/20 px-4 py-3 text-center text-xs font-black uppercase tracking-[0.12em] text-white/38">
                     Automatic step in progress
