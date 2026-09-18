@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { pickWeightedReward, rewardPayout } = require('./roulette.cjs');
 const { ensureSchema, pool, withTransaction } = require('../platform/db.cjs');
+const { STARTING_CLEAN_MONEY } = require('../platform/constants.cjs');
 
 const SPIN_REVEAL_MS = 4600;
 let rouletteSchemaPromise = null;
@@ -13,6 +14,22 @@ async function ensureRouletteSchema() {
   await ensureSchema();
   if (rouletteSchemaPromise) return rouletteSchemaPromise;
   rouletteSchemaPromise = pool.query(`
+    DO $
+    BEGIN
+      IF to_regclass('public.roulette_pending_spins') IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'roulette_pending_spins' AND column_name = 'spin_token'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'roulette_pending_spins' AND column_name = 'spin_id'
+         )
+      THEN
+        DROP TABLE roulette_pending_spins;
+      END IF;
+    END $;
+
     CREATE TABLE IF NOT EXISTS roulette_pending_spins (
       spin_id TEXT PRIMARY KEY,
       operation_id TEXT NOT NULL,
@@ -32,6 +49,9 @@ async function ensureRouletteSchema() {
       claim_result JSONB,
       UNIQUE(player_id, operation_id)
     );
+
+    CREATE INDEX IF NOT EXISTS roulette_pending_spins_player_claim_idx
+      ON roulette_pending_spins(player_id, claimed_at, created_at DESC);
   `).catch((error) => {
     rouletteSchemaPromise = null;
     throw error;
@@ -100,7 +120,6 @@ function rewardPresentation(reward, payout, metadata = {}) {
 
 async function buildRewardMetadata(db, playerId, reward) {
   if (reward.rewardType === 'SOUVENIR_VEHICLE') {
-    await ensureVehicleCapacity(db, playerId);
     const modelResult = await db.query(`SELECT id, brand, name FROM vehicle_models ORDER BY RANDOM() LIMIT 1`);
     const model = modelResult.rows[0];
     if (!model) throw new Error('no souvenir vehicle available');
@@ -139,6 +158,8 @@ async function startRouletteSpin(playerId, costType, operationId) {
   if (!['cash', 'flowcoins', 'fragments'].includes(costType)) throw new Error('invalid cost type');
 
   return withTransaction(async (db) => {
+    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`roulette-start:${safePlayerId}`]);
+
     const duplicate = await db.query(
       `SELECT * FROM roulette_pending_spins WHERE player_id = $1 AND operation_id = $2 FOR UPDATE`,
       [safePlayerId, safeOperationId],
@@ -148,7 +169,23 @@ async function startRouletteSpin(playerId, costType, operationId) {
       return spinView(duplicate.rows[0], playerResult.rows[0] || {}, Boolean(duplicate.rows[0].claimed_at));
     }
 
-    await db.query(`INSERT INTO players (player_id, clean_money) VALUES ($1, 69) ON CONFLICT (player_id) DO NOTHING`, [safePlayerId]);
+    const pending = await db.query(
+      `SELECT * FROM roulette_pending_spins
+       WHERE player_id = $1 AND claimed_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [safePlayerId],
+    );
+    if (pending.rows[0]) {
+      const playerResult = await db.query(`SELECT clean_money, flow_coins, roulette_fragments FROM players WHERE player_id = $1`, [safePlayerId]);
+      return spinView(pending.rows[0], playerResult.rows[0] || {}, false);
+    }
+
+    await db.query(
+      `INSERT INTO players (player_id, clean_money) VALUES ($1, $2) ON CONFLICT (player_id) DO NOTHING`,
+      [safePlayerId, STARTING_CLEAN_MONEY],
+    );
     const playerResult = await db.query(`SELECT * FROM players WHERE player_id = $1 FOR UPDATE`, [safePlayerId]);
     const player = playerResult.rows[0];
     const cost = costType === 'flowcoins' ? 30 : costType === 'fragments' ? 4 : 100_000;
@@ -210,6 +247,30 @@ async function startRouletteSpin(playerId, costType, operationId) {
   });
 }
 
+async function getPendingRouletteSpin(playerId) {
+  await ensureRouletteSchema();
+  const safePlayerId = String(playerId || '').trim();
+  if (!safePlayerId) throw new Error('missing fields');
+
+  const [spinResult, playerResult] = await Promise.all([
+    pool.query(
+      `SELECT * FROM roulette_pending_spins
+       WHERE player_id = $1 AND claimed_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [safePlayerId],
+    ),
+    pool.query(
+      `SELECT clean_money, flow_coins, roulette_fragments FROM players WHERE player_id = $1`,
+      [safePlayerId],
+    ),
+  ]);
+
+  const spin = spinResult.rows[0];
+  if (!spin) return null;
+  return spinView(spin, playerResult.rows[0] || {}, false);
+}
+
 async function claimRouletteSpin(playerId, spinId) {
   await ensureRouletteSchema();
   const safePlayerId = String(playerId || '').trim();
@@ -240,6 +301,7 @@ async function claimRouletteSpin(playerId, spinId) {
     } else if (spin.reward_type === 'ROULETTE_FRAGMENTS') {
       await db.query(`UPDATE players SET roulette_fragments = roulette_fragments + $1, updated_at = NOW() WHERE player_id = $2`, [payout, safePlayerId]);
     } else if (spin.reward_type === 'SOUVENIR_VEHICLE') {
+      await ensureVehicleCapacity(db, safePlayerId);
       const modelId = Number(metadata.modelId);
       if (!Number.isSafeInteger(modelId) || modelId <= 0) throw new Error('souvenir vehicle missing');
       const vehicle = await db.query(
@@ -280,6 +342,15 @@ function installRouletteFlow(app, requirePlayer, createRateLimiter) {
     return res.status(410).json({ error: 'use roulette reveal flow' });
   });
 
+  app.get('/api/roulette/pending', requirePlayer, rateLimit, async (req, res) => {
+    try {
+      const spin = await getPendingRouletteSpin(req.playerId);
+      return res.json({ spin });
+    } catch (error) {
+      return res.status(Number(error?.statusCode || 400)).json({ error: error instanceof Error ? error.message : 'pending spin failed' });
+    }
+  });
+
   app.post('/api/roulette/start', requirePlayer, rateLimit, async (req, res) => {
     try {
       const result = await startRouletteSpin(req.playerId, req.body?.costType, req.body?.operationId);
@@ -302,6 +373,7 @@ function installRouletteFlow(app, requirePlayer, createRateLimiter) {
 module.exports = {
   SPIN_REVEAL_MS,
   claimRouletteSpin,
+  getPendingRouletteSpin,
   installRouletteFlow,
   startRouletteSpin,
 };
