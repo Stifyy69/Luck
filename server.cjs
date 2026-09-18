@@ -19,9 +19,9 @@ const {
   awardCityXpInTransaction,
   ensureSchema: ensureCityProgressSchema,
 } = require('./server/cityProgress/store.cjs');
-const { CITY_XP_REWARDS } = require('./server/cityProgress/constants.cjs');
+const { CITY_XP_REWARDS, PILOT_ROUTE_XP } = require('./server/cityProgress/constants.cjs');
 const { consumeJobBoost, getVipMultiplier } = require('./server/economy/boosts.cjs');
-const { pickWeightedReward, rewardPayout } = require('./server/economy/roulette.cjs');
+const { STARTING_CLEAN_MONEY } = require('./server/platform/constants.cjs');
 const {
   cayoStateView,
   convertCayoCash,
@@ -71,7 +71,7 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS players (
       player_id TEXT PRIMARY KEY,
       display_name TEXT,
-      clean_money BIGINT NOT NULL DEFAULT 1000000,
+      clean_money BIGINT NOT NULL DEFAULT ${STARTING_CLEAN_MONEY},
       flow_coins INT NOT NULL DEFAULT 0,
       roulette_fragments INT NOT NULL DEFAULT 0,
       vehicle_slots_base INT NOT NULL DEFAULT 5,
@@ -86,6 +86,7 @@ async function initDb() {
     ALTER TABLE players
     ADD COLUMN IF NOT EXISTS display_name TEXT;
   `);
+  await pool.query(`ALTER TABLE players ALTER COLUMN clean_money SET DEFAULT ${STARTING_CLEAN_MONEY};`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vehicle_models (
@@ -740,6 +741,19 @@ function buildOrderOption(level) {
   };
 }
 
+function buildActivePizzerOrder(level) {
+  const selected = buildOrderOption(level);
+  const packingSteps = ['PICK_BOXES', 'ADD_DRINKS', 'CONFIRM_ORDER'];
+  return {
+    ...selected,
+    etaSec: selected.estimatedTimeSec,
+    deliveryStartedAt: Date.now(),
+    damagePercent: 0,
+    packingStepsRequired: packingSteps,
+    packingStepsDone: [...packingSteps],
+  };
+}
+
 async function ensurePizzerProgress(db, playerId) {
   await db.query(
     `INSERT INTO player_pizzer_progress (player_id)
@@ -1135,9 +1149,7 @@ function fisherComputeAutoCatchResult({ session, progressBefore, spot, fishRarit
     Math.floor(baseReward * spotMultiplier * levelMultiplier * qualityMultiplier * streakMultiplier * integrityMultiplier) + bonusLootValue,
   );
 
-  const qualityXpBonus = qualityScore >= 0.9 ? 12 : qualityScore >= 0.75 ? 7 : qualityScore >= 0.6 ? 3 : 0;
-  const streakXpBonus = Math.min(10, Number(session.streak || 0) * 2);
-  const xpGained = Math.max(0, Math.floor(baseXp + qualityXpBonus + streakXpBonus));
+  const xpGained = CITY_XP_REWARDS.FISHER_CATCH;
 
   return {
     baseReward,
@@ -1757,8 +1769,8 @@ function toDynamicNpcPrice(basePrice) {
 
 async function ensurePlayer(db, playerId) {
   await db.query(
-    `INSERT INTO players (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
-    [playerId],
+    `INSERT INTO players (player_id, clean_money) VALUES ($1, $2) ON CONFLICT (player_id) DO NOTHING`,
+    [playerId, STARTING_CLEAN_MONEY],
   );
   const result = await db.query(`SELECT * FROM players WHERE player_id = $1`, [playerId]);
   return result.rows[0];
@@ -3032,8 +3044,8 @@ app.get('/api/bootstrap', requireDb, async (req, res) => {
 
     // Ensure player exists
     await pool.query(
-      `INSERT INTO players (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
-      [playerId],
+      `INSERT INTO players (player_id, clean_money) VALUES ($1, $2) ON CONFLICT (player_id) DO NOTHING`,
+      [playerId, STARTING_CLEAN_MONEY],
     );
 
     // Get player state
@@ -3518,11 +3530,11 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
       const rewardMultiplier = vipMultiplier * (jobBoostUsed ? 2 : 1);
       const totalCash = Math.max(0, baseReward + levelBonus + streakBonus + milestoneBonus + firstCompletionBonus) * rewardMultiplier;
 
-      const baseXp = Number(route.baseXp || 0);
-      const streakXpBonus = Math.max(0, Math.min(30, currentStreak * 2));
-      const milestoneXpBonus = Number(PILOT_CONFIG.milestoneBonusXp[String(totalFlightsAfter)] || 0);
-      const firstCompletionXpBonus = routeCompletionsBefore === 0 ? Number(PILOT_CONFIG.firstCompletionBonusXp || 0) : 0;
-      const totalXp = Math.max(0, Math.floor(baseXp + streakXpBonus + milestoneXpBonus + firstCompletionXpBonus));
+      const baseXp = Number(PILOT_ROUTE_XP[route.id] || route.baseXp || 0);
+      const streakXpBonus = 0;
+      const milestoneXpBonus = 0;
+      const firstCompletionXpBonus = 0;
+      const totalXp = baseXp;
 
       const nextXp = Number(progressBefore.xp || 0) + totalXp;
       const nextLevel = computePilotLevel(nextXp);
@@ -3608,7 +3620,7 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
         playerId,
         'PILOT_FLIGHT',
         String(totalFlightsAfter),
-        CITY_XP_REWARDS.PILOT_FLIGHT,
+        Number(PILOT_ROUTE_XP[route.id] || CITY_XP_REWARDS.PILOT_FLIGHT),
         { routeId: route.id },
       );
 
@@ -3637,13 +3649,20 @@ app.get('/api/pizzer/state', requireDb, async (req, res) => {
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
     await ensurePlayer(pool, playerId);
     const progress = await ensurePizzerProgress(pool, playerId);
+    const progressView = toPizzerProgressView(progress);
     const session = await getPizzerSession(playerId);
     if (session.repairUntil && session.repairUntil <= Date.now()) {
       session.repairUntil = 0;
       session.repairLabel = null;
     }
+    if (session.shiftState === 'SELECTING_ORDER' && Number(session.repairUntil || 0) <= Date.now()) {
+      session.shiftState = 'DELIVERY_ACTIVE';
+      session.orderOptions = [];
+      session.optionsGeneratedAt = 0;
+      session.activeOrder = buildActivePizzerOrder(progressView.level);
+    }
     await setPizzerSession(playerId, session);
-    res.json(pizzerStateView(session, toPizzerProgressView(progress)));
+    res.json(pizzerStateView(session, progressView));
   } catch (error) {
     res.status(500).json({ error: 'pizzer state failed' });
   }
@@ -3669,10 +3688,10 @@ app.post('/api/pizzer/shift/start', requireDb, async (req, res) => {
 
     const nextSession = {
       ...session,
-      shiftState: 'SELECTING_ORDER',
+      shiftState: 'DELIVERY_ACTIVE',
       orderOptions: [],
       optionsGeneratedAt: 0,
-      activeOrder: null,
+      activeOrder: buildActivePizzerOrder(progressView.level),
       lastResult: null,
       lastActionAt: 0,
     };
@@ -3932,10 +3951,7 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
       const vipMultiplier = await getVipMultiplier(db, playerId);
       const totalReward = Math.max(0, preTip + tip) * vipMultiplier;
 
-      const baseXp = PIZZER_CONFIG.baseXp[order.orderType] || 18;
-      const perfectBonusXp = freshness >= 88 && lateSec <= 0 && damagePercent <= 10 ? 6 : 0;
-      const streakXpBonus = Math.min(6, Number(session.streak || 0));
-      const xpGained = hardFail ? 0 : baseXp + perfectBonusXp + streakXpBonus;
+      const xpGained = hardFail ? 0 : CITY_XP_REWARDS.PIZZER_DELIVERY;
 
       const rating = hardFail
         ? 'FAILED'
@@ -4012,9 +4028,10 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
           unlockedVehicle,
         },
       };
-      session.shiftState = 'SELECTING_ORDER';
+      session.shiftState = 'DELIVERY_ACTIVE';
       session.orderOptions = [];
       session.optionsGeneratedAt = 0;
+      session.activeOrder = buildActivePizzerOrder(progressAfter.level);
       await setPizzerSession(playerId, session, db);
 
       const cityReward = !hardFail
@@ -4821,9 +4838,7 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
         };
       }
 
-      const qualityXpBonus = qualityScore >= 0.9 ? 12 : qualityScore >= 0.75 ? 7 : qualityScore >= 0.6 ? 3 : 0;
-      const streakXpBonus = Math.min(10, Number(session.streak || 0) * 2);
-      const xpGained = Math.max(0, Math.floor(baseXp + qualityXpBonus + streakXpBonus));
+      const xpGained = CITY_XP_REWARDS.FISHER_CATCH;
 
       const nextXp = Number(progressBefore.xp) + xpGained;
       const nextLevel = computeFisherLevel(nextXp);
@@ -5161,123 +5176,6 @@ app.post('/api/showroom/buy', requireDb, async (req, res) => {
   } catch (e) {
     console.error('showroom/buy error', e);
     res.status(400).json({ error: e.message || 'purchase failed' });
-  }
-});
-
-// POST /api/roulette/spin - Spin the roulette
-const rouletteRateLimit = createRateLimiter({ windowMs: 60_000, max: 15, key: (req) => req.playerId || req.ip });
-app.post('/api/roulette/spin', rouletteRateLimit, requireDb, async (req, res) => {
-  try {
-    const { playerId, costType } = req.body || {};
-    if (!playerId || !costType) return res.status(400).json({ error: 'missing fields' });
-    if (!['cash', 'flowcoins', 'fragments'].includes(costType)) return res.status(400).json({ error: 'invalid cost type' });
-
-    const result = await withTransaction(async (db) => {
-      await ensurePlayer(db, playerId);
-      const playerResult = await db.query(`SELECT * FROM players WHERE player_id = $1 FOR UPDATE`, [playerId]);
-      const player = playerResult.rows[0];
-      const cost = costType === 'flowcoins' ? 30 : costType === 'fragments' ? 4 : 100_000;
-      if (costType === 'flowcoins' && Number(player.flow_coins) < cost) throw new Error('insufficient flowcoins');
-      if (costType === 'fragments' && Number(player.roulette_fragments) < cost) throw new Error('insufficient fragments');
-      if (costType === 'cash' && Number(player.clean_money) < cost) throw new Error('insufficient funds');
-
-      if (costType === 'flowcoins') {
-        await db.query(`UPDATE players SET flow_coins = flow_coins - $1 WHERE player_id = $2`, [cost, playerId]);
-      } else if (costType === 'fragments') {
-        await db.query(`UPDATE players SET roulette_fragments = roulette_fragments - $1 WHERE player_id = $2`, [cost, playerId]);
-      } else {
-        await db.query(`UPDATE players SET clean_money = clean_money - $1 WHERE player_id = $2`, [cost, playerId]);
-      }
-
-      const reward = pickWeightedReward();
-      const payout = rewardPayout(reward);
-
-      const rewardType = reward.rewardType;
-      let rewardSubtitle = '';
-      let emoji = '🎁';
-      let metadata = {};
-
-      if (reward.rewardType === 'CASH') {
-        await db.query(`UPDATE players SET clean_money = clean_money + $1 WHERE player_id = $2`, [payout, playerId]);
-        rewardSubtitle = `+${payout.toLocaleString('ro-RO')} $`;
-        emoji = '💵';
-      } else if (reward.rewardType === 'FLOW_COINS') {
-        await db.query(`UPDATE players SET flow_coins = flow_coins + $1 WHERE player_id = $2`, [payout, playerId]);
-        rewardSubtitle = `+${payout} FlowCoins`;
-        emoji = '🟠';
-      } else if (reward.rewardType === 'ROULETTE_FRAGMENTS') {
-        await db.query(`UPDATE players SET roulette_fragments = roulette_fragments + $1 WHERE player_id = $2`, [payout, playerId]);
-        rewardSubtitle = `+${payout} fragmente`;
-        emoji = '🪙';
-      } else if (reward.rewardType === 'SOUVENIR_VEHICLE') {
-        await ensureVehicleCapacity(db, playerId);
-        const modelResult = await db.query(`SELECT * FROM vehicle_models ORDER BY RANDOM() LIMIT 1`);
-        const model = modelResult.rows[0];
-        if (!model) throw new Error('no souvenir vehicle available');
-        const vehicle = await db.query(
-          `INSERT INTO owned_vehicles (player_id, model_id, purchase_price, purchase_source)
-           VALUES ($1, $2, 0, 'ROULETTE') RETURNING id`,
-          [playerId, model.id],
-        );
-        metadata = { vehicleId: vehicle.rows[0].id, modelId: model.id, modelName: model.name, brand: model.brand };
-        rewardSubtitle = model.name;
-        emoji = '🚗';
-      } else {
-        metadata = reward.rewardType === 'VOUCHER_SHOWROOM'
-          ? { discount: randomInt(10, 35) }
-          : reward.rewardType === 'XENON_VEHICLE'
-            ? { marketValue: randomInt(5_000, 150_000) }
-            : {};
-        await addInventoryItem(db, playerId, reward.rewardType, payout, metadata);
-        rewardSubtitle = reward.name;
-        emoji = {
-          VIP_GOLD: '💎',
-          VIP_SILVER: '💠',
-          MYSTERY_BOX: '📦',
-          SLOT_VEHICLE: '➕',
-          VOUCHER_SHOWROOM: '🎟️',
-          JOB_BOOST_PILOT: '✈️',
-          TAX_EXEMPTION: '💸',
-          XENON_VEHICLE: '🔩',
-        }[reward.rewardType] || '🎁';
-      }
-
-      await db.query(
-        `INSERT INTO player_stats (player_id, roulette_spent, roulette_won, last_seen, updated_at)
-         VALUES ($1, $2, $3, NOW(), NOW())
-         ON CONFLICT (player_id) DO UPDATE SET
-           roulette_spent = player_stats.roulette_spent + $2,
-           roulette_won = player_stats.roulette_won + $3,
-           last_seen = NOW(), updated_at = NOW()`,
-        [playerId, costType === 'cash' ? cost : 0, reward.rewardType === 'CASH' ? payout : 0],
-      );
-
-      const updatedPlayerRes = await db.query(
-        `SELECT clean_money, flow_coins, roulette_fragments FROM players WHERE player_id = $1`,
-        [playerId],
-      );
-      const updatedPlayer = updatedPlayerRes.rows[0];
-
-      return {
-        rewardType,
-        rewardName: reward.name,
-        rewardSubtitle,
-        tier: reward.tier,
-        emoji,
-        payout,
-        metadata,
-        player: {
-          cleanMoney: Number(updatedPlayer.clean_money),
-          flowCoins: updatedPlayer.flow_coins,
-          rouletteFragments: updatedPlayer.roulette_fragments,
-        },
-      };
-    });
-
-    res.json(result);
-  } catch (e) {
-    console.error('roulette spin error', e);
-    res.status(400).json({ error: e.message || 'spin failed' });
   }
 });
 
