@@ -95,6 +95,7 @@ export default function RouletteDemo() {
   const [spinCount, setSpinCount] = useState(0);
   const [nearVehicleIndex, setNearVehicleIndex] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [recoveringPending, setRecoveringPending] = useState(true);
 
   const trackRewards = useMemo(() => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(), []);
 
@@ -183,6 +184,86 @@ export default function RouletteDemo() {
     }
   };
 
+  useEffect(() => {
+    if (!playerId || !viewportWidth) return;
+    let cancelled = false;
+    setRecoveringPending(true);
+
+    const recover = async () => {
+      try {
+        const pending = await api.roulettePending(playerId);
+        if (!pending || cancelled) {
+          if (!cancelled) setRecoveringPending(false);
+          return;
+        }
+
+        spinLockRef.current = true;
+        setIsSpinning(true);
+        setErrorMessage(null);
+        setCashBalance(Number(pending.player.cleanMoney || 0));
+        setFlowCoinsBalance(Number(pending.player.flowCoins || 0));
+        setFragments(Number(pending.player.rouletteFragments || 0));
+
+        const winnerCard = rewards.find((reward) => reward.name === pending.rewardName);
+        const winner: RouletteReward = {
+          name: pending.rewardName,
+          subtitle: pending.rewardSubtitle || winnerCard?.subtitle || 'Reward received',
+          tier: pending.tier,
+          emoji: pending.emoji || winnerCard?.emoji || '🎁',
+          payout: Number(pending.payout || 0),
+        };
+        const winnerRewardIndex = rewards.findIndex((reward) => reward.name === winner.name);
+        const resolvedWinnerIndex = winnerRewardIndex >= 0
+          ? winnerRewardIndex
+          : Math.max(0, rewards.findIndex((reward) => reward.tier === winner.tier));
+        const targetIndex = rewards.length * 20 + resolvedWinnerIndex;
+        const remainingMs = Math.max(0, new Date(pending.readyAt).getTime() - Date.now());
+
+        const finishClaim = async (attempt = 0): Promise<void> => {
+          if (cancelled) return;
+          try {
+            const claimed = await api.rouletteClaim(playerId, pending.spinId);
+            if (cancelled) return;
+            setCashBalance(Number(claimed.player.cleanMoney || 0));
+            setFlowCoinsBalance(Number(claimed.player.flowCoins || 0));
+            setFragments(Number(claimed.player.rouletteFragments || 0));
+            currentIndexRef.current = targetIndex;
+            setTranslateX(getTranslateForIndex(targetIndex, viewportWidth));
+            setHighlightIndex(targetIndex);
+            setSelectedReward(winner);
+            setLatestWins((current) => [winner, ...current].slice(0, 5));
+            setSpinCount((current) => current + 1);
+            setNearVehicleIndex(null);
+            setIsSpinning(false);
+            spinLockRef.current = false;
+            setRecoveringPending(false);
+            playWinSound();
+            setShowWinModal(true);
+            refresh();
+          } catch (error) {
+            if (attempt < 4) {
+              scheduleTask(() => { void finishClaim(attempt + 1); }, attempt === 0 ? 300 : 900);
+              return;
+            }
+            setIsSpinning(false);
+            spinLockRef.current = false;
+            setRecoveringPending(false);
+            setErrorMessage(error instanceof Error ? error.message : 'Reward claim failed');
+          }
+        };
+
+        scheduleTask(() => { void finishClaim(); }, remainingMs + 60);
+      } catch {
+        if (!cancelled) setRecoveringPending(false);
+      }
+    };
+
+    void recover();
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId, viewportWidth]);
+
   const canAfford = (costType: CostType) => {
     if (costType === 'cash') return cashBalance >= 100_000;
     if (costType === 'ogc') return flowCoinsBalance >= 30;
@@ -196,7 +277,7 @@ export default function RouletteDemo() {
   };
 
   const handleSpin = async (costType: CostType) => {
-    if (!playerId || !player || spinLockRef.current || isSpinning || !viewportWidth || !canAfford(costType)) return;
+    if (!playerId || !player || recoveringPending || spinLockRef.current || isSpinning || !viewportWidth || !canAfford(costType)) return;
     spinLockRef.current = true;
     setIsSpinning(true);
     clearScheduledTasks();
@@ -347,13 +428,13 @@ export default function RouletteDemo() {
             {COST_OPTIONS.map((option) => {
               const selected = activeCost === option.id;
               const affordable = canAfford(option.id);
-              return <button key={option.id} type="button" disabled={isSpinning} onClick={() => setActiveCost(option.id)} className={`rounded-[18px] border p-4 text-left transition ${selected ? 'border-[rgba(211,255,81,0.3)] bg-[rgba(211,255,81,0.07)]' : 'border-white/[0.07] bg-black/20 hover:border-white/[0.14]'} disabled:opacity-50`}><div className="flex items-start justify-between gap-3"><div><p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/30">{option.label}</p><p className="mt-2 text-lg font-black text-white">{option.price}</p></div><span className={`rounded-full border px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.1em] ${affordable ? 'border-emerald-300/20 bg-emerald-400/[0.06] text-emerald-100' : 'border-red-300/20 bg-red-400/[0.06] text-red-100'}`}>{affordable ? 'Ready' : 'Missing'}</span></div><p className="mt-3 text-xs font-bold text-white/38">{option.balanceLabel}: <span className="text-white/70">{balanceFor(option.id)}</span></p></button>;
+              return <button key={option.id} type="button" disabled={isSpinning || recoveringPending} onClick={() => setActiveCost(option.id)} className={`rounded-[18px] border p-4 text-left transition ${selected ? 'border-[rgba(211,255,81,0.3)] bg-[rgba(211,255,81,0.07)]' : 'border-white/[0.07] bg-black/20 hover:border-white/[0.14]'} disabled:opacity-50`}><div className="flex items-start justify-between gap-3"><div><p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/30">{option.label}</p><p className="mt-2 text-lg font-black text-white">{option.price}</p></div><span className={`rounded-full border px-2.5 py-1 text-[8px] font-black uppercase tracking-[0.1em] ${affordable ? 'border-emerald-300/20 bg-emerald-400/[0.06] text-emerald-100' : 'border-red-300/20 bg-red-400/[0.06] text-red-100'}`}>{affordable ? 'Ready' : 'Missing'}</span></div><p className="mt-3 text-xs font-bold text-white/38">{option.balanceLabel}: <span className="text-white/70">{balanceFor(option.id)}</span></p></button>;
             })}
           </div>
 
           <div className="mt-4 flex flex-col items-center justify-between gap-3 rounded-[20px] border border-white/[0.07] bg-black/20 p-4 sm:flex-row">
             <div><p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/28">Selected payment</p><p className="mt-1 text-base font-black text-white">{activeOption.price}</p></div>
-            <button type="button" onClick={() => void handleSpin(activeCost)} disabled={!player || isSpinning || !canAfford(activeCost)} className="btn-primary w-full rounded-2xl px-8 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-35 sm:w-auto sm:min-w-[220px]">{isSpinning ? 'Spinning...' : 'Spin roulette'}</button>
+            <button type="button" onClick={() => void handleSpin(activeCost)} disabled={!player || recoveringPending || isSpinning || !canAfford(activeCost)} className="btn-primary w-full rounded-2xl px-8 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-35 sm:w-auto sm:min-w-[220px]">{recoveringPending ? 'Checking pending spin...' : isSpinning ? 'Spinning...' : 'Spin roulette'}</button>
           </div>
         </section>
 
