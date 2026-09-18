@@ -96,6 +96,7 @@ export default function RouletteDemo() {
   const [nearVehicleIndex, setNearVehicleIndex] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [recoveringPending, setRecoveringPending] = useState(true);
+  const [isRebasing, setIsRebasing] = useState(false);
 
   const trackRewards = useMemo(() => Array.from({ length: TRACK_REPEATS }, () => rewards).flat(), []);
 
@@ -130,6 +131,20 @@ export default function RouletteDemo() {
   const clearScheduledTasks = () => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer));
     timersRef.current = [];
+  };
+
+  const rebaseTrackWithoutAnimation = (index: number) => {
+    setIsRebasing(true);
+    currentIndexRef.current = index;
+    setTranslateX(getTranslateForIndex(index, viewportWidth));
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setIsRebasing(false));
+    });
+  };
+
+  const closeWinModal = () => {
+    setShowWinModal(false);
+    refresh();
   };
 
   const getAudioContext = () => {
@@ -239,7 +254,6 @@ export default function RouletteDemo() {
             setRecoveringPending(false);
             playWinSound();
             setShowWinModal(true);
-            refresh();
           } catch (error) {
             if (attempt < 4) {
               scheduleTask(() => { void finishClaim(attempt + 1); }, attempt === 0 ? 300 : 900);
@@ -348,7 +362,6 @@ export default function RouletteDemo() {
         }
         playWinSound();
         setShowWinModal(true);
-        refresh();
       } catch (error) {
         if (attempt < 4) {
           scheduleTask(() => { void finishClaim(attempt + 1); }, attempt === 0 ? 300 : 900);
@@ -365,10 +378,9 @@ export default function RouletteDemo() {
     scheduleTask(() => {
       const safeBase = rewards.length * 20;
       const normalizedIndex = safeBase + (targetIndex % rewards.length);
-      currentIndexRef.current = normalizedIndex;
       setHighlightIndex(normalizedIndex);
       setNearVehicleIndex((current) => current === targetIndex - 1 ? normalizedIndex - 1 : current === targetIndex + 1 ? normalizedIndex + 1 : null);
-      setTranslateX(getTranslateForIndex(normalizedIndex, viewportWidth));
+      rebaseTrackWithoutAnimation(normalizedIndex);
     }, SPIN_DURATION_MS + 160);
   };
 
@@ -418,7 +430,7 @@ export default function RouletteDemo() {
               <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-16 bg-gradient-to-r from-[#080b08] to-transparent sm:w-28" />
               <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-16 bg-gradient-to-l from-[#080b08] to-transparent sm:w-28" />
               <div className="pointer-events-none absolute inset-y-3 left-1/2 z-10 w-px -translate-x-1/2 bg-[var(--accent)]/45 shadow-[0_0_24px_rgba(211,255,81,0.3)]" />
-              <div className="flex min-w-max gap-[10px]" style={{ transform: `translateX(${translateX}px)`, transition: isSpinning ? `transform ${SPIN_DURATION_MS}ms cubic-bezier(0.08,0.78,0.14,1)` : 'transform 360ms ease-out', willChange: 'transform' }}>
+              <div className="flex min-w-max gap-[10px]" style={{ transform: `translateX(${translateX}px)`, transition: isRebasing ? 'none' : isSpinning ? `transform ${SPIN_DURATION_MS}ms cubic-bezier(0.08,0.78,0.14,1)` : 'transform 360ms ease-out', willChange: 'transform' }}>
                 {trackRewards.map((reward, index) => <RewardCard key={`${reward.name}-${index}`} reward={reward} compact className="w-[156px] shrink-0" highlighted={highlightIndex === index || nearVehicleIndex === index} spinning={isSpinning} />)}
               </div>
             </div>
@@ -447,7 +459,24 @@ export default function RouletteDemo() {
         </section>
       </div>
 
-      {showWinModal && selectedReward ? <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/85 p-4 backdrop-blur-xl"><div className="game-panel w-full max-w-md p-6"><p className="section-kicker text-center">Reward confirmed</p><div className={`mt-5 rounded-[24px] border p-5 ${tierStyles[selectedReward.tier]}`}><div className="flex h-28 items-center justify-center rounded-[20px] border border-white/[0.06] bg-black/20 text-7xl">{selectedReward.emoji}</div><p className="mt-5 text-[9px] font-black uppercase tracking-[0.16em] opacity-55">{rarityLabel[selectedReward.tier]}</p><h3 className="mt-2 text-3xl font-black tracking-[-0.04em] text-white">{selectedReward.name}</h3><p className="mt-2 text-sm text-white/55">{selectedReward.subtitle}</p></div><button type="button" onClick={() => setShowWinModal(false)} className="btn-primary mt-5 w-full rounded-2xl px-5 py-3.5 text-sm">Continue</button></div></div> : null}
+      {showWinModal && selectedReward ? (
+        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-black/90 p-4 backdrop-blur-xl">
+          <div className="game-panel relative w-full max-w-lg overflow-hidden p-7 text-center sm:p-9">
+            <div className="pointer-events-none absolute left-1/2 top-[-150px] h-[300px] w-[420px] -translate-x-1/2 rounded-full bg-[var(--accent)] opacity-[0.1] blur-3xl" />
+            <div className="relative">
+              <p className="section-kicker">Roulette reward</p>
+              <h2 className="mt-4 text-5xl font-black tracking-[-0.06em] text-white">You won!</h2>
+              <div className={`mt-7 rounded-[24px] border p-6 ${tierStyles[selectedReward.tier]}`}>
+                <div className="flex h-32 items-center justify-center rounded-[20px] border border-white/[0.06] bg-black/20 text-8xl">{selectedReward.emoji}</div>
+                <p className="mt-5 text-[9px] font-black uppercase tracking-[0.16em] opacity-55">{rarityLabel[selectedReward.tier]}</p>
+                <h3 className="mt-2 text-3xl font-black tracking-[-0.04em] text-white">{selectedReward.name}</h3>
+                <p className="mt-2 text-sm text-white/55">{selectedReward.subtitle}</p>
+              </div>
+              <button type="button" onClick={closeWinModal} className="btn-primary mt-6 w-full rounded-2xl px-5 py-3.5 text-sm">Continue</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
