@@ -51,7 +51,12 @@ test('Pizzer and Fisher show full-screen activity stages before the shared rewar
   assert.match(pizzerSource, /Packing pizzas/);
   assert.match(pizzerSource, /Driving to customer/);
   assert.match(pizzerSource, /Customer reached/);
-  assert.match(pizzerSource, /Complete delivery/);
+  assert.match(pizzerSource, />Complete</);
+  assert.match(pizzerSource, /Complete & end shift/);
+  assert.match(pizzerSource, /handover\(false\)/);
+  assert.match(pizzerSource, /handover\(true\)/);
+  assert.match(pizzerSource, /api\.pizzerShiftEnd\(playerId\)/);
+  assert.match(pizzerSource, /btn-danger/);
   assert.match(fisherSource, /fixed inset-0 z-\[120\]/);
   assert.match(fisherSource, /FISHER_ACTIVITY_STAGES/);
   assert.match(fisherSource, /Preparing bait/);
