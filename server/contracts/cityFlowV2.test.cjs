@@ -4,8 +4,11 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { CITY_LEVEL_START_XP, buildCareerAccess } = require('../cityProgress/constants.cjs');
+const { STARTING_CLEAN_MONEY } = require('../platform/constants.cjs');
 
 const apiSource = fs.readFileSync(path.join(__dirname, '../../src/lib/api.ts'), 'utf8');
+const serverSource = fs.readFileSync(path.join(__dirname, '../../server.cjs'), 'utf8');
+const pizzerSource = fs.readFileSync(path.join(__dirname, '../../src/components/PizzerPage.tsx'), 'utf8');
 const hudSource = fs.readFileSync(path.join(__dirname, '../../src/components/city/CityProgressHud.tsx'), 'utf8');
 const controlsSource = fs.readFileSync(path.join(__dirname, '../../src/components/city/CareerQuickControls.tsx'), 'utf8');
 const sidebarSource = fs.readFileSync(path.join(__dirname, '../../src/components/app/AppSidebar.tsx'), 'utf8');
@@ -31,13 +34,14 @@ test('career unlocks also require progress in the previous career', () => {
   assert.equal(openPilot.pilot.unlocked, true);
 });
 
-test('Pizza Courier receives a random delivery directly instead of requiring route selection', () => {
-  assert.match(apiSource, /async function autoDispatchPizzer/);
-  assert.match(apiSource, /Math\.floor\(Math\.random\(\) \* options\.length\)/);
-  assert.match(apiSource, /PIZZER_PACKING_STEPS/);
-  assert.match(apiSource, /pizzerShiftStart: async/);
-  assert.match(apiSource, /return autoDispatchPizzer\(playerId, state\)/);
-  assert.match(apiSource, /payload\.state = await autoDispatchPizzer\(playerId, payload\.state\)/);
+test('Pizza Courier receives a random delivery directly from the server instead of route selection', () => {
+  assert.match(serverSource, /function buildActivePizzerOrder\(level\)/);
+  assert.match(serverSource, /shiftState: 'DELIVERY_ACTIVE'/);
+  assert.match(serverSource, /activeOrder: buildActivePizzerOrder\(progressView\.level\)/);
+  assert.match(serverSource, /session\.activeOrder = buildActivePizzerOrder\(progressAfter\.level\)/);
+  assert.doesNotMatch(apiSource, /autoDispatchPizzer/);
+  assert.doesNotMatch(pizzerSource, /Dispatch board/);
+  assert.doesNotMatch(pizzerSource, /Accept and prepare/);
 });
 
 test('Pizzer, Fisher and Pilot share full-screen reward feedback and explicit stop controls', () => {
@@ -50,9 +54,12 @@ test('Pizzer, Fisher and Pilot share full-screen reward feedback and explicit st
   assert.match(controlsSource, /fisherShiftEnd/);
 });
 
-test('new accounts start from 69 dollars and Control Center is not in the city sidebar', () => {
-  assert.match(platformDbSource, /clean_money SET DEFAULT 69/);
-  assert.match(platformDbSource, /VALUES \(\$1, 69\)/);
+test('new accounts start from one shared 69 dollar constant without rewriting existing balances', () => {
+  assert.equal(STARTING_CLEAN_MONEY, 69);
+  assert.match(platformDbSource, /SET DEFAULT \$\{STARTING_CLEAN_MONEY\}/);
+  assert.match(platformDbSource, /\[playerId, STARTING_CLEAN_MONEY\]/);
+  assert.match(serverSource, /DEFAULT \$\{STARTING_CLEAN_MONEY\}/);
+  assert.doesNotMatch(serverSource, /DEFAULT 1000000/);
   assert.doesNotMatch(sidebarSource, /Control Center/);
 });
 
