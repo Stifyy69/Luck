@@ -47,6 +47,14 @@ export default function PilotPage() {
   const [overlayStageIndex, setOverlayStageIndex] = useState(0);
   const [overlayProgress, setOverlayProgress] = useState(0);
   const routesRef = useRef<HTMLElement | null>(null);
+  const flightCancelledRef = useRef(false);
+
+  const resetOverlay = useCallback(() => {
+    setOverlayOpen(false);
+    setOverlayRoute(null);
+    setOverlayStageIndex(0);
+    setOverlayProgress(0);
+  }, []);
 
   const pushPopup = useCallback((text: string, isError = false) => {
     setPopup({ text, isError });
@@ -69,12 +77,21 @@ export default function PilotPage() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (!state) return;
-      if (state.shiftState !== 'IDLE') {
-        loadState().catch(() => {});
-      }
+      if (state.shiftState !== 'IDLE') loadState().catch(() => {});
     }, 1000);
     return () => window.clearInterval(timer);
   }, [state, loadState]);
+
+  useEffect(() => {
+    const onExternalCancel = () => {
+      flightCancelledRef.current = true;
+      resetOverlay();
+      setBusy(false);
+      loadState().catch(() => {});
+    };
+    window.addEventListener('cityflow-pilot-cancelled', onExternalCancel);
+    return () => window.removeEventListener('cityflow-pilot-cancelled', onExternalCancel);
+  }, [loadState, resetOverlay]);
 
   const progress = state?.progress;
   const displayName = useMemo(() => String(player?.displayName || 'Unknown'), [player]);
@@ -118,13 +135,11 @@ export default function PilotPage() {
   const endShift = async () => {
     if (busy) return;
     setBusy(true);
+    flightCancelledRef.current = true;
     try {
       const next = await api.pilotShiftEnd(playerId);
       setState(next);
-      setOverlayOpen(false);
-      setOverlayRoute(null);
-      setOverlayStageIndex(0);
-      setOverlayProgress(0);
+      resetOverlay();
       pushPopup('Pilot shift ended.');
     } catch (e) {
       pushPopup(e instanceof Error ? e.message : 'Could not end pilot shift', true);
@@ -134,6 +149,7 @@ export default function PilotPage() {
   };
 
   const runFlightLifecycle = async () => {
+    flightCancelledRef.current = false;
     let payload;
     try {
       payload = await api.pilotFlightStart(playerId);
@@ -141,6 +157,7 @@ export default function PilotPage() {
       const message = startError instanceof Error ? startError.message.toLowerCase() : '';
       if (!message.includes('wait 0.5s between actions')) throw startError;
       await wait(600);
+      if (flightCancelledRef.current) return;
       payload = await api.pilotFlightStart(playerId);
     }
     setState(payload.state);
@@ -152,25 +169,28 @@ export default function PilotPage() {
     setOverlayOpen(true);
     setOverlayStageIndex(0);
     setOverlayProgress(0);
+    setBusy(false);
 
     const stageCount = Math.max(1, route.stages.length);
     const stageDurationMs = Math.max(200, Math.floor((route.durationSeconds * 1000) / stageCount));
 
     for (let index = 0; index < stageCount; index += 1) {
+      if (flightCancelledRef.current) return;
       setOverlayStageIndex(index);
       setOverlayProgress(Math.floor(((index + 1) / stageCount) * 100));
       await wait(stageDurationMs);
+      if (flightCancelledRef.current) return;
     }
 
     await wait(500);
+    if (flightCancelledRef.current) return;
+
     const finished = await api.pilotFlightComplete(playerId);
+    if (flightCancelledRef.current) return;
     if (finished.cityProgress) publishCityProgress(finished.cityProgress as CityProgress, finished.cityReward as CityProgressReward | undefined);
     setState(finished.state);
     await refresh();
-    setOverlayOpen(false);
-    setOverlayRoute(null);
-    setOverlayStageIndex(0);
-    setOverlayProgress(0);
+    resetOverlay();
 
     if (finished.result?.completed) {
       pushPopup(`Flight completed. +${fmt(finished.result.breakdown.totalCash)} $ / +${finished.result.breakdown.totalXp} XP`);
@@ -180,6 +200,7 @@ export default function PilotPage() {
   const selectRoute = async (routeId: string) => {
     if (busy) return;
     setBusy(true);
+    flightCancelledRef.current = false;
     try {
       let next: PilotStateResponse;
       try {
@@ -196,30 +217,29 @@ export default function PilotPage() {
       pushPopup('Route selected. Flight starting...');
       await runFlightLifecycle();
     } catch (e) {
-      setOverlayOpen(false);
-      setOverlayRoute(null);
-      setOverlayStageIndex(0);
-      setOverlayProgress(0);
-      pushPopup(e instanceof Error ? e.message : 'Route selection failed', true);
-      await loadState();
+      if (!flightCancelledRef.current) {
+        resetOverlay();
+        pushPopup(e instanceof Error ? e.message : 'Route selection failed', true);
+        await loadState();
+      }
     } finally {
       setBusy(false);
     }
   };
 
   const cancelFlight = async () => {
-    if (busy) return;
+    if (!state?.activeFlight) return;
+    flightCancelledRef.current = true;
     setBusy(true);
     try {
       const payload = await api.pilotFlightCancel(playerId);
       setState(payload.state);
-      setOverlayOpen(false);
-      setOverlayRoute(null);
-      setOverlayStageIndex(0);
-      setOverlayProgress(0);
+      resetOverlay();
       pushPopup('Flight cancelled. Streak reset.', true);
     } catch (e) {
+      flightCancelledRef.current = false;
       pushPopup(e instanceof Error ? e.message : 'Cancel flight failed', true);
+      await loadState();
     } finally {
       setBusy(false);
     }
@@ -258,7 +278,7 @@ export default function PilotPage() {
                   <div className="progress-track"><div className="progress-fill" style={{ width: `${clampPercent(overlayProgress)}%` }} /></div>
                 </div>
 
-                <button type="button" onClick={() => cancelFlight().catch(() => {})} disabled={busy} className="btn-danger mt-6 rounded-2xl px-5 py-3 text-sm disabled:opacity-40">Cancel flight</button>
+                <button type="button" onClick={() => cancelFlight().catch(() => {})} disabled={!state?.activeFlight} className="btn-danger mt-6 rounded-2xl px-5 py-3 text-sm disabled:opacity-40">Cancel flight</button>
               </div>
             </div>
           </div>
@@ -298,7 +318,7 @@ export default function PilotPage() {
               <h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Available routes</h2>
               <p className="mt-2 text-sm text-white/38">Every route is a progression card with its own aircraft mission, payout and unlock requirements.</p>
             </div>
-            {!canStartShift && <button type="button" onClick={() => endShift().catch(() => {})} disabled={busy} className="btn-danger rounded-2xl px-4 py-2.5 text-xs disabled:opacity-35">End shift</button>}
+            {!canStartShift && <button type="button" onClick={() => endShift().catch(() => {})} disabled={busy || !!state?.activeFlight} className="btn-danger rounded-2xl px-4 py-2.5 text-xs disabled:opacity-35">End shift</button>}
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">

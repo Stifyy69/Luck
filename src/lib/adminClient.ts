@@ -1,5 +1,14 @@
 import type { VipTier } from './platformApi';
-import type { AdminAction, AdminOverviewResponse, AdminPlayerDetail, AdminPlayerFilters, AdminPlayersResponse } from './adminTypes';
+import type {
+  AdminAction,
+  AdminOverviewResponse,
+  AdminPlayerDetail,
+  AdminPlayerFilters,
+  AdminPlayersResponse,
+  AdminVehicleStockResponse,
+  AdminVehicleStockUpdate,
+  AdminVehicleStockUpdateResponse,
+} from './adminTypes';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -24,6 +33,11 @@ export const adminLogout = () => request<{ ok: true }>('/api/adminpanelv2/logout
 export const fetchAdminOverview = () => request<AdminOverviewResponse>('/api/adminpanelv3/overview');
 export const fetchAdminAudit = () => request<{ actions: AdminAction[] }>('/api/adminpanelv3/audit?limit=150');
 export const fetchAdminPlayerDetail = (playerId: string) => request<AdminPlayerDetail>(`/api/adminpanelv3/players/${encodeURIComponent(playerId)}`);
+export const fetchAdminVehicleStock = () => request<AdminVehicleStockResponse>('/api/adminpanelv3/vehicle-stock');
+export const updateAdminVehicleStock = (input: AdminVehicleStockUpdate) => request<AdminVehicleStockUpdateResponse>('/api/adminpanelv3/vehicle-stock', {
+  method: 'POST',
+  body: JSON.stringify(input),
+});
 
 export function fetchAdminPlayers(filters: AdminPlayerFilters) {
   const params = new URLSearchParams({

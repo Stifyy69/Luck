@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import CityProgressHud from './components/city/CityProgressHud';
 import CityTutorialOverlay from './components/city/CityTutorialOverlay';
+import CareerQuickControls from './components/city/CareerQuickControls';
 import GangSyncBridge from './components/city/GangSyncBridge';
 import LockedCareerPage from './components/city/LockedCareerPage';
 import AppSidebar from './components/app/AppSidebar';
@@ -153,6 +154,7 @@ export default function App() {
     <div className="relative min-h-screen">
       <CityProgressHud currentLabel={currentLabel} onNavigate={navigateLoose} />
       <CityTutorialOverlay path={path} onNavigate={navigateLoose} />
+      <CareerQuickControls path={path} />
       <GangSyncBridge />
 
       <AppSidebar

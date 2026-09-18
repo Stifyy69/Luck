@@ -2,6 +2,7 @@ const { Pool } = require('pg');
 const {
   CITY_MAX_LEVEL,
   CITY_XP_REWARDS,
+  PILOT_ROUTE_XP,
   buildCareerAccess,
   cityLevelFromXp,
   cityLevelStartXp,
@@ -87,7 +88,11 @@ async function calculateLegacySeedXp(db, playerId) {
       SELECT
         COALESCE(pp.pizzer_total_deliveries, 0) AS deliveries,
         COALESCE(fp.fisher_total_catches, 0) AS catches,
-        COALESCE(pip.pilot_total_flights, 0) AS flights,
+        COALESCE(pip.route_1_completions, 0) AS route_1_completions,
+        COALESCE(pip.route_2_completions, 0) AS route_2_completions,
+        COALESCE(pip.route_3_completions, 0) AS route_3_completions,
+        COALESCE(pip.route_4_completions, 0) AS route_4_completions,
+        COALESCE(pip.route_5_completions, 0) AS route_5_completions,
         COALESCE(ps.leaves_collected, 0) AS leaves_collected,
         COALESCE(ps.white_processed, 0) AS white_processed,
         COALESCE(ps.blue_processed, 0) AS blue_processed
@@ -104,7 +109,12 @@ async function calculateLegacySeedXp(db, playerId) {
   const row = result.rows[0] || {};
   const pizzaXp = Number(row.deliveries || 0) * CITY_XP_REWARDS.PIZZER_DELIVERY;
   const fisherXp = Number(row.catches || 0) * CITY_XP_REWARDS.FISHER_CATCH;
-  const pilotXp = Number(row.flights || 0) * CITY_XP_REWARDS.PILOT_FLIGHT;
+  const pilotXp =
+    Number(row.route_1_completions || 0) * PILOT_ROUTE_XP.ROUTE_1
+    + Number(row.route_2_completions || 0) * PILOT_ROUTE_XP.ROUTE_2
+    + Number(row.route_3_completions || 0) * PILOT_ROUTE_XP.ROUTE_3
+    + Number(row.route_4_completions || 0) * PILOT_ROUTE_XP.ROUTE_4
+    + Number(row.route_5_completions || 0) * PILOT_ROUTE_XP.ROUTE_5;
   const collectRuns = Math.floor(Number(row.leaves_collected || 0) / 1200);
   const processRuns = Math.floor(Number(row.white_processed || 0) / 400);
   const refineRuns = Math.floor(Number(row.blue_processed || 0) / 800);
@@ -145,6 +155,29 @@ async function getVipActive(db, playerId) {
   return Boolean(result.rows[0]?.active);
 }
 
+async function getCareerLevels(db, playerId) {
+  const result = await db.query(
+    `
+      SELECT
+        COALESCE(pp.pizzer_level, 1) AS pizzer_level,
+        COALESCE(fp.fisher_level, 1) AS fisher_level,
+        COALESCE(pip.pilot_level, 1) AS pilot_level
+      FROM players p
+      LEFT JOIN player_pizzer_progress pp ON pp.player_id = p.player_id
+      LEFT JOIN player_fisher_progress fp ON fp.player_id = p.player_id
+      LEFT JOIN player_pilot_progress pip ON pip.player_id = p.player_id
+      WHERE p.player_id = $1
+    `,
+    [playerId],
+  );
+  const row = result.rows[0] || {};
+  return {
+    pizzerLevel: Math.max(1, Number(row.pizzer_level || 1)),
+    fisherLevel: Math.max(1, Number(row.fisher_level || 1)),
+    pilotLevel: Math.max(1, Number(row.pilot_level || 1)),
+  };
+}
+
 function tutorialView(row) {
   return {
     version: Number(row?.tutorial_version || 1),
@@ -154,7 +187,7 @@ function tutorialView(row) {
   };
 }
 
-function buildProgressView(row, vipActive) {
+function buildProgressView(row, vipActive, careerLevels = {}) {
   const xp = Math.max(0, Number(row?.city_xp || 0));
   const level = cityLevelFromXp(xp);
   const levelStartXp = cityLevelStartXp(level);
@@ -175,9 +208,21 @@ function buildProgressView(row, vipActive) {
     maxLevel: CITY_MAX_LEVEL,
     nextUnlock,
     vipActive: Boolean(vipActive),
-    careerAccess: buildCareerAccess(level, vipActive),
+    careerAccess: buildCareerAccess(level, vipActive, careerLevels),
+    careerLevels,
     tutorial: tutorialView(row),
   };
+}
+
+function resolvedAwardAmount(sourceType, xpAmount, metadata = {}) {
+  const source = String(sourceType || '').toUpperCase();
+  if (source === 'PIZZER_DELIVERY') return CITY_XP_REWARDS.PIZZER_DELIVERY;
+  if (source === 'FISHER_CATCH') return CITY_XP_REWARDS.FISHER_CATCH;
+  if (source === 'PILOT_FLIGHT') {
+    const routeId = String(metadata?.routeId || '').toUpperCase();
+    return Number(PILOT_ROUTE_XP[routeId] || CITY_XP_REWARDS.PILOT_FLIGHT);
+  }
+  return xpAmount;
 }
 
 async function reconcileTutorial(db, playerId, row) {
@@ -212,7 +257,8 @@ async function getCityProgress(playerId) {
     let row = await ensureProgressRow(db, playerId);
     row = await reconcileTutorial(db, playerId, row);
     const vipActive = await getVipActive(db, playerId);
-    return buildProgressView(row, vipActive);
+    const careerLevels = await getCareerLevels(db, playerId);
+    return buildProgressView(row, vipActive, careerLevels);
   });
 }
 
@@ -222,17 +268,16 @@ async function awardCityXp(playerId, sourceType, sourceId, xpAmount, metadata = 
 }
 
 async function awardCityXpInTransaction(db, playerId, sourceType, sourceId, xpAmount, metadata = {}) {
-  const safeAmount = Math.max(0, Math.min(1000, Math.floor(Number(xpAmount || 0))));
-  if (!safeAmount) {
-    let row = await ensureProgressRow(db, playerId);
-    const vipActive = await getVipActive(db, playerId);
-    const progress = buildProgressView(row, vipActive);
-    return { progress, awardedXp: 0, levelUp: null, duplicate: false };
-  }
-
+  const normalizedAmount = resolvedAwardAmount(sourceType, xpAmount, metadata);
+  const safeAmount = Math.max(0, Math.min(1000, Math.floor(Number(normalizedAmount || 0))));
   let row = await ensureProgressRow(db, playerId);
   const vipActive = await getVipActive(db, playerId);
-  const before = buildProgressView(row, vipActive);
+  const careerLevels = await getCareerLevels(db, playerId);
+  const before = buildProgressView(row, vipActive, careerLevels);
+
+  if (!safeAmount) {
+    return { progress: before, awardedXp: 0, levelUp: null, duplicate: false };
+  }
 
   const inserted = await db.query(
     `
@@ -258,7 +303,7 @@ async function awardCityXpInTransaction(db, playerId, sourceType, sourceId, xpAm
     [playerId, safeAmount],
   );
   row = updated.rows[0];
-  const after = buildProgressView(row, vipActive);
+  const after = buildProgressView(row, vipActive, careerLevels);
   const levelUp = after.level > before.level
     ? {
         fromLevel: before.level,
@@ -309,7 +354,8 @@ async function updateTutorial(playerId, action, requestedStep = null) {
     }
 
     const vipActive = await getVipActive(db, playerId);
-    return buildProgressView(row, vipActive);
+    const careerLevels = await getCareerLevels(db, playerId);
+    return buildProgressView(row, vipActive, careerLevels);
   });
 }
 
@@ -317,17 +363,16 @@ async function advanceTutorialAtLeast(playerId, minimumStep) {
   await ensureSchema();
   return withTransaction(async (db) => {
     let row = await ensureProgressRow(db, playerId);
-    if (row.tutorial_completed_at || row.tutorial_skipped_at || Number(row.tutorial_step || 0) >= minimumStep) {
-      const vipActive = await getVipActive(db, playerId);
-      return buildProgressView(row, vipActive);
+    if (!(row.tutorial_completed_at || row.tutorial_skipped_at || Number(row.tutorial_step || 0) >= minimumStep)) {
+      const result = await db.query(
+        `UPDATE player_city_progress SET tutorial_step = $2, updated_at = NOW() WHERE player_id = $1 RETURNING *`,
+        [playerId, Math.max(0, Math.min(6, Number(minimumStep || 0)))],
+      );
+      row = result.rows[0];
     }
-    const result = await db.query(
-      `UPDATE player_city_progress SET tutorial_step = $2, updated_at = NOW() WHERE player_id = $1 RETURNING *`,
-      [playerId, Math.max(0, Math.min(6, Number(minimumStep || 0)))],
-    );
-    row = result.rows[0];
     const vipActive = await getVipActive(db, playerId);
-    return buildProgressView(row, vipActive);
+    const careerLevels = await getCareerLevels(db, playerId);
+    return buildProgressView(row, vipActive, careerLevels);
   });
 }
 

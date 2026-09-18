@@ -31,6 +31,56 @@ function playerMetricValue(player: LeaderboardPlayer, metric: PlayerLeaderboardM
   return `${player.totalTimeHours.toFixed(1)}h`;
 }
 
+function playerContextStats(player: LeaderboardPlayer, metric: PlayerLeaderboardMetric) {
+  if (metric === 'pizza') {
+    return [
+      { label: 'Deliveries', value: fmt(player.deliveries) },
+      { label: 'City level', value: String(player.cityLevel) },
+      { label: 'Earnings', value: `${fmt(player.totalEarnings)} $` },
+    ];
+  }
+  if (metric === 'fishing') {
+    return [
+      { label: 'Catches', value: fmt(player.catches) },
+      { label: 'City level', value: String(player.cityLevel) },
+      { label: 'Earnings', value: `${fmt(player.totalEarnings)} $` },
+    ];
+  }
+  if (metric === 'aviation') {
+    return [
+      { label: 'Flights', value: fmt(player.flights) },
+      { label: 'City level', value: String(player.cityLevel) },
+      { label: 'Earnings', value: `${fmt(player.totalEarnings)} $` },
+    ];
+  }
+  if (metric === 'fleet') {
+    return [
+      { label: 'Fleet value', value: `${fmt(player.fleetValue)} $` },
+      { label: 'Net worth', value: `${fmt(player.netWorth)} $` },
+      { label: 'City level', value: String(player.cityLevel) },
+    ];
+  }
+  if (metric === 'cash' || metric === 'wealth' || metric === 'earnings') {
+    return [
+      { label: 'Clean cash', value: `${fmt(player.cleanMoney)} $` },
+      { label: 'Net worth', value: `${fmt(player.netWorth)} $` },
+      { label: 'Earnings', value: `${fmt(player.totalEarnings)} $` },
+    ];
+  }
+  if (metric === 'time') {
+    return [
+      { label: 'Time', value: `${player.totalTimeHours.toFixed(1)}h` },
+      { label: 'City level', value: String(player.cityLevel) },
+      { label: 'Career', value: fmt(player.careerScore) },
+    ];
+  }
+  return [
+    { label: 'City level', value: String(player.cityLevel) },
+    { label: 'Career', value: fmt(player.careerScore) },
+    { label: 'Net worth', value: `${fmt(player.netWorth)} $` },
+  ];
+}
+
 function gangMetricValue(gang: LeaderboardGang, metric: GangLeaderboardMetric) {
   if (metric === 'dirty_earned') return `${fmt(gang.dirtyEarned)} $`;
   if (metric === 'members') return `${gang.membersCount} members`;
@@ -40,6 +90,7 @@ function gangMetricValue(gang: LeaderboardGang, metric: GangLeaderboardMetric) {
 }
 
 export function PlayerPodium({ player, position, metric }: { player: LeaderboardPlayer; position: number; metric: PlayerLeaderboardMetric }) {
+  const stats = playerContextStats(player, metric);
   return (
     <article className={`game-panel-soft relative overflow-hidden p-5 ${position === 1 ? 'border-[rgba(211,255,81,0.26)] lg:-translate-y-2' : ''}`}>
       <div className="absolute right-[-30px] top-[-35px] text-[120px] font-black leading-none text-white/[0.025]">{position}</div>
@@ -48,7 +99,7 @@ export function PlayerPodium({ player, position, metric }: { player: Leaderboard
       <p className="relative mt-1 truncate text-xs text-white/32">@{player.username || player.playerId}</p>
       <p className="relative mt-5 text-2xl font-black text-[var(--accent)]">{playerMetricValue(player, metric)}</p>
       <div className="relative mt-5 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-4 text-center">
-        <Mini label="Deliveries" value={fmt(player.deliveries)} /><Mini label="Catches" value={fmt(player.catches)} /><Mini label="Flights" value={fmt(player.flights)} />
+        {stats.map((stat) => <Mini key={stat.label} label={stat.label} value={stat.value} />)}
       </div>
     </article>
   );
@@ -70,12 +121,15 @@ export function GangPodium({ gang, position, metric }: { gang: LeaderboardGang; 
 }
 
 export function PlayerRow({ player, metric }: { player: LeaderboardPlayer; metric: PlayerLeaderboardMetric }) {
+  const stats = playerContextStats(player, metric);
   return (
-    <div className="grid gap-4 p-4 sm:grid-cols-[52px_minmax(0,1fr)_150px_220px] sm:items-center sm:px-6">
+    <div className="grid gap-4 p-4 sm:grid-cols-[52px_minmax(0,1fr)_150px_260px] sm:items-center sm:px-6">
       <RankBadge position={player.rank} compact />
       <div className="min-w-0"><p className="truncate text-sm font-black text-white">{player.displayName}</p><p className="mt-1 truncate text-[10px] text-white/28">@{player.username || player.playerId} · City Lv {player.cityLevel}</p></div>
       <p className="text-sm font-black text-[var(--accent)] sm:text-right">{playerMetricValue(player, metric)}</p>
-      <div className="flex flex-wrap gap-3 text-[10px] font-bold text-white/32 sm:justify-end"><span>{player.deliveries} deliveries</span><span>{player.catches} catches</span><span>{player.flights} flights</span></div>
+      <div className="flex flex-wrap gap-3 text-[10px] font-bold text-white/32 sm:justify-end">
+        {stats.map((stat) => <span key={stat.label}>{stat.label}: {stat.value}</span>)}
+      </div>
     </div>
   );
 }

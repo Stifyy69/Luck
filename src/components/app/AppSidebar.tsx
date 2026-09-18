@@ -88,14 +88,7 @@ export default function AppSidebar({ path, open, progress, onNavigate, onClose, 
         </nav>
 
         <div className="mt-auto border-t border-white/[0.07] p-3">
-          <NavButton
-            active={path === '/adminpanelv2'}
-            description="Demo administration"
-            icon="alert"
-            label="Control Center"
-            onClick={() => onNavigate('/adminpanelv2')}
-          />
-          <button type="button" onClick={() => onNavigate('/profile')} className="city-profile-card mt-2 w-full text-left" aria-current={path === '/profile' ? 'page' : undefined}>
+          <button type="button" onClick={() => onNavigate('/profile')} className="city-profile-card w-full text-left" aria-current={path === '/profile' ? 'page' : undefined}>
             <span className="city-profile-avatar">ST</span>
             <span className="min-w-0 flex-1">
               <strong>My Profile</strong>

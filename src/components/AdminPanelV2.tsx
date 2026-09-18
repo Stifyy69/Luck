@@ -15,9 +15,10 @@ import AdminAudit from './admin/AdminAudit';
 import AdminOverview from './admin/AdminOverview';
 import AdminPlayerEditor from './admin/AdminPlayerEditor';
 import AdminPlayersTable from './admin/AdminPlayersTable';
+import AdminVehicleStock from './admin/AdminVehicleStock';
 import CityIcon from './ui/CityIcon';
 
-type AdminTab = 'overview' | 'players' | 'audit';
+type AdminTab = 'overview' | 'players' | 'stock' | 'audit';
 
 const DEFAULT_FILTERS: AdminPlayerFilters = {
   search: '',
@@ -84,7 +85,7 @@ export default function AdminPanelV2() {
     try {
       if (tab === 'overview') await loadOverview();
       else if (tab === 'players') await loadPlayers();
-      else await loadAudit();
+      else if (tab === 'audit') await loadAudit();
     } catch (reason: unknown) {
       const message = reason instanceof Error ? reason.message : 'Admin data failed to load.';
       if (message === 'unauthorized') setLoggedIn(false);
@@ -99,10 +100,10 @@ export default function AdminPanelV2() {
   }, [refreshCurrent]);
 
   useEffect(() => {
-    if (!loggedIn) return;
+    if (!loggedIn || tab === 'stock') return;
     const timer = window.setInterval(() => refreshCurrent().catch(() => {}), 30_000);
     return () => window.clearInterval(timer);
-  }, [loggedIn, refreshCurrent]);
+  }, [loggedIn, refreshCurrent, tab]);
 
   const login = async (event: FormEvent) => {
     event.preventDefault();
@@ -167,7 +168,7 @@ export default function AdminPanelV2() {
         </section>
 
         <section className="game-panel-soft flex flex-wrap gap-2 p-2">
-          {(['overview', 'players', 'audit'] as AdminTab[]).map((entry) => <button key={entry} type="button" onClick={() => setTab(entry)} className={`rounded-[14px] px-5 py-3 text-xs font-black uppercase tracking-[0.1em] ${tab === entry ? 'bg-[var(--accent)] text-[#10140b]' : 'text-white/35 hover:bg-white/[0.04] hover:text-white/70'}`}>{entry}</button>)}
+          {(['overview', 'players', 'stock', 'audit'] as AdminTab[]).map((entry) => <button key={entry} type="button" onClick={() => setTab(entry)} className={`rounded-[14px] px-5 py-3 text-xs font-black uppercase tracking-[0.1em] ${tab === entry ? 'bg-[var(--accent)] text-[#10140b]' : 'text-white/35 hover:bg-white/[0.04] hover:text-white/70'}`}>{entry}</button>)}
         </section>
 
         {error ? <section className="rounded-[18px] border border-red-400/20 bg-red-500/[0.06] p-4 text-sm font-bold text-red-100">{error}</section> : null}
@@ -175,6 +176,7 @@ export default function AdminPanelV2() {
 
         {tab === 'overview' && overview ? <AdminOverview data={overview} /> : null}
         {tab === 'players' ? <AdminPlayersTable data={players} filters={filters} loading={loading} onFiltersChange={setFilters} onApply={applyFilters} onPage={changePage} onEdit={setEditing} /> : null}
+        {tab === 'stock' ? <AdminVehicleStock /> : null}
         {tab === 'audit' ? <AdminAudit actions={audit} /> : null}
       </div>
 

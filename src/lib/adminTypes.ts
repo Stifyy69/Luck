@@ -97,7 +97,6 @@ export type AdminPlayerDetail = {
   };
 };
 
-
 export type AdminPlayerFilters = {
   search: string;
   accountOnly: boolean;
@@ -122,4 +121,33 @@ export type AdminPlayerFilters = {
   sortDir: 'asc' | 'desc';
   page: number;
   pageSize: number;
+};
+
+export type AdminVehicleStockItem = {
+  id: number;
+  brand: string;
+  name: string;
+  basePrice: number;
+  jackpot: boolean;
+  stock: number;
+  rank: 1 | 2 | 3;
+};
+
+export type AdminVehicleStockResponse = {
+  ranks: Array<{ rank: 1 | 2 | 3; label: string; description: string }>;
+  vehicles: AdminVehicleStockItem[];
+};
+
+export type AdminVehicleStockUpdate = {
+  scope: 'all' | 'selected' | 'rank';
+  mode: 'add' | 'set';
+  amount: number;
+  rank?: 1 | 2 | 3;
+  modelIds?: number[];
+};
+
+export type AdminVehicleStockUpdateResponse = {
+  ok: true;
+  affected: number;
+  vehicles: AdminVehicleStockItem[];
 };

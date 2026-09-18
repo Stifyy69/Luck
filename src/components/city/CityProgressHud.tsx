@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePlatformStatus } from '../../context/PlatformStatusContext';
 import { usePlayer } from '../../hooks/usePlayer';
 import { subscribeCareerRewards, type CareerRewardReceipt } from '../../lib/careerRewards';
-import { CITY_UNLOCKS, readPlayerCityProgress, type CityProgress, type CityUnlock } from '../../lib/cityProgress';
+import { CAREER_REQUIREMENTS, CITY_UNLOCKS, careerAccessForPath, readPlayerCityProgress, type CityProgress, type CityUnlock } from '../../lib/cityProgress';
 import { fetchCityProgress, subscribeCityProgress, type CityProgressEventDetail } from '../../lib/cityProgressApi';
 import AccountHud from '../AccountHud';
 import CityIcon from '../ui/CityIcon';
@@ -27,8 +27,13 @@ function formatRemaining(milliseconds: number) {
 
 function formatMoney(receipt: CareerRewardReceipt) {
   if (typeof receipt.money !== 'number') return null;
-  const suffix = receipt.moneyType === 'dirty' ? 'dirty' : receipt.moneyType === 'carry' ? 'carry value' : 'clean';
+  const suffix = receipt.moneyType === 'dirty' ? 'dirty' : receipt.moneyType === 'carry' ? 'catch value' : 'clean';
   return `+${receipt.money.toLocaleString('en-US')} $ ${suffix}`;
+}
+
+function accessKeyForUnlock(unlock: CityUnlock) {
+  const requirement = CAREER_REQUIREMENTS[unlock.path];
+  return requirement?.key || null;
 }
 
 export default function CityProgressHud({ currentLabel, onNavigate }: CityProgressHudProps) {
@@ -60,10 +65,15 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
     if (initializedRef.current && previousLevel !== null && next.level > previousLevel) {
       const rewardUnlocks = detail.reward?.levelUp?.unlocks || [];
       const fallbackUnlocks = CITY_UNLOCKS.filter((unlock) => unlock.level > previousLevel && unlock.level <= next.level);
+      const candidates = rewardUnlocks.length > 0 ? rewardUnlocks : fallbackUnlocks;
+      const unlockedNow = candidates.filter((unlock) => {
+        const key = accessKeyForUnlock(unlock);
+        return !key || Boolean(next.careerAccess?.[key]?.unlocked);
+      });
       setLevelUp({
         fromLevel: detail.reward?.levelUp?.fromLevel || previousLevel,
         toLevel: detail.reward?.levelUp?.toLevel || next.level,
-        unlocks: rewardUnlocks.length > 0 ? rewardUnlocks : fallbackUnlocks,
+        unlocks: unlockedNow,
       });
     }
 
@@ -83,7 +93,7 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
   useEffect(() => subscribeCareerRewards((receipt) => {
     if (careerTimerRef.current) window.clearTimeout(careerTimerRef.current);
     setCareerReceipt(receipt);
-    careerTimerRef.current = window.setTimeout(() => setCareerReceipt(null), receipt.detail ? 4800 : 3400);
+    careerTimerRef.current = window.setTimeout(() => setCareerReceipt(null), 3200);
   }), []);
 
   useEffect(() => () => {
@@ -105,8 +115,14 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
   }, [playerId]);
 
   const nextUnlockLabel = useMemo(() => {
-    if (!progress?.nextUnlock) return 'All main careers unlocked';
-    return `${progress.nextUnlock.label} at Lv. ${progress.nextUnlock.level}`;
+    if (!progress) return 'Pizza Courier';
+    const locked = CITY_UNLOCKS.find((unlock) => {
+      const access = careerAccessForPath(unlock.path, progress);
+      return access && !access.unlocked;
+    });
+    if (!locked) return 'All main careers unlocked';
+    const access = careerAccessForPath(locked.path, progress);
+    return access?.reason ? `${locked.label}: ${access.reason}` : `${locked.label} at Lv. ${locked.level}`;
   }, [progress]);
 
   const mainUnlock = levelUp?.unlocks?.[0] || null;
@@ -151,28 +167,44 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
           </div>
         </div>
 
-        {xpToast ? (
+        {xpToast && !careerReceipt ? (
           <div className="animate-toast-in pointer-events-none absolute left-1/2 top-[72px] -translate-x-1/2 rounded-full border border-[rgba(211,255,81,0.25)] bg-[#11170d]/95 px-4 py-2 text-[11px] font-black uppercase tracking-[0.13em] text-[var(--accent)] shadow-2xl">
             +{xpToast} City XP
           </div>
         ) : null}
+      </div>
 
-        {careerReceipt ? (
-          <div className="animate-toast-in pointer-events-none absolute left-1/2 top-[112px] w-[calc(100%-1rem)] max-w-lg -translate-x-1/2 rounded-[18px] border border-white/[0.1] bg-[#0b100c]/97 px-4 py-3 shadow-2xl backdrop-blur-xl">
-            <div className="flex items-start gap-3">
-              <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_14px_rgba(211,255,81,0.42)]" />
-              <div className="min-w-0 flex-1">
-                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/30">{careerReceipt.title}</p>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm font-black">
-                  {receiptMoney ? <span className={careerReceipt.moneyType === 'dirty' ? 'text-amber-100' : careerReceipt.moneyType === 'carry' ? 'text-sky-100' : 'text-[var(--money)]'}>{receiptMoney}</span> : null}
-                  {typeof careerReceipt.careerXp === 'number' ? <span className="text-[var(--accent)]">+{careerReceipt.careerXp} {careerReceipt.careerLabel || 'Career XP'}</span> : null}
-                </div>
-                {careerReceipt.detail ? <p className="mt-1 text-[10px] leading-4 text-white/38">{careerReceipt.detail}</p> : null}
+      {careerReceipt ? (
+        <div className="animate-toast-in pointer-events-none fixed inset-0 z-[210] flex items-center justify-center bg-black/78 px-4 backdrop-blur-md">
+          <div className="game-panel relative w-full max-w-xl overflow-hidden p-7 text-center sm:p-9">
+            <div className="pointer-events-none absolute left-1/2 top-[-150px] h-[300px] w-[420px] -translate-x-1/2 rounded-full bg-[var(--accent)] opacity-[0.09] blur-3xl" />
+            <div className="relative">
+              <p className="section-kicker">{careerReceipt.title}</p>
+              <h2 className="mt-4 text-4xl font-black tracking-[-0.055em] text-white">Activity complete</h2>
+              <div className="mt-7 grid gap-3 sm:grid-cols-2">
+                {receiptMoney ? (
+                  <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.025] p-5">
+                    <p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/28">Reward</p>
+                    <p className={`mt-2 text-xl font-black ${careerReceipt.moneyType === 'dirty' ? 'text-amber-100' : careerReceipt.moneyType === 'carry' ? 'text-sky-100' : 'text-[var(--money)]'}`}>{receiptMoney}</p>
+                  </div>
+                ) : null}
+                {typeof careerReceipt.careerXp === 'number' ? (
+                  <div className="rounded-[18px] border border-[rgba(211,255,81,0.16)] bg-[rgba(211,255,81,0.045)] p-5">
+                    <p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/28">{careerReceipt.careerLabel || 'Job XP'}</p>
+                    <p className="mt-2 text-xl font-black text-[var(--accent)]">+{careerReceipt.careerXp} XP</p>
+                  </div>
+                ) : null}
+                {typeof careerReceipt.cityXp === 'number' && careerReceipt.cityXp > 0 ? (
+                  <div className="rounded-[18px] border border-[rgba(114,183,255,0.16)] bg-[rgba(114,183,255,0.045)] p-5 sm:col-span-2">
+                    <p className="text-[9px] font-black uppercase tracking-[0.14em] text-white/28">City XP</p>
+                    <p className="mt-2 text-xl font-black text-[var(--info)]">+{careerReceipt.cityXp} XP</p>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {levelUp ? (
         <div className="fixed inset-0 z-[220] flex items-center justify-center overflow-hidden bg-black/90 p-4 backdrop-blur-xl">
@@ -190,13 +222,11 @@ export default function CityProgressHud({ currentLabel, onNavigate }: CityProgre
                 <>
                   <p className="text-[10px] font-black uppercase tracking-[0.17em] text-[var(--accent)]">New career unlocked</p>
                   <h2 className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">{mainUnlock.label}</h2>
-                  <p className="mt-3 text-sm leading-relaxed text-white/42">The city has opened a new progression path for your account.</p>
                 </>
               ) : (
                 <>
                   <p className="text-[10px] font-black uppercase tracking-[0.17em] text-[var(--accent)]">Account progression</p>
                   <h2 className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">City Level {levelUp.toLevel}</h2>
-                  <p className="mt-3 text-sm leading-relaxed text-white/42">New city rewards and future opportunities are now closer.</p>
                 </>
               )}
             </div>

@@ -38,7 +38,9 @@ import {
 } from './careerRewards';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '';
+
 export type SessionUser = { id: number; username: string; email: string; playerId: string; cityId: number | null; isGuest?: boolean };
+export type RouletteFlowResult = SpinResult & { spinId: string; readyAt: string; claimed?: boolean };
 
 async function resolveApiError(res: Response): Promise<string> {
   try {
@@ -74,6 +76,15 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
   if (!res.ok) throw new Error(await resolveApiError(res));
   return res.json() as Promise<T>;
 }
+async function legacyPizzerOptions(playerId: string): Promise<{ options: PizzerOrderOption[] }> {
+  try {
+    return await post<{ options: PizzerOrderOption[] }>('/api/pizzer/orders/options', { playerId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    if (message.includes('not ready to pick order') || message.includes('not selecting order')) return { options: [] };
+    throw error;
+  }
+}
 
 export const api = {
   ensureSession: async () => {
@@ -93,8 +104,14 @@ export const api = {
   showroom: () => get<ShowroomResponse>('/api/showroom'),
   showroomBuy: (playerId: string, modelId: number, useVoucher?: boolean) =>
     post<ShowroomBuyResult>('/api/showroom/buy', { playerId, modelId, useVoucher: useVoucher ?? false }),
-  rouletteSpin: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments') =>
-    post<SpinResult>('/api/roulette/spin', { playerId, costType }),
+  roulettePending: async (playerId: string) => {
+    const payload = await get<{ spin: RouletteFlowResult | null }>('/api/roulette/pending', { playerId });
+    return payload.spin;
+  },
+  rouletteStart: (playerId: string, costType: 'cash' | 'flowcoins' | 'fragments', operationId: string) =>
+    post<RouletteFlowResult>('/api/roulette/start', { playerId, costType, operationId }),
+  rouletteClaim: (playerId: string, spinId: string) =>
+    post<RouletteFlowResult>('/api/roulette/claim', { playerId, spinId }),
   mysteryOpen: (playerId: string) => post<MysteryOpenResult>('/api/mystery/open', { playerId }),
   inventoryUse: (playerId: string, itemId: number) => post<InventoryUseResult>('/api/inventory/use', { playerId, itemId }),
   inventoryApplyXenon: (playerId: string, itemId: number, vehicleId: number) =>
@@ -158,7 +175,7 @@ export const api = {
   pizzerState: (playerId: string) => get<PizzerStateResponse>('/api/pizzer/state', { playerId }),
   pizzerShiftStart: (playerId: string) => post<PizzerStateResponse>('/api/pizzer/shift/start', { playerId }),
   pizzerShiftEnd: (playerId: string) => post<PizzerStateResponse>('/api/pizzer/shift/end', { playerId }),
-  pizzerOrderOptions: (playerId: string) => post<{ options: PizzerOrderOption[] }>('/api/pizzer/orders/options', { playerId }),
+  pizzerOrderOptions: (playerId: string) => legacyPizzerOptions(playerId),
   pizzerOrderSelect: (playerId: string, orderId: string) => post<PizzerStateResponse>('/api/pizzer/order/select', { playerId, orderId }),
   pizzerPackingStep: (playerId: string, stepKey: string) => post<PizzerStateResponse>('/api/pizzer/packing/step', { playerId, stepKey }),
   pizzerDamageReport: (playerId: string, damageDelta: number) => post<PizzerStateResponse>('/api/pizzer/delivery/report-damage', { playerId, damageDelta }),

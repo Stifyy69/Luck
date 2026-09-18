@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const { ensureSchema: ensureCityProgressSchema } = require('../cityProgress/store.cjs');
+const { STARTING_CLEAN_MONEY } = require('./constants.cjs');
 
 const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL, max: 5 })
@@ -26,6 +27,7 @@ async function ensureSchema() {
 
   schemaPromise = (async () => {
     await ensureCityProgressSchema();
+    await pool.query(`ALTER TABLE players ALTER COLUMN clean_money SET DEFAULT ${STARTING_CLEAN_MONEY};`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS player_gangs (
         player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
@@ -109,7 +111,7 @@ async function withTransaction(work) {
 }
 
 async function ensurePlayer(db, playerId) {
-  await db.query(`INSERT INTO players (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`, [playerId]);
+  await db.query(`INSERT INTO players (player_id, clean_money) VALUES ($1, $2) ON CONFLICT (player_id) DO NOTHING`, [playerId, STARTING_CLEAN_MONEY]);
 }
 
 async function ensureCityProgress(db, playerId) {
