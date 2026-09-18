@@ -3655,11 +3655,18 @@ app.get('/api/pizzer/state', requireDb, async (req, res) => {
       session.repairUntil = 0;
       session.repairLabel = null;
     }
-    if (session.shiftState === 'SELECTING_ORDER' && Number(session.repairUntil || 0) <= Date.now()) {
+    if (['SELECTING_ORDER', 'PACKING_ORDER'].includes(session.shiftState) && Number(session.repairUntil || 0) <= Date.now()) {
       session.shiftState = 'DELIVERY_ACTIVE';
       session.orderOptions = [];
       session.optionsGeneratedAt = 0;
-      session.activeOrder = buildActivePizzerOrder(progressView.level);
+      if (session.activeOrder) {
+        const packingSteps = session.activeOrder.packingStepsRequired || ['PICK_BOXES', 'ADD_DRINKS', 'CONFIRM_ORDER'];
+        session.activeOrder.packingStepsRequired = packingSteps;
+        session.activeOrder.packingStepsDone = [...packingSteps];
+        session.activeOrder.deliveryStartedAt = Date.now();
+      } else {
+        session.activeOrder = buildActivePizzerOrder(progressView.level);
+      }
     }
     await setPizzerSession(playerId, session);
     res.json(pizzerStateView(session, progressView));
