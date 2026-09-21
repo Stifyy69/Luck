@@ -43,7 +43,9 @@ export default function App() {
   const [cityProgress, setCityProgress] = useState<CityProgress | null>(playerCityProgress);
   const [path, setPath] = useState<RoutePath>(normalizePath(window.location.pathname || '/city'));
   const [menuOpen, setMenuOpen] = useState(false);
-  const accountRequired = Boolean(session?.isGuest);
+  const visitor = Boolean(session?.isGuest);
+  const tutorialFinished = Boolean(cityProgress?.tutorial?.completedAt || cityProgress?.tutorial?.skippedAt);
+  const accountRequired = visitor && tutorialFinished;
 
   useEffect(() => {
     const nextPath = normalizePath(window.location.pathname || path);
