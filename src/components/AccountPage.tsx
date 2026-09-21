@@ -83,12 +83,12 @@ export default function AccountPage({ forced = false, onNavigate }: AccountPageP
             <span className="inline-flex h-14 w-14 items-center justify-center rounded-[20px] bg-[var(--accent)] text-lg font-black text-[#10140b]">CF</span>
             <p className="section-kicker mt-8">Welcome to CityFlow</p>
             <h1 className="mt-3 text-4xl font-black tracking-[-0.055em] sm:text-5xl">Create your identity.</h1>
-            <p className="mt-4 max-w-md text-sm leading-6 text-white/45">Create an account or log in before entering the city. Your tutorial starts immediately after authentication.</p>
+            <p className="mt-4 max-w-md text-sm leading-6 text-white/45">Your Visitor tutorial is complete. Create an account to preserve that progress and enter the city, or log in to continue with an existing resident.</p>
           </div>
 
           <div className="mt-10 space-y-3">
             <Benefit icon="profile" title="Permanent player identity" detail="Your account receives the next available ID # number." />
-            <Benefit icon="check" title="Guided first steps" detail="The tutorial introduces the city and your first career." />
+            <Benefit icon="check" title="Visitor progress preserved" detail="Your tutorial and first reward stay with the account you create." />
             <Benefit icon="inventory" title="Persistent city" detail="Inventory, garage and career history remain available after login." />
           </div>
         </section>
