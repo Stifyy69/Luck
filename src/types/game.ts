@@ -80,6 +80,12 @@ export interface CayoState {
   timeHours: number;
   nextActionAt: string | null;
   actionCooldownMs: number;
+  heat: number;
+  riskLevel: string;
+  raidChancePercent: number;
+  jailedUntil: string | null;
+  jailRemainingMs: number;
+  jailReason: string | null;
 }
 
 export interface CayoActionResult {
@@ -88,6 +94,7 @@ export interface CayoActionResult {
   mode?: 'BULK' | 'DELIVERY_100';
   raided?: boolean;
   payout?: number;
+  quantity?: number;
   cleanGained?: number;
   cleanCost?: number;
   multiplier?: number;

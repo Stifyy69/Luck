@@ -15,11 +15,10 @@ const ACTION_ART: Record<ActionKey, string> = {
   refine_pack: '/jobs/cayo/blue-pack.svg',
 };
 
-const actions: Record<ActionKey, { title: string; duration: number; risk: number; timeSpentHours: number; run: string; stage: string }> = {
+const actions: Record<ActionKey, { title: string; duration: number; timeSpentHours: number; run: string; stage: string }> = {
   collect_leaves: {
     title: 'Collect Leaves',
     duration: 5,
-    risk: 10,
     timeSpentHours: 0.5,
     run: '+1200 leaves',
     stage: 'Supply stage 01',
@@ -27,7 +26,6 @@ const actions: Record<ActionKey, { title: string; duration: number; risk: number
   process_pack: {
     title: 'Process White Packs',
     duration: 5,
-    risk: 10,
     timeSpentHours: 0.5,
     run: '1200 leaves + 900,000 dirty cash -> 400 white packs',
     stage: 'Supply stage 02',
@@ -35,7 +33,6 @@ const actions: Record<ActionKey, { title: string; duration: number; risk: number
   refine_pack: {
     title: 'Process Blue Packs',
     duration: 5,
-    risk: 10,
     timeSpentHours: 1,
     run: '400 white packs + 100,000 dirty cash -> 800 blue packs',
     stage: 'Supply stage 03',
@@ -55,14 +52,22 @@ export default function FarmatPage() {
   const [popup, setPopup] = useState<null | { type: PopupType; text: string }>(null);
   const [confirmConvert, setConfirmConvert] = useState<null | { key: ActionKey; needed: number; cleanCost: number }>(null);
   const [isConverting, setIsConverting] = useState(false);
+  const [clock, setClock] = useState(Date.now());
 
   useEffect(() => {
     let cancelled = false;
-    api.cayoState(playerId)
+    const loadState = () => api.cayoState(playerId)
       .then((payload) => { if (!cancelled) setServerState(payload.state); })
       .catch((error) => { if (!cancelled) setPopup({ type: 'danger', text: error instanceof Error ? error.message : 'Cayo state failed.' }); });
-    return () => { cancelled = true; };
+    void loadState();
+    const interval = window.setInterval(() => { void loadState(); }, 30_000);
+    return () => { cancelled = true; window.clearInterval(interval); };
   }, [playerId]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const frunze = serverState?.leaves ?? 0;
   const plicuriAlbe = serverState?.whitePacks ?? 0;
@@ -75,7 +80,10 @@ export default function FarmatPage() {
     window.setTimeout(() => setPopup(null), 3200);
   };
 
-  const canRun = activeAction === null && !isConverting;
+  const jailRemainingMs = serverState?.jailedUntil ? Math.max(0, new Date(serverState.jailedUntil).getTime() - clock) : 0;
+  const jailRemainingSeconds = Math.ceil(jailRemainingMs / 1_000);
+  const canRun = serverState !== null && activeAction === null && !isConverting && jailRemainingMs === 0;
+  const raidChance = serverState?.raidChancePercent ?? 5;
 
   const operationId = (prefix: string) => {
     const suffix = typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -168,18 +176,19 @@ export default function FarmatPage() {
   };
 
   const convertDirtyToClean = async () => {
-    if (activeAction) return;
+    if (!canRun) return;
     if (baniMurdari <= 0) return;
     try {
       const result = await api.cayoConvert(playerId, operationId('cayo_convert'));
       applyResult(result);
       pushPopup('success', `Conversion successful: +${fmt(Number(result.cleanGained || 0))} clean money.`);
-    } catch {
-      pushPopup('danger', 'Could not sync conversion with server.');
+    } catch (error) {
+      pushPopup('danger', error instanceof Error ? error.message : 'Could not sync conversion with server.');
     }
   };
 
   const sellBulk = async () => {
+    if (!canRun) return;
     if (!plicuriAlbastre) {
       pushPopup('danger', 'You do not have goods for bulk sale.');
       return;
@@ -187,13 +196,16 @@ export default function FarmatPage() {
     try {
       const result = await api.cayoSell(playerId, 'BULK', operationId('cayo_bulk'));
       applyResult(result);
-      pushPopup('success', `Bulk sale: +${fmt(Number(result.payout || 0))} dirty cash.`);
+      pushPopup(result.raided ? 'danger' : 'success', result.raided
+        ? `POLICE RAID! You lost ${fmt(Number(result.quantity || 0))} units.`
+        : `Bulk sale: +${fmt(Number(result.payout || 0))} dirty cash.`);
     } catch (error) {
       pushPopup('danger', error instanceof Error ? error.message : 'Bulk sale failed.');
     }
   };
 
   const deliver100 = async () => {
+    if (!canRun) return;
     if (plicuriAlbastre < 100) {
       pushPopup('danger', 'You need at least 100 blue packs.');
       return;
@@ -236,6 +248,19 @@ export default function FarmatPage() {
           </div>
         </section>
 
+        <section className="game-panel-soft grid gap-4 p-5 sm:grid-cols-[1fr_auto] sm:items-center sm:p-6">
+          <div>
+            <p className="section-kicker">Cayo Heat</p>
+            <div className="mt-2 flex items-baseline gap-3"><strong className="text-4xl font-black text-[var(--warning)]">{serverState?.heat ?? 0}%</strong><span className="text-sm font-black text-white/65">{serverState?.riskLevel ?? 'LOW'} RISK</span></div>
+            <p className="mt-2 text-xs text-white/45">Raid chance for the next Cayo action: {raidChance}%. Heat cools by 10 every 15 minutes, even while away.</p>
+          </div>
+          {jailRemainingMs > 0 && (
+            <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-5 py-4 text-center text-sm font-black text-red-100">
+              In jail: {String(Math.floor(jailRemainingSeconds / 60)).padStart(2, '0')}:{String(jailRemainingSeconds % 60).padStart(2, '0')} remaining
+            </div>
+          )}
+        </section>
+
         <section className="game-panel-soft p-5 sm:p-6">
           <div>
             <p className="section-kicker">Production line</p>
@@ -268,7 +293,7 @@ export default function FarmatPage() {
                   </div>
 
                   <p className="mt-3 min-h-[42px] text-xs leading-relaxed text-white/42">{action.run}</p>
-                  <div className="mt-4 grid grid-cols-2 gap-2 border-y border-white/[0.065] py-4"><ProcessStat label="Risk" value={`${action.risk}%`} /><ProcessStat label="Status" value={isActive ? 'Running' : hasFullMaterials ? 'Ready' : canConvertFromClean ? 'Convertible' : 'Missing supply'} /></div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 border-y border-white/[0.065] py-4"><ProcessStat label="Raid chance" value={`${raidChance}%`} /><ProcessStat label="Status" value={jailRemainingMs > 0 ? 'In jail' : isActive ? 'Running' : hasFullMaterials ? 'Ready' : canConvertFromClean ? 'Convertible' : 'Missing supply'} /></div>
 
                   <button type="button" onClick={() => runAction(key)} disabled={!canClickAction} className={`mt-5 w-full rounded-2xl px-4 py-3 text-sm font-black disabled:cursor-not-allowed ${hasFullMaterials || key === 'collect_leaves' ? 'btn-secondary' : canConvertFromClean ? 'border border-[rgba(240,196,106,0.3)] bg-[rgba(240,196,106,0.08)] text-[var(--warning)]' : 'btn-ghost opacity-40'}`}>
                     {isActive ? `Processing ${timer}s` : canConvertFromClean ? 'Convert cash and run' : key === 'collect_leaves' ? 'Collect supply' : hasFullMaterials ? 'Start process' : 'Missing materials'}
@@ -290,9 +315,9 @@ export default function FarmatPage() {
           <div><p className="section-kicker">Exit routes</p><h2 className="mt-2 text-3xl font-black tracking-[-0.045em] text-white">Move the finished product</h2><p className="mt-2 text-sm text-white/38">Choose volume, higher per-unit payout or convert the full dirty balance into clean money.</p></div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-3">
-            <SaleCard title="Bulk Sale" subtitle="Move the full blue inventory" value="2,300 $ / unit" status={`${fmt(plicuriAlbastre)} units ready`} disabled={!plicuriAlbastre || Boolean(activeAction)} onClick={sellBulk} />
-            <SaleCard title="100 Unit Delivery" subtitle="Higher payout with 10% raid risk" value="3,179 $ / unit" status={`${Math.floor(plicuriAlbastre / 100)} runs ready`} disabled={plicuriAlbastre < 100 || Boolean(activeAction)} onClick={deliver100} warning />
-            <SaleCard title="Cash Conversion" subtitle="Convert the full dirty balance" value="65% clean return" status={`${fmt(baniMurdari)} $ available`} disabled={baniMurdari <= 0 || Boolean(activeAction)} onClick={() => { convertDirtyToClean().catch(() => {}); }} money />
+            <SaleCard title="Bulk Sale" subtitle="Move the full blue inventory" value="2,300 $ / unit" status={`${fmt(plicuriAlbastre)} units ready, ${raidChance}% raid chance`} disabled={!plicuriAlbastre || !canRun} onClick={sellBulk} warning />
+            <SaleCard title="100 Unit Delivery" subtitle="Higher payout, 100 units per run" value="3,179 $ / unit" status={`${Math.floor(plicuriAlbastre / 100)} runs ready, ${raidChance}% raid chance`} disabled={plicuriAlbastre < 100 || !canRun} onClick={deliver100} warning />
+            <SaleCard title="Cash Conversion" subtitle="Convert the full dirty balance" value="65% clean return" status={`${fmt(baniMurdari)} $ available`} disabled={baniMurdari <= 0 || !canRun} onClick={() => { convertDirtyToClean().catch(() => {}); }} money />
           </div>
         </section>
 

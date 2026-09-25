@@ -441,6 +441,19 @@ async function initDb() {
       total_earnings BIGINT NOT NULL DEFAULT 0,
       time_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
       next_action_at TIMESTAMPTZ,
+      heat INT NOT NULL DEFAULT 0,
+      heat_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`ALTER TABLE player_cayo_state ADD COLUMN IF NOT EXISTS heat INT NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE player_cayo_state ADD COLUMN IF NOT EXISTS heat_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_restrictions (
+      player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+      jailed_until TIMESTAMPTZ,
+      jail_reason TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);

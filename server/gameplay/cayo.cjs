@@ -1,6 +1,14 @@
 const { CITY_XP_REWARDS, cityLevelFromXp } = require('../cityProgress/constants.cjs');
 const { awardCityXpInTransaction } = require('../cityProgress/store.cjs');
 const { getVipMultiplier } = require('../economy/boosts.cjs');
+const {
+  JAIL_DURATION_MS,
+  assertNotJailed,
+  effectiveHeat,
+  heatAfterAction,
+  jailRemainingMs,
+  raidRisk,
+} = require('./cayoHeat.cjs');
 
 const ACTIONS = Object.freeze({
   COLLECT: { leavesCost: 0, whiteCost: 0, dirtyCost: 0, leavesGain: 1_200, whiteGain: 0, blueGain: 0, xp: CITY_XP_REWARDS.CAYO_COLLECT },
@@ -19,22 +27,31 @@ async function ensureCayoState(db, playerId) {
     `INSERT INTO player_cayo_state (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
     [playerId],
   );
+  await db.query(
+    `INSERT INTO player_restrictions (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
+    [playerId],
+  );
 }
 
 async function readCayoState(db, playerId, { lock = false } = {}) {
   await ensureCayoState(db, playerId);
   const result = await db.query(
-    `SELECT cs.*, p.clean_money
+    `SELECT cs.*, p.clean_money, j.jailed_until, j.jail_reason
      FROM player_cayo_state cs
      JOIN players p ON p.player_id = cs.player_id
-     WHERE cs.player_id = $1${lock ? ' FOR UPDATE OF cs, p' : ''}`,
+     JOIN player_restrictions j ON j.player_id = cs.player_id
+     WHERE cs.player_id = $1${lock ? ' FOR UPDATE OF cs, p, j' : ''}`,
     [playerId],
   );
   return result.rows[0];
 }
 
 function cayoStateView(row) {
+  const now = Date.now();
+  const heat = effectiveHeat(row, now).value;
+  const risk = raidRisk(heat);
   const nextActionAt = row?.next_action_at ? new Date(row.next_action_at) : null;
+  const jailMs = jailRemainingMs(row, now);
   return {
     leaves: Number(row?.leaves || 0),
     whitePacks: Number(row?.white_packs || 0),
@@ -45,7 +62,28 @@ function cayoStateView(row) {
     timeHours: Number(row?.time_hours || 0),
     nextActionAt: nextActionAt?.toISOString() || null,
     actionCooldownMs: nextActionAt ? Math.max(0, nextActionAt.getTime() - Date.now()) : 0,
+    heat,
+    riskLevel: risk.level,
+    raidChancePercent: risk.chancePercent,
+    jailedUntil: jailMs ? new Date(row.jailed_until).toISOString() : null,
+    jailRemainingMs: jailMs,
+    jailReason: jailMs ? row.jail_reason : null,
   };
+}
+
+async function applyHeatAndJail(db, playerId, heatState, action, raided, now) {
+  await db.query(
+    `UPDATE player_cayo_state SET heat = $2, heat_updated_at = $3, updated_at = NOW()
+     WHERE player_id = $1`,
+    [playerId, heatAfterAction(heatState.value, action, raided), heatState.updatedAt],
+  );
+  if (raided) {
+    await db.query(
+      `UPDATE player_restrictions SET jailed_until = $2, jail_reason = 'CAYO_RAID', updated_at = NOW()
+       WHERE player_id = $1`,
+      [playerId, new Date(now + JAIL_DURATION_MS)],
+    );
+  }
 }
 
 async function getOperationReplay(db, playerId, operationId, operationType) {
@@ -87,6 +125,8 @@ async function runCayoAction(db, playerId, stageValue, operationIdValue, useClea
 
   await assertCayoUnlocked(db, playerId);
   const row = await readCayoState(db, playerId, { lock: true });
+  const now = Date.now();
+  assertNotJailed(row, now);
   if (row.next_action_at && new Date(row.next_action_at).getTime() > Date.now()) {
     const error = new Error('Cayo action is still cooling down');
     error.statusCode = 429;
@@ -109,7 +149,8 @@ async function runCayoAction(db, playerId, stageValue, operationIdValue, useClea
     if (!debited.rows[0]) throw new Error('insufficient funds');
   }
 
-  const raided = Number(random()) < 0.1;
+  const heatState = effectiveHeat(row, now);
+  const raided = Number(random()) < raidRisk(heatState.value).chancePercent / 100;
   const leavesGain = raided ? 0 : config.leavesGain;
   const whiteGain = raided ? 0 : config.whiteGain;
   const blueGain = raided ? 0 : config.blueGain;
@@ -141,6 +182,8 @@ async function runCayoAction(db, playerId, stageValue, operationIdValue, useClea
     [playerId, leavesGain, whiteGain, blueGain, timeHours],
   );
 
+  await applyHeatAndJail(db, playerId, heatState, stage, raided, now);
+
   const cityReward = raided
     ? null
     : await awardCityXpInTransaction(db, playerId, operationType, operationId, config.xp, { stage });
@@ -168,9 +211,12 @@ async function sellCayoProduct(db, playerId, modeValue, operationIdValue, random
 
   await assertCayoUnlocked(db, playerId);
   const row = await readCayoState(db, playerId, { lock: true });
+  const now = Date.now();
+  assertNotJailed(row, now);
   const quantity = mode === 'BULK' ? Number(row.blue_packs) : 100;
   if (quantity <= 0 || Number(row.blue_packs) < quantity) throw new Error('not enough blue packs');
-  const raided = mode === 'DELIVERY_100' && Number(random()) < 0.1;
+  const heatState = effectiveHeat(row, now);
+  const raided = Number(random()) < raidRisk(heatState.value).chancePercent / 100;
   const multiplier = await getVipMultiplier(db, playerId);
   const basePayout = raided ? 0 : quantity * (mode === 'BULK' ? 2_300 : 3_179);
   const payout = basePayout * multiplier;
@@ -193,6 +239,8 @@ async function sellCayoProduct(db, playerId, modeValue, operationIdValue, random
     [playerId, payout, mode === 'DELIVERY_100' ? 0.25 : 0],
   );
 
+  await applyHeatAndJail(db, playerId, heatState, mode, raided, now);
+
   const updated = await readCayoState(db, playerId);
   const result = { ok: true, mode, quantity, payout, multiplier, raided, state: cayoStateView(updated) };
   await saveOperation(db, playerId, operationId, operationType, result);
@@ -207,6 +255,7 @@ async function convertCayoCash(db, playerId, operationIdValue) {
 
   await assertCayoUnlocked(db, playerId);
   const row = await readCayoState(db, playerId, { lock: true });
+  assertNotJailed(row);
   const dirtySpent = Number(row.dirty_money);
   if (dirtySpent <= 0) throw new Error('no dirty money to convert');
   const cleanGained = Math.floor(dirtySpent * 0.65);
