@@ -25,6 +25,7 @@ import type {
   PilotFlightResult,
   CayoActionResult,
   CayoState,
+  JailStatus,
   SleepActionResult,
   SleepState,
 } from '../types/game';
@@ -45,6 +46,7 @@ export type RouletteFlowResult = SpinResult & { spinId: string; readyAt: string;
 async function resolveApiError(res: Response): Promise<string> {
   try {
     const data = await res.json();
+    if (data?.code === 'PLAYER_JAILED') window.dispatchEvent(new Event('cityflow:jail-changed'));
     const raw = String(data?.error ?? data?.message ?? '').trim();
     if (!raw) return res.statusText || 'request failed';
     if (raw.toLowerCase().includes('insufficient funds')) return 'insufficient';
@@ -87,6 +89,7 @@ async function legacyPizzerOptions(playerId: string): Promise<{ options: PizzerO
 }
 
 export const api = {
+  jailState: () => get<{ jail: JailStatus }>('/api/jail/state'),
   ensureSession: async () => {
     const current = await fetch(`${BASE}/api/auth/me`, { credentials: 'include' });
     if (current.ok) return (await current.json() as { user: SessionUser }).user;

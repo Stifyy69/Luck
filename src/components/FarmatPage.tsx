@@ -94,6 +94,7 @@ export default function FarmatPage() {
 
   const applyResult = (result: CayoActionResult) => {
     setServerState(result.state);
+    if (result.state.jailedUntil) window.dispatchEvent(new Event('cityflow:jail-changed'));
     if (result.cityProgress) {
       publishCityProgress(result.cityProgress as CityProgress, (result.cityReward || null) as CityProgressReward | null);
     }

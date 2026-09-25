@@ -88,6 +88,13 @@ export interface CayoState {
   jailReason: string | null;
 }
 
+export interface JailStatus {
+  jailed: boolean;
+  jailedUntil: string | null;
+  jailReason: string | null;
+  remainingMs: number;
+}
+
 export interface CayoActionResult {
   ok: boolean;
   stage?: 'COLLECT' | 'PROCESS' | 'REFINE';

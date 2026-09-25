@@ -1,4 +1,5 @@
 const { cityLevelFromXp } = require('../cityProgress/constants.cjs');
+const { assertJobAvailable } = require('../security/jail.cjs');
 const { GANG_LEVEL_LABELS } = require('./constants.cjs');
 const {
   createAdminEventMember,
@@ -37,6 +38,9 @@ async function runGangOperation(playerId, operationId, operationType, mutate) {
   await assertGangAccess(playerId);
   validateOperationId(operationId);
   return withTransaction(async (db) => {
+    if (!operationType.startsWith('funds:') || operationType === 'funds:launder') {
+      await assertJobAvailable(db, playerId);
+    }
     await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${playerId}:${operationId}`]);
     const replay = await db.query('SELECT operation_type, result FROM player_gang_operations WHERE player_id = $1 AND operation_id = $2', [playerId, operationId]);
     if (replay.rows[0]) {

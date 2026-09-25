@@ -24,23 +24,24 @@ function validateOperationId(value) {
 
 async function ensureCayoState(db, playerId) {
   await db.query(
-    `INSERT INTO player_cayo_state (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
+    `INSERT INTO player_restrictions (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
     [playerId],
   );
   await db.query(
-    `INSERT INTO player_restrictions (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
+    `INSERT INTO player_cayo_state (player_id) VALUES ($1) ON CONFLICT (player_id) DO NOTHING`,
     [playerId],
   );
 }
 
 async function readCayoState(db, playerId, { lock = false } = {}) {
   await ensureCayoState(db, playerId);
+  if (lock) await db.query(`SELECT 1 FROM player_restrictions WHERE player_id = $1 FOR UPDATE`, [playerId]);
   const result = await db.query(
     `SELECT cs.*, p.clean_money, j.jailed_until, j.jail_reason
      FROM player_cayo_state cs
      JOIN players p ON p.player_id = cs.player_id
      JOIN player_restrictions j ON j.player_id = cs.player_id
-     WHERE cs.player_id = $1${lock ? ' FOR UPDATE OF cs, p, j' : ''}`,
+     WHERE cs.player_id = $1${lock ? ' FOR UPDATE OF cs, p' : ''}`,
     [playerId],
   );
   return result.rows[0];

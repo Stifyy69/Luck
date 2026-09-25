@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import CityProgressHud from './components/city/CityProgressHud';
 import CityTutorialOverlay from './components/city/CityTutorialOverlay';
+import JailOverlay from './components/city/JailOverlay';
 import CareerQuickControls from './components/city/CareerQuickControls';
 import GangSyncBridge from './components/city/GangSyncBridge';
 import LockedCareerPage from './components/city/LockedCareerPage';
@@ -18,6 +19,8 @@ import { usePlatformStatus } from './context/PlatformStatusContext';
 import { usePlayer } from './hooks/usePlayer';
 import { CAREER_REQUIREMENTS, careerAccessForPath, readPlayerCityProgress, type CityProgress } from './lib/cityProgress';
 import { subscribeCityProgress } from './lib/cityProgressApi';
+import { api } from './lib/api';
+import type { JailStatus } from './types/game';
 import { startGameSync } from './lib/gameSync';
 
 const RouletteDemo = lazy(() => import('./components/RouletteDemo'));
@@ -38,6 +41,7 @@ const AccountPage = lazy(() => import('./components/AccountPage'));
 
 export default function App() {
   const { player, session, loading } = usePlayer();
+  const [jail, setJail] = useState<JailStatus | null>(null);
   const { status } = usePlatformStatus();
   const playerCityProgress = readPlayerCityProgress(player);
   const [cityProgress, setCityProgress] = useState<CityProgress | null>(playerCityProgress);
@@ -66,6 +70,23 @@ export default function App() {
   }, [playerCityProgress?.xp, playerCityProgress?.level, playerCityProgress?.vipActive]);
 
   useEffect(() => subscribeCityProgress(({ progress }) => setCityProgress(progress)), []);
+  useEffect(() => {
+    if (!session) return;
+    let active = true;
+    const refreshJail = () => { api.jailState().then(({ jail: next }) => { if (active) setJail(next); }).catch(() => {}); };
+    refreshJail();
+    const interval = window.setInterval(refreshJail, 30_000);
+    window.addEventListener('cityflow:jail-changed', refreshJail);
+    return () => { active = false; window.clearInterval(interval); window.removeEventListener('cityflow:jail-changed', refreshJail); };
+  }, [session?.id]);
+  useEffect(() => {
+    if (!jail?.jailedUntil) return;
+    const until = jail.jailedUntil;
+    const timer = window.setTimeout(() => {
+      setJail((current) => current?.jailedUntil === until ? null : current);
+    }, Math.max(0, new Date(until).getTime() - Date.now()) + 100);
+    return () => window.clearTimeout(timer);
+  }, [jail?.jailedUntil]);
   useEffect(() => setMenuOpen(false), [path]);
 
   const effectiveCityProgress = useMemo<CityProgress | null>(() => {
@@ -142,6 +163,10 @@ export default function App() {
 
   if (loading) {
     return <PageFallback />;
+  }
+
+  if (jail?.jailedUntil && new Date(jail.jailedUntil).getTime() > Date.now()) {
+    return <JailOverlay jail={jail} />;
   }
 
   if (accountRequired) {
