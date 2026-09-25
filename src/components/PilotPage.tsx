@@ -76,11 +76,11 @@ export default function PilotPage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (!state) return;
+      if (!state || busy || overlayOpen) return;
       if (state.shiftState !== 'IDLE') loadState().catch(() => {});
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [state, loadState]);
+  }, [state, busy, overlayOpen, loadState]);
 
   useEffect(() => {
     const onExternalCancel = () => {
@@ -382,6 +382,11 @@ export default function PilotPage() {
                   <Summary label="First completion" value={`${fmt(state.lastResult.breakdown.firstCompletionBonus)} $`} />
                   <Summary label="Total XP" value={String(state.lastResult.breakdown.totalXp)} />
                 </div>
+                {state.lastResult.completed && state.shiftState === 'SELECTING_ROUTE' && (
+                  <button type="button" onClick={scrollToRoutes} className="btn-primary mt-6 rounded-2xl px-5 py-3 text-sm">
+                    Continue to next flight
+                  </button>
+                )}
               </div>
             </div>
           </section>
