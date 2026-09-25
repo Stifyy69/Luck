@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { creditedPilotCompletions } = require('../gameplay/pilotProgress.cjs');
 const {
   CITY_MAX_LEVEL,
   CITY_XP_REWARDS,
@@ -51,12 +52,90 @@ async function ensureSchema() {
     `);
 
     await pool.query(`CREATE INDEX IF NOT EXISTS player_city_xp_events_recent_idx ON player_city_xp_events(player_id, created_at DESC);`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS player_career_legacy_grants (
+        player_id TEXT PRIMARY KEY REFERENCES players(player_id) ON DELETE CASCADE,
+        fisher_unlocked BOOLEAN NOT NULL DEFAULT FALSE,
+        pilot_unlocked BOOLEAN NOT NULL DEFAULT FALSE,
+        cayo_unlocked BOOLEAN NOT NULL DEFAULT FALSE
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS city_progress_migrations (
+        migration_key TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await snapshotLegacyCareerAccess();
   })().catch((error) => {
     schemaPromise = null;
     throw error;
   });
 
   return schemaPromise;
+}
+
+async function snapshotLegacyCareerAccess() {
+  await withTransaction(async (db) => {
+    // Serialize startup across instances and freeze the old rules exactly once.
+    await db.query(`SELECT pg_advisory_xact_lock(hashtext('cityflow'), hashtext('career_75_percent_v1'))`);
+    const migration = await db.query(
+      `SELECT 1 FROM city_progress_migrations WHERE migration_key = 'career_75_percent_v1'`,
+    );
+    if (migration.rows.length) return;
+
+    await db.query(`
+      WITH prior_progress AS (
+        SELECT
+          p.player_id,
+          COALESCE(cp.city_xp,
+            COALESCE(pp.pizzer_total_deliveries, 0) * $1
+            + COALESCE(fp.fisher_total_catches, 0) * $2
+            + COALESCE(pip.route_1_completions, 0) * $3
+            + COALESCE(pip.route_2_completions, 0) * $4
+            + COALESCE(pip.route_3_completions, 0) * $5
+            + COALESCE(pip.route_4_completions, 0) * $6
+            + COALESCE(pip.route_5_completions, 0) * $7
+            + FLOOR(COALESCE(ps.leaves_collected, 0) / 1200) * $8
+            + FLOOR(COALESCE(ps.white_processed, 0) / 400) * $9
+            + FLOOR(COALESCE(ps.blue_processed, 0) / 800) * $10
+          ) AS city_xp,
+          COALESCE(pp.pizzer_level, 1) AS pizzer_level,
+          COALESCE(fp.fisher_level, 1) AS fisher_level,
+          COALESCE(pip.pilot_level, 1) AS pilot_level
+        FROM players p
+        LEFT JOIN player_city_progress cp ON cp.player_id = p.player_id
+        LEFT JOIN player_pizzer_progress pp ON pp.player_id = p.player_id
+        LEFT JOIN player_fisher_progress fp ON fp.player_id = p.player_id
+        LEFT JOIN player_pilot_progress pip ON pip.player_id = p.player_id
+        LEFT JOIN player_stats ps ON ps.player_id = p.player_id
+      ), grants AS (
+        SELECT player_id,
+          city_xp >= 2000 AND pizzer_level >= 3 AS fisher_unlocked,
+          city_xp >= 9000 AND fisher_level >= 4 AS pilot_unlocked,
+          city_xp >= 25000 AND pilot_level >= 5 AS cayo_unlocked
+        FROM prior_progress
+      )
+      INSERT INTO player_career_legacy_grants (player_id, fisher_unlocked, pilot_unlocked, cayo_unlocked)
+      SELECT player_id, fisher_unlocked, pilot_unlocked, cayo_unlocked
+      FROM grants
+      WHERE fisher_unlocked OR pilot_unlocked OR cayo_unlocked
+      ON CONFLICT (player_id) DO NOTHING
+    `, [
+      CITY_XP_REWARDS.PIZZER_DELIVERY,
+      CITY_XP_REWARDS.FISHER_CATCH,
+      PILOT_ROUTE_XP.ROUTE_1,
+      PILOT_ROUTE_XP.ROUTE_2,
+      PILOT_ROUTE_XP.ROUTE_3,
+      PILOT_ROUTE_XP.ROUTE_4,
+      PILOT_ROUTE_XP.ROUTE_5,
+      CITY_XP_REWARDS.CAYO_COLLECT,
+      CITY_XP_REWARDS.CAYO_PROCESS,
+      CITY_XP_REWARDS.CAYO_REFINE,
+    ]);
+    await db.query(`INSERT INTO city_progress_migrations (migration_key) VALUES ('career_75_percent_v1')`);
+  });
 }
 
 async function withTransaction(work) {
@@ -160,21 +239,47 @@ async function getCareerLevels(db, playerId) {
     `
       SELECT
         COALESCE(pp.pizzer_level, 1) AS pizzer_level,
+        COALESCE(pp.pizzer_xp, 0) AS pizzer_xp,
         COALESCE(fp.fisher_level, 1) AS fisher_level,
-        COALESCE(pip.pilot_level, 1) AS pilot_level
+        COALESCE(fp.fisher_xp, 0) AS fisher_xp,
+        COALESCE(pip.pilot_level, 1) AS pilot_level,
+        COALESCE(pip.pilot_route_v2_migrated, TRUE) AS pilot_route_v2_migrated,
+        COALESCE(pip.route_1_completions, 0) AS route_1_completions,
+        COALESCE(pip.route_2_completions, 0) AS route_2_completions,
+        COALESCE(pip.route_3_completions, 0) AS route_3_completions,
+        COALESCE(pip.route_4_completions, 0) AS route_4_completions,
+        COALESCE(pip.route_5_completions, 0) AS route_5_completions,
+        COALESCE(g.fisher_unlocked, FALSE) AS legacy_fisher,
+        COALESCE(g.pilot_unlocked, FALSE) AS legacy_pilot,
+        COALESCE(g.cayo_unlocked, FALSE) AS legacy_cayo
       FROM players p
       LEFT JOIN player_pizzer_progress pp ON pp.player_id = p.player_id
       LEFT JOIN player_fisher_progress fp ON fp.player_id = p.player_id
       LEFT JOIN player_pilot_progress pip ON pip.player_id = p.player_id
+      LEFT JOIN player_career_legacy_grants g ON g.player_id = p.player_id
       WHERE p.player_id = $1
     `,
     [playerId],
   );
   const row = result.rows[0] || {};
+  const routeProgress = await db.query(
+    `SELECT route_id, completions FROM player_pilot_route_progress WHERE player_id = $1`,
+    [playerId],
+  );
+  // Phase 2 migrates old flights lazily. Count their prospective credits until that migration runs.
+  const pilotRouteCompletions = creditedPilotCompletions(routeProgress.rows, row);
   return {
     pizzerLevel: Math.max(1, Number(row.pizzer_level || 1)),
+    pizzerXp: Math.max(0, Number(row.pizzer_xp || 0)),
     fisherLevel: Math.max(1, Number(row.fisher_level || 1)),
+    fisherXp: Math.max(0, Number(row.fisher_xp || 0)),
     pilotLevel: Math.max(1, Number(row.pilot_level || 1)),
+    pilotRouteCompletions,
+    legacyGrants: {
+      fisher: Boolean(row.legacy_fisher),
+      pilot: Boolean(row.legacy_pilot),
+      cayo: Boolean(row.legacy_cayo),
+    },
   };
 }
 
