@@ -35,6 +35,7 @@ const {
   sleepStateView,
   startSleepCycle,
 } = require('./server/gameplay/sleep.cjs');
+const { completePilotSession } = require('./server/gameplay/pilotSession.cjs');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -3227,7 +3228,6 @@ app.get('/api/pilot/state', requireDb, async (req, res) => {
     await ensurePlayer(pool, playerId);
     const progress = await ensurePilotProgress(pool, playerId);
     const session = await getPilotSession(playerId);
-    await setPilotSession(playerId, session);
     res.json(pilotStateView(session, toPilotProgressView(progress)));
   } catch (error) {
     res.status(500).json({ error: 'pilot state failed' });
@@ -3435,10 +3435,12 @@ app.post('/api/pilot/flight/cancel', requireDb, async (req, res) => {
       const updated = await ensurePilotProgress(db, playerId);
       const progressAfter = toPilotProgressView(updated);
 
+      const cancelledRouteId = session.activeFlight.routeId;
       session.activeFlight = null;
       session.shiftState = 'SELECTING_ROUTE';
+      session.selectedRouteId = null;
       session.lastResult = {
-        routeId: session.selectedRouteId,
+        routeId: cancelledRouteId,
         completed: false,
         cancelled: true,
         failReason: 'Flight cancelled. Streak reset.',
@@ -3580,9 +3582,7 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
         ? `Pilot Promotion Achieved: Pilot Lv. ${nextLevel}`
         : null;
 
-      activeSession.activeFlight = null;
-      activeSession.shiftState = 'SELECTING_ROUTE';
-      activeSession.lastResult = {
+      const result = {
         sessionId: activeFlight.sessionId,
         routeId: route.id,
         completed: true,
@@ -3613,7 +3613,8 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
           promotionLabel,
         },
       };
-      await setPilotSession(playerId, activeSession, db);
+      const completedSession = completePilotSession(activeSession, result);
+      await setPilotSession(playerId, completedSession, db);
 
       const cityReward = await awardCityXpInTransaction(
         db,
@@ -3625,8 +3626,8 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
       );
 
       return {
-        state: pilotStateView(activeSession, progressAfter),
-        result: activeSession.lastResult,
+        state: pilotStateView(completedSession, progressAfter),
+        result,
         cityProgress: cityReward.progress,
         cityReward,
       };
