@@ -483,6 +483,7 @@ export interface PilotProgress {
   streak: number;
   bestStreak: number;
   totalFlights: number;
+  routeCompletions: Record<string, number>;
   route1Completions: number;
   route2Completions: number;
   route3Completions: number;
@@ -499,6 +500,7 @@ export interface PilotRouteView {
   durationSeconds: number;
   baseReward: number;
   baseXp: number;
+  cityXp?: number;
   unlockLevel: number;
   requiredPreviousRouteId: string | null;
   requiredPreviousCompletions: number;
@@ -509,6 +511,8 @@ export interface PilotRouteView {
   lockReasons: string[];
   stageDurationMs: number;
   stages: string[];
+  checkpointStageIndex: number | null;
+  checkpointLabel: string | null;
 }
 
 export interface PilotStateResponse {
@@ -517,6 +521,7 @@ export interface PilotStateResponse {
   selectedRouteId: string | null;
   streak: number;
   routes: PilotRouteView[];
+  activeRoute: PilotRouteView | null;
   activeFlight: {
     sessionId: string;
     routeId: string;
@@ -524,6 +529,7 @@ export interface PilotStateResponse {
     minFinishAt: number;
     elapsedMs: number;
     remainingMs: number;
+    checkpointCompleted: boolean;
   } | null;
   lastResult?: PilotFlightResult | null;
 }

@@ -190,6 +190,7 @@ export const api = {
   pilotShiftEnd: (playerId: string) => post<PilotStateResponse>('/api/pilot/shift/end', { playerId }),
   pilotRouteSelect: (playerId: string, routeId: string) => post<PilotStateResponse>('/api/pilot/route/select', { playerId, routeId }),
   pilotFlightStart: (playerId: string) => post<{ state: PilotStateResponse; flight: { sessionId: string; routeId: string; durationSeconds: number; stages: string[] } }>('/api/pilot/flight/start', { playerId }),
+  pilotFlightCheckpoint: (playerId: string, sessionId: string) => post<PilotStateResponse>('/api/pilot/flight/checkpoint', { playerId, sessionId }),
   pilotFlightCancel: (playerId: string) => post<{ state: PilotStateResponse }>('/api/pilot/flight/cancel', { playerId }),
   pilotFlightComplete: async (playerId: string) => {
     const payload = await post<{ state: PilotStateResponse; result: PilotFlightResult; cityProgress?: unknown; cityReward?: unknown }>('/api/pilot/flight/complete', { playerId });

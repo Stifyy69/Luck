@@ -50,12 +50,14 @@ test('Fisher catch stores exactly 120 Fisher XP and 120 City XP, then sale credi
   assert.match(sellSource, /carryEstimatedValue = 0/);
 });
 
-test('Pilot route XP is stored directly and Route 4 resolves to 320 Job XP and 320 City XP', () => {
+test('Pilot career XP and City XP use their separate approved route amounts', () => {
   const source = endpointSource("app.post('/api/pilot/flight/complete'", "app.get('/api/pizzer/state'");
   assert.equal(PILOT_ROUTE_XP.ROUTE_4, 320);
-  assert.match(source, /const baseXp = Number\(PILOT_ROUTE_XP\[route\.id\]/);
+  assert.equal(PILOT_ROUTE_XP.ROUTE_4_1, 300);
+  assert.match(source, /const baseXp = Number\(route\.baseXp \|\| 0\)/);
   assert.match(source, /const totalXp = baseXp/);
   assert.match(source, /pilot_xp = \$3/);
   assert.match(source, /Number\(PILOT_ROUTE_XP\[route\.id\] \|\| CITY_XP_REWARDS\.PILOT_FLIGHT\)/);
   assert.match(cityInstallSource, /PILOT_ROUTE_XP\[routeId\]/);
+  assert.match(cityInstallSource, /route\?\.baseXp \|\| PILOT_ROUTE_XP\[routeId\]/);
 });
