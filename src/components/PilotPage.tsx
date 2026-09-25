@@ -29,6 +29,11 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
 }
 
+function routeArt(routeId: string) {
+  if (routeId.startsWith('ROUTE_5_')) return ROUTE_ART.ROUTE_3;
+  return ROUTE_ART[routeId] || ROUTE_ART[`ROUTE_${routeId.split('_')[1]}`];
+}
+
 function routeTone(route: PilotRouteView) {
   if (route.locked) return 'border-white/[0.07] bg-black/20';
   if (route.completions >= Math.max(1, route.progressionCompletions)) {
@@ -46,6 +51,9 @@ export default function PilotPage() {
   const [overlayRoute, setOverlayRoute] = useState<PilotRouteView | null>(null);
   const [overlayStageIndex, setOverlayStageIndex] = useState(0);
   const [overlayProgress, setOverlayProgress] = useState(0);
+  const [checkpointPending, setCheckpointPending] = useState(false);
+  const [checkpointFlightId, setCheckpointFlightId] = useState<string | null>(null);
+  const checkpointResolveRef = useRef<((confirmed: boolean) => void) | null>(null);
   const routesRef = useRef<HTMLElement | null>(null);
   const flightCancelledRef = useRef(false);
 
@@ -54,6 +62,8 @@ export default function PilotPage() {
     setOverlayRoute(null);
     setOverlayStageIndex(0);
     setOverlayProgress(0);
+    setCheckpointPending(false);
+    setCheckpointFlightId(null);
   }, []);
 
   const pushPopup = useCallback((text: string, isError = false) => {
@@ -85,6 +95,8 @@ export default function PilotPage() {
   useEffect(() => {
     const onExternalCancel = () => {
       flightCancelledRef.current = true;
+      checkpointResolveRef.current?.(false);
+      checkpointResolveRef.current = null;
       resetOverlay();
       setBusy(false);
       loadState().catch(() => {});
@@ -136,6 +148,8 @@ export default function PilotPage() {
     if (busy) return;
     setBusy(true);
     flightCancelledRef.current = true;
+    checkpointResolveRef.current?.(false);
+    checkpointResolveRef.current = null;
     try {
       const next = await api.pilotShiftEnd(playerId);
       setState(next);
@@ -145,6 +159,47 @@ export default function PilotPage() {
       pushPopup(e instanceof Error ? e.message : 'Could not end pilot shift', true);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const animateFlight = async (route: PilotRouteView, flight: NonNullable<PilotStateResponse['activeFlight']>) => {
+    flightCancelledRef.current = false;
+    setOverlayRoute(route);
+    setOverlayOpen(true);
+    setOverlayStageIndex(0);
+    setOverlayProgress(0);
+    setBusy(false);
+
+    const stageCount = Math.max(1, route.stages.length);
+    for (let index = 0; index < stageCount; index += 1) {
+      if (flightCancelledRef.current) return;
+      setOverlayStageIndex(index);
+      setOverlayProgress(Math.floor(((index + 1) / stageCount) * 100));
+      const stageEndAt = flight.startedAt + Math.floor(((index + 1) / stageCount) * route.durationSeconds * 1000);
+      await wait(Math.max(0, stageEndAt - Date.now()));
+      if (flightCancelledRef.current) return;
+      if (index === route.checkpointStageIndex && !flight.checkpointCompleted) {
+        setCheckpointFlightId(flight.sessionId);
+        const confirmed = await new Promise<boolean>((resolve) => {
+          checkpointResolveRef.current = resolve;
+          setCheckpointPending(true);
+        });
+        if (!confirmed || flightCancelledRef.current) return;
+      }
+    }
+
+    await wait(Math.max(0, flight.minFinishAt - Date.now() + 500));
+    if (flightCancelledRef.current) return;
+
+    const finished = await api.pilotFlightComplete(playerId);
+    if (flightCancelledRef.current) return;
+    if (finished.cityProgress) publishCityProgress(finished.cityProgress as CityProgress, finished.cityReward as CityProgressReward | undefined);
+    setState(finished.state);
+    await refresh();
+    resetOverlay();
+
+    if (finished.result?.completed) {
+      pushPopup(`Flight completed. +${fmt(finished.result.breakdown.totalCash)} $ / +${finished.result.breakdown.totalXp} XP`);
     }
   };
 
@@ -161,39 +216,38 @@ export default function PilotPage() {
       payload = await api.pilotFlightStart(playerId);
     }
     setState(payload.state);
+    const route = payload.state.activeRoute;
+    if (!route || !payload.state.activeFlight) throw new Error('Route data missing');
+    await animateFlight(route, payload.state.activeFlight);
+  };
 
-    const route = (payload.state.routes || []).find((entry: PilotRouteView) => entry.id === payload.flight.routeId) || null;
-    if (!route) throw new Error('Route data missing');
-
-    setOverlayRoute(route);
-    setOverlayOpen(true);
-    setOverlayStageIndex(0);
-    setOverlayProgress(0);
-    setBusy(false);
-
-    const stageCount = Math.max(1, route.stages.length);
-    const stageDurationMs = Math.max(200, Math.floor((route.durationSeconds * 1000) / stageCount));
-
-    for (let index = 0; index < stageCount; index += 1) {
-      if (flightCancelledRef.current) return;
-      setOverlayStageIndex(index);
-      setOverlayProgress(Math.floor(((index + 1) / stageCount) * 100));
-      await wait(stageDurationMs);
-      if (flightCancelledRef.current) return;
+  const resumeFlight = async () => {
+    if (!state?.activeFlight || !state.activeRoute || busy) return;
+    setBusy(true);
+    try {
+      await animateFlight(state.activeRoute, state.activeFlight);
+    } catch (e) {
+      resetOverlay();
+      pushPopup(e instanceof Error ? e.message : 'Could not resume flight', true);
+      await loadState();
+    } finally {
+      setBusy(false);
     }
+  };
 
-    await wait(500);
-    if (flightCancelledRef.current) return;
-
-    const finished = await api.pilotFlightComplete(playerId);
-    if (flightCancelledRef.current) return;
-    if (finished.cityProgress) publishCityProgress(finished.cityProgress as CityProgress, finished.cityReward as CityProgressReward | undefined);
-    setState(finished.state);
-    await refresh();
-    resetOverlay();
-
-    if (finished.result?.completed) {
-      pushPopup(`Flight completed. +${fmt(finished.result.breakdown.totalCash)} $ / +${finished.result.breakdown.totalXp} XP`);
+  const confirmCheckpoint = async () => {
+    if (!checkpointFlightId || busy) return;
+    setBusy(true);
+    try {
+      const next = await api.pilotFlightCheckpoint(playerId, checkpointFlightId);
+      setState(next);
+      setCheckpointPending(false);
+      checkpointResolveRef.current?.(true);
+      checkpointResolveRef.current = null;
+    } catch (e) {
+      pushPopup(e instanceof Error ? e.message : 'Checkpoint failed', true);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -230,6 +284,8 @@ export default function PilotPage() {
   const cancelFlight = async () => {
     if (!state?.activeFlight) return;
     flightCancelledRef.current = true;
+    checkpointResolveRef.current?.(false);
+    checkpointResolveRef.current = null;
     setBusy(true);
     try {
       const payload = await api.pilotFlightCancel(playerId);
@@ -258,7 +314,7 @@ export default function PilotPage() {
           <div className="game-panel w-full max-w-4xl overflow-hidden p-5 sm:p-7">
             <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
               <div className="flex h-[240px] items-center justify-center rounded-[22px] border border-white/[0.08] bg-[#090c09] p-4">
-                <img src={ROUTE_ART[overlayRoute.id]} alt={overlayRoute.theme} className="h-full w-full object-contain" />
+                <img src={routeArt(overlayRoute.id)} alt={overlayRoute.theme} className="h-full w-full object-contain" />
               </div>
               <div>
                 <p className="section-kicker">Flight in progress</p>
@@ -278,6 +334,12 @@ export default function PilotPage() {
                   <div className="progress-track"><div className="progress-fill" style={{ width: `${clampPercent(overlayProgress)}%` }} /></div>
                 </div>
 
+                {checkpointPending && (
+                  <button type="button" onClick={() => confirmCheckpoint().catch(() => {})} disabled={busy} className="btn-primary mt-5 w-full rounded-2xl px-5 py-3 text-sm disabled:opacity-40">
+                    {overlayRoute.checkpointLabel || 'Confirm mission step'}
+                  </button>
+                )}
+
                 <button type="button" onClick={() => cancelFlight().catch(() => {})} disabled={!state?.activeFlight} className="btn-danger mt-6 rounded-2xl px-5 py-3 text-sm disabled:opacity-40">Cancel flight</button>
               </div>
             </div>
@@ -295,6 +357,11 @@ export default function PilotPage() {
             <button type="button" onClick={() => chooseRoute().catch(() => {})} disabled={busy || !!state?.activeFlight} className="btn-primary mt-7 min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:opacity-35">
               {canStartShift ? 'Start pilot shift' : 'View flight routes'}
             </button>
+            {state?.activeFlight && (
+              <button type="button" onClick={() => resumeFlight().catch(() => {})} disabled={busy || !state.activeRoute} className="btn-primary mt-7 min-w-[220px] rounded-2xl px-6 py-3.5 text-sm disabled:opacity-35">
+                Resume flight
+              </button>
+            )}
 
             <div className="mt-7 grid grid-cols-2 gap-3 border-t border-white/[0.07] pt-6 sm:grid-cols-5">
               <HeroStat label="Pilot" value={displayName} />
@@ -328,7 +395,7 @@ export default function PilotPage() {
               return (
                 <article key={route.id} className={`overflow-hidden rounded-[22px] border p-4 ${routeTone(route)}`}>
                   <div className="relative flex h-[190px] items-center justify-center overflow-hidden rounded-[18px] border border-white/[0.08] bg-[#090c09] p-3">
-                    <img src={ROUTE_ART[route.id]} alt={route.theme} className={`h-full w-full object-contain ${route.locked ? 'grayscale opacity-35' : ''}`} />
+                    <img src={routeArt(route.id)} alt={route.theme} className={`h-full w-full object-contain ${route.locked ? 'grayscale opacity-35' : ''}`} />
                     <span className={`absolute right-3 top-3 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] ${route.locked ? 'border-white/[0.1] bg-black/60 text-white/40' : completed ? 'border-[rgba(114,227,154,0.3)] bg-[#102018]/90 text-[var(--money)]' : 'border-[rgba(211,255,81,0.3)] bg-[#141b0f]/90 text-[var(--accent)]'}`}>
                       {route.locked ? 'Locked' : completed ? 'Completed' : 'Available'}
                     </span>
@@ -339,15 +406,16 @@ export default function PilotPage() {
                       <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/26">{route.name}</p>
                       <h3 className="mt-1 text-xl font-black text-white">{route.theme}</h3>
                     </div>
-                    <p className="text-right text-sm font-black text-[var(--money)]">{fmt(route.baseReward)} $<span className="block text-xs text-[var(--accent)]">+{route.baseXp} XP</span></p>
+                    <p className="text-right text-sm font-black text-[var(--money)]">{fmt(route.baseReward)} $<span className="block text-xs text-[var(--accent)]">+{route.baseXp} Pilot XP</span><span className="block text-xs text-white/45">+{route.cityXp ?? route.baseXp} City XP</span></p>
                   </div>
 
                   <p className="mt-3 min-h-[40px] text-xs leading-relaxed text-white/42">{route.routePath}</p>
 
-                  <div className="mt-4 grid grid-cols-3 gap-2 border-y border-white/[0.065] py-4">
+                  <div className="mt-4 grid grid-cols-4 gap-2 border-y border-white/[0.065] py-4">
                     <RouteStat label="Level" value={String(route.unlockLevel)} />
                     <RouteStat label="Progress" value={route.progressLabel} />
                     <RouteStat label="Stages" value={String(route.stages.length)} />
+                    <RouteStat label="Flight" value={`${route.durationSeconds}s`} />
                   </div>
 
                   {route.lockReasons.length > 0 && <p className="mt-3 text-xs font-bold text-[var(--warning)]">{route.lockReasons[0]}</p>}

@@ -1,3 +1,5 @@
+const { routes: PILOT_ROUTES } = require('../gameplay/pilotRoutes.cjs');
+
 const CITY_MAX_LEVEL = 50;
 
 const CITY_LEVEL_START_XP = [
@@ -39,6 +41,7 @@ const PILOT_ROUTE_XP = Object.freeze({
   ROUTE_3: 240,
   ROUTE_4: 320,
   ROUTE_5: 450,
+  ...Object.fromEntries(PILOT_ROUTES.map((route) => [route.id, route.cityXp])),
 });
 
 const CITY_XP_REWARDS = Object.freeze({

@@ -3,6 +3,7 @@ const {
   PILOT_ROUTE_XP,
   cityLevelStartXp,
 } = require('./constants.cjs');
+const { routes: PILOT_ROUTES } = require('../gameplay/pilotRoutes.cjs');
 const {
   advanceTutorialAtLeast,
   awardCityXp,
@@ -88,7 +89,8 @@ function targetCareerReward(path, payload) {
   }
   if (path === '/api/pilot/flight/complete' && result?.completed) {
     const routeId = String(result?.routeId || payload?.state?.lastResult?.routeId || '').toUpperCase();
-    return { kind: 'pilot', amount: Number(PILOT_ROUTE_XP[routeId] || CITY_XP_REWARDS.PILOT_FLIGHT) };
+    const route = PILOT_ROUTES.find((entry) => entry.id === routeId);
+    return { kind: 'pilot', amount: Number(route?.baseXp || PILOT_ROUTE_XP[routeId] || CITY_XP_REWARDS.PILOT_FLIGHT) };
   }
   return null;
 }

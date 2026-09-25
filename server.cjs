@@ -36,6 +36,8 @@ const {
   startSleepCycle,
 } = require('./server/gameplay/sleep.cjs');
 const { completePilotSession } = require('./server/gameplay/pilotSession.cjs');
+const { routes: PILOT_ROUTES } = require('./server/gameplay/pilotRoutes.cjs');
+const { checkpointReady, legacyCredits } = require('./server/gameplay/pilotProgress.cjs');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -357,6 +359,20 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE player_pilot_progress
     ADD COLUMN IF NOT EXISTS route_5_completions INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE player_pilot_progress
+    ADD COLUMN IF NOT EXISTS pilot_route_v2_migrated BOOLEAN NOT NULL DEFAULT FALSE;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_pilot_route_progress (
+      player_id TEXT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+      route_id TEXT NOT NULL,
+      completions INT NOT NULL DEFAULT 0 CHECK (completions >= 0),
+      PRIMARY KEY (player_id, route_id)
+    );
   `);
 
   const requiredColumns = [
@@ -1421,7 +1437,8 @@ const PILOT_CONFIG = {
     10: 30,
     25: 60,
   },
-  routes: [
+  routes: PILOT_ROUTES,
+  legacyRoutes: [
     {
       id: 'ROUTE_1',
       index: 1,
@@ -1581,15 +1598,19 @@ function pilotCompletionColumnByRoute(routeId) {
 }
 
 function pilotCompletionsByRoute(progressView, routeId) {
+  if (PILOT_CONFIG.routes.some((route) => route.id === routeId)) {
+    return Number(progressView.routeCompletions?.[routeId] || 0);
+  }
   if (routeId === 'ROUTE_1') return Number(progressView.route1Completions || 0);
   if (routeId === 'ROUTE_2') return Number(progressView.route2Completions || 0);
   if (routeId === 'ROUTE_3') return Number(progressView.route3Completions || 0);
   if (routeId === 'ROUTE_4') return Number(progressView.route4Completions || 0);
-  return Number(progressView.route5Completions || 0);
+  return routeId === 'ROUTE_5' ? Number(progressView.route5Completions || 0) : 0;
 }
 
 function pilotRouteById(routeId) {
-  return PILOT_CONFIG.routes.find((route) => route.id === routeId) || null;
+  return PILOT_CONFIG.routes.find((route) => route.id === routeId)
+    || PILOT_CONFIG.legacyRoutes.find((route) => route.id === routeId) || null;
 }
 
 function pilotRouteLockReasons(route, progressView) {
@@ -1621,6 +1642,7 @@ function pilotBuildRouteView(route, progressView) {
     durationSeconds: route.durationSeconds,
     baseReward: route.baseReward,
     baseXp: route.baseXp,
+    cityXp: route.cityXp,
     unlockLevel: route.unlockLevel,
     requiredPreviousRouteId: route.requiredPreviousRouteId,
     requiredPreviousCompletions: route.requiredPreviousCompletions,
@@ -1631,6 +1653,8 @@ function pilotBuildRouteView(route, progressView) {
     lockReasons,
     stageDurationMs,
     stages: [...route.stages],
+    checkpointStageIndex: route.checkpointStageIndex ?? null,
+    checkpointLabel: route.checkpointLabel || null,
   };
 }
 
@@ -1648,7 +1672,31 @@ async function ensurePilotProgress(db, playerId) {
     [playerId],
   );
   const result = await db.query(`SELECT * FROM player_pilot_progress WHERE player_id = $1`, [playerId]);
-  return result.rows[0];
+  if (!result.rows[0].pilot_route_v2_migrated) {
+    if (db === pool) return withTransaction((client) => ensurePilotProgress(client, playerId));
+    const locked = await db.query(`SELECT * FROM player_pilot_progress WHERE player_id = $1 FOR UPDATE`, [playerId]);
+    if (!locked.rows[0].pilot_route_v2_migrated) {
+      for (const credit of legacyCredits(locked.rows[0])) {
+        if (!credit.completions) continue;
+        await db.query(
+          `INSERT INTO player_pilot_route_progress (player_id, route_id, completions)
+           VALUES ($1, $2, $3) ON CONFLICT (player_id, route_id) DO NOTHING`,
+          [playerId, credit.routeId, credit.completions],
+        );
+      }
+      await db.query(
+        `UPDATE player_pilot_progress SET pilot_route_v2_migrated = TRUE WHERE player_id = $1`,
+        [playerId],
+      );
+    }
+  }
+  const routeRows = await db.query(
+    `SELECT route_id, completions FROM player_pilot_route_progress WHERE player_id = $1`, [playerId],
+  );
+  return {
+    ...result.rows[0],
+    routeCompletions: Object.fromEntries(routeRows.rows.map((row) => [row.route_id, Number(row.completions)])),
+  };
 }
 
 function toPilotProgressView(row) {
@@ -1665,6 +1713,7 @@ function toPilotProgressView(row) {
     streak: Number(row?.pilot_streak || 0),
     bestStreak: Number(row?.pilot_best_streak || 0),
     totalFlights: Number(row?.pilot_total_flights || 0),
+    routeCompletions: row?.routeCompletions || {},
     route1Completions: Number(row?.route_1_completions || 0),
     route2Completions: Number(row?.route_2_completions || 0),
     route3Completions: Number(row?.route_3_completions || 0),
@@ -1724,6 +1773,7 @@ function pilotStateView(session, progressView) {
         minFinishAt: session.activeFlight.minFinishAt,
         elapsedMs: Math.max(0, now - Number(session.activeFlight.startedAt || 0)),
         remainingMs: Math.max(0, Number(session.activeFlight.minFinishAt || 0) - now),
+        checkpointCompleted: !!session.activeFlight.checkpointCompleted,
       }
     : null;
 
@@ -1734,6 +1784,9 @@ function pilotStateView(session, progressView) {
     streak: Number(progressView.streak || 0),
     routes: PILOT_CONFIG.routes.map((route) => pilotBuildRouteView(route, progressView)),
     activeFlight,
+    activeRoute: session.activeFlight && pilotRouteById(session.activeFlight.routeId)
+      ? pilotBuildRouteView(pilotRouteById(session.activeFlight.routeId), progressView)
+      : null,
     lastResult: session.lastResult || null,
   };
 }
@@ -3338,32 +3391,25 @@ app.post('/api/pilot/route/select', requireDb, async (req, res) => {
     const { playerId, routeId } = req.body || {};
     if (!playerId || !routeId) return res.status(400).json({ error: 'missing fields' });
 
-    const progress = await ensurePilotProgress(pool, playerId);
-    const progressView = toPilotProgressView(progress);
-    const session = await getPilotSession(playerId);
+    const state = await withTransaction(async (db) => {
+      const progressView = toPilotProgressView(await ensurePilotProgress(db, playerId));
+      const session = await getPilotSession(playerId, db);
+      if (session.shiftState === 'IDLE') throw new Error('shift not active');
+      if (session.activeFlight) throw new Error('flight already running');
+      enforcePilotActionCooldown(session);
 
-    if (session.shiftState === 'IDLE') {
-      return res.status(400).json({ error: 'shift not active' });
-    }
-    if (session.activeFlight) {
-      return res.status(400).json({ error: 'flight already running' });
-    }
-    enforcePilotActionCooldown(session);
+      const route = PILOT_CONFIG.routes.find((candidate) => candidate.id === String(routeId));
+      if (!route) throw new Error('route not found');
+      const lockReasons = pilotRouteLockReasons(route, progressView);
+      if (lockReasons.length > 0) throw new Error(lockReasons[0]);
 
-    const route = pilotRouteById(String(routeId));
-    if (!route) return res.status(404).json({ error: 'route not found' });
-
-    const lockReasons = pilotRouteLockReasons(route, progressView);
-    if (lockReasons.length > 0) {
-      return res.status(400).json({ error: lockReasons[0] });
-    }
-
-    session.selectedRouteId = route.id;
-    session.shiftState = 'ROUTE_READY';
-    session.lastResult = null;
-    await setPilotSession(playerId, session);
-
-    res.json(pilotStateView(session, progressView));
+      session.selectedRouteId = route.id;
+      session.shiftState = 'ROUTE_READY';
+      session.lastResult = null;
+      await setPilotSession(playerId, session, db);
+      return pilotStateView(session, progressView);
+    });
+    res.json(state);
   } catch (error) {
     res.status(400).json({ error: error.message || 'select route failed' });
   }
@@ -3374,49 +3420,69 @@ app.post('/api/pilot/flight/start', requireDb, async (req, res) => {
     const { playerId } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
-    const progress = await ensurePilotProgress(pool, playerId);
-    const progressView = toPilotProgressView(progress);
-    const session = await getPilotSession(playerId);
+    const outcome = await withTransaction(async (db) => {
+      const progressView = toPilotProgressView(await ensurePilotProgress(db, playerId));
+      const session = await getPilotSession(playerId, db);
+      if (session.shiftState !== 'ROUTE_READY') throw new Error('route not ready');
+      if (!session.selectedRouteId) throw new Error('select route first');
+      if (session.activeFlight) throw new Error('flight already running');
+      enforcePilotActionCooldown(session);
 
-    if (session.shiftState !== 'ROUTE_READY') {
-      return res.status(400).json({ error: 'route not ready' });
-    }
-    if (!session.selectedRouteId) {
-      return res.status(400).json({ error: 'select route first' });
-    }
-    if (session.activeFlight) {
-      return res.status(400).json({ error: 'flight already running' });
-    }
-    enforcePilotActionCooldown(session);
+      const route = PILOT_CONFIG.routes.find((candidate) => candidate.id === session.selectedRouteId);
+      if (!route) throw new Error('route not found');
+      const lockReasons = pilotRouteLockReasons(route, progressView);
+      if (lockReasons.length > 0) throw new Error(lockReasons[0]);
 
-    const route = pilotRouteById(session.selectedRouteId);
-    if (!route) return res.status(404).json({ error: 'route not found' });
-    const lockReasons = pilotRouteLockReasons(route, progressView);
-    if (lockReasons.length > 0) return res.status(400).json({ error: lockReasons[0] });
-
-    const now = Date.now();
-    session.activeFlight = {
-      sessionId: crypto.randomBytes(10).toString('hex'),
-      routeId: route.id,
-      startedAt: now,
-      minFinishAt: now + Number(route.durationSeconds || 1) * 1000,
-      completing: false,
-    };
-    session.shiftState = 'FLIGHT_STAGE_PROGRESS';
-    session.lastResult = null;
-    await setPilotSession(playerId, session);
-
-    res.json({
-      state: pilotStateView(session, progressView),
-      flight: {
-        sessionId: session.activeFlight.sessionId,
+      const now = Date.now();
+      session.activeFlight = {
+        sessionId: crypto.randomBytes(10).toString('hex'),
         routeId: route.id,
-        durationSeconds: route.durationSeconds,
-        stages: [...route.stages],
-      },
+        startedAt: now,
+        minFinishAt: now + Number(route.durationSeconds || 1) * 1000,
+        checkpointCompleted: false,
+      };
+      session.shiftState = 'FLIGHT_STAGE_PROGRESS';
+      session.lastResult = null;
+      await setPilotSession(playerId, session, db);
+
+      return {
+        state: pilotStateView(session, progressView),
+        flight: {
+          sessionId: session.activeFlight.sessionId,
+          routeId: route.id,
+          durationSeconds: route.durationSeconds,
+          stages: [...route.stages],
+        },
+      };
     });
+    res.json(outcome);
   } catch (error) {
     res.status(400).json({ error: error.message || 'start flight failed' });
+  }
+});
+
+app.post('/api/pilot/flight/checkpoint', requireDb, async (req, res) => {
+  try {
+    const { playerId, sessionId } = req.body || {};
+    if (!playerId || !sessionId) return res.status(400).json({ error: 'missing fields' });
+
+    const state = await withTransaction(async (db) => {
+      const progress = toPilotProgressView(await ensurePilotProgress(db, playerId));
+      const session = await getPilotSession(playerId, db);
+      const flight = session.activeFlight;
+      if (!flight || flight.sessionId !== sessionId) throw new Error('flight not active');
+      const route = PILOT_CONFIG.routes.find((candidate) => candidate.id === flight.routeId);
+      if (!route) throw new Error('checkpoint unavailable for this flight');
+      if (!checkpointReady(flight, route)) throw new Error('checkpoint not reached yet');
+      if (!flight.checkpointCompleted) {
+        flight.checkpointCompleted = true;
+        await setPilotSession(playerId, session, db);
+      }
+      return pilotStateView(session, progress);
+    });
+    res.json(state);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'checkpoint failed' });
   }
 });
 
@@ -3484,17 +3550,6 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
     const { playerId } = req.body || {};
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
-    const session = await getPilotSession(playerId);
-    if (!session.activeFlight) {
-      return res.status(400).json({ error: 'no active flight' });
-    }
-    if (session.activeFlight.completing) {
-      return res.status(400).json({ error: 'flight already being completed' });
-    }
-
-    session.activeFlight.completing = true;
-    await setPilotSession(playerId, session);
-
     const outcome = await withTransaction(async (db) => {
       const progressRow = await ensurePilotProgress(db, playerId);
       const progressBefore = toPilotProgressView(progressRow);
@@ -3505,12 +3560,16 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
       const route = pilotRouteById(activeFlight.routeId);
       if (!route) throw new Error('route not found');
 
-      const lockReasons = pilotRouteLockReasons(route, progressBefore);
+      const isLegacyRoute = PILOT_CONFIG.legacyRoutes.includes(route);
+      const lockReasons = isLegacyRoute ? [] : pilotRouteLockReasons(route, progressBefore);
       if (lockReasons.length > 0) throw new Error(lockReasons[0]);
 
       const now = Date.now();
       if (now + PILOT_CONFIG.completionGraceMs < Number(activeFlight.minFinishAt || 0)) {
         throw new Error('flight duration not completed yet');
+      }
+      if (!isLegacyRoute && !activeFlight.checkpointCompleted) {
+        throw new Error('mission checkpoint not confirmed');
       }
 
       const beforeUnlocked = pilotUnlockedRouteIds(progressBefore);
@@ -3532,7 +3591,7 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
       const rewardMultiplier = vipMultiplier * (jobBoostUsed ? 2 : 1);
       const totalCash = Math.max(0, baseReward + levelBonus + streakBonus + milestoneBonus + firstCompletionBonus) * rewardMultiplier;
 
-      const baseXp = Number(PILOT_ROUTE_XP[route.id] || route.baseXp || 0);
+      const baseXp = Number(route.baseXp || 0);
       const streakXpBonus = 0;
       const milestoneXpBonus = 0;
       const firstCompletionXpBonus = 0;
@@ -3541,7 +3600,7 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
       const nextXp = Number(progressBefore.xp || 0) + totalXp;
       const nextLevel = computePilotLevel(nextXp);
       const nextBestStreak = Math.max(Number(progressBefore.bestStreak || 0), nextStreak);
-      const routeColumn = pilotCompletionColumnByRoute(route.id);
+      const routeColumn = isLegacyRoute ? pilotCompletionColumnByRoute(route.id) : null;
 
       await db.query(
         `UPDATE player_pilot_progress
@@ -3551,7 +3610,7 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
              pilot_streak = $5,
              pilot_best_streak = GREATEST(pilot_best_streak, $6),
              pilot_total_flights = pilot_total_flights + 1,
-             ${routeColumn} = ${routeColumn} + 1,
+             ${routeColumn ? `${routeColumn} = ${routeColumn} + 1,` : ''}
              updated_at = NOW()
          WHERE player_id = $1`,
         [
@@ -3563,6 +3622,19 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
           nextBestStreak,
         ],
       );
+
+      const creditedRoute = isLegacyRoute
+        ? PILOT_CONFIG.routes.find((candidate) => pilotCompletionsByRoute(progressBefore, candidate.id) < candidate.progressionCompletions)
+        : route;
+      if (creditedRoute) {
+        await db.query(
+          `INSERT INTO player_pilot_route_progress (player_id, route_id, completions)
+           VALUES ($1, $2, 1)
+           ON CONFLICT (player_id, route_id) DO UPDATE
+           SET completions = LEAST($3, player_pilot_route_progress.completions + 1)`,
+          [playerId, creditedRoute.id, creditedRoute.progressionCompletions],
+        );
+      }
 
       if (totalCash > 0) {
         await db.query(`UPDATE players SET clean_money = clean_money + $2, updated_at = NOW() WHERE player_id = $1`, [playerId, totalCash]);
@@ -3635,11 +3707,6 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
 
     res.json(outcome);
   } catch (error) {
-    const session = await getPilotSession(req.body?.playerId);
-    if (session?.activeFlight?.completing) {
-      session.activeFlight.completing = false;
-      await setPilotSession(req.body?.playerId, session);
-    }
     res.status(400).json({ error: error.message || 'complete flight failed' });
   }
 });
