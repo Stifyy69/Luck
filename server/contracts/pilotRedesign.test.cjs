@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { routes } = require('../gameplay/pilotRoutes.cjs');
-const { checkpointReady, legacyCredits } = require('../gameplay/pilotProgress.cjs');
+const { checkpointReady, creditedPilotCompletions, legacyCredits } = require('../gameplay/pilotProgress.cjs');
 const { PILOT_ROUTE_XP } = require('../cityProgress/constants.cjs');
 
 const pilotLevel = (xp) => {
@@ -63,6 +63,32 @@ test('legacy progress is capped per old route and credited once across the new s
   assert.equal(credits.reduce((sum, item) => sum + item.completions, 0), 125);
   assert.deepEqual(credits.slice(0, 7).map((item) => item.completions), [20, 20, 20, 20, 20, 20, 5]);
   assert.ok(credits.slice(7).every((item) => item.completions === 0));
+});
+
+test('Cayo counts capped route progression, including flights awaiting the one-time migration', () => {
+  const fullyReplayed = routes.map((route) => ({ route_id: route.id, completions: 10_000 }));
+  assert.equal(creditedPilotCompletions(fullyReplayed), 390);
+  const untilRouteFiveTwo = routes.slice(0, 13).map((route) => ({
+    route_id: route.id, completions: route.progressionCompletions,
+  }));
+  untilRouteFiveTwo.push({ route_id: 'ROUTE_5_2', completions: 2 });
+  assert.equal(creditedPilotCompletions(untilRouteFiveTwo), 292);
+  untilRouteFiveTwo[13].completions += 1;
+  assert.equal(creditedPilotCompletions(untilRouteFiveTwo), 293);
+
+  const oldPilot = {
+    pilot_route_v2_migrated: false,
+    route_1_completions: 50,
+    route_2_completions: 25,
+    route_3_completions: 25,
+    route_4_completions: 25,
+    route_5_completions: 25,
+  };
+  assert.equal(creditedPilotCompletions([], oldPilot), 125);
+  assert.equal(creditedPilotCompletions(legacyCredits(oldPilot).map((credit) => ({
+    route_id: credit.routeId, completions: credit.completions,
+  })), oldPilot), 125);
+  assert.equal(creditedPilotCompletions([], { ...oldPilot, pilot_route_v2_migrated: true }), 0);
 });
 
 test('a mission checkpoint cannot be confirmed before its stage has elapsed', () => {

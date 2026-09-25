@@ -257,6 +257,8 @@ function installCityProgress(app, express) {
         requiredLevel: rule.level,
         requiredCareer: access?.requiredCareer || null,
         requiredCareerLevel: access?.requiredCareerLevel || null,
+        requiredCareerXp: access?.requiredCareerXp || null,
+        requiredCareerCompletions: access?.requiredCareerCompletions || null,
         currentLevel: progress.level,
         xpToUnlock: Math.max(0, cityLevelStartXp(rule.level) - Number(progress.xp || 0)),
         cityProgress: progress,

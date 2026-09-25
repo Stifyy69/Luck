@@ -7,6 +7,8 @@ export type CareerAccessEntry = {
   requiredLevel: number | null;
   requiredCareer?: string;
   requiredCareerLevel?: number;
+  requiredCareerXp?: number;
+  requiredCareerCompletions?: number;
   vipOnly?: boolean;
   reason: string | null;
 };

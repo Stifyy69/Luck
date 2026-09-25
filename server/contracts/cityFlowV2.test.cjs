@@ -3,7 +3,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const { CITY_LEVEL_START_XP, buildCareerAccess } = require('../cityProgress/constants.cjs');
+const {
+  CAREER_75_PERCENT_XP,
+  CAREER_MAX_LEVEL_XP,
+  CITY_LEVEL_START_XP,
+  PILOT_75_PERCENT_COMPLETIONS,
+  PILOT_TOTAL_ROUTE_COMPLETIONS,
+  buildCareerAccess,
+} = require('../cityProgress/constants.cjs');
 const { STARTING_CLEAN_MONEY } = require('../platform/constants.cjs');
 
 const apiSource = fs.readFileSync(path.join(__dirname, '../../src/lib/api.ts'), 'utf8');
@@ -24,15 +31,23 @@ test('main career unlock curve is slower than the old city progression', () => {
   assert.equal(CITY_LEVEL_START_XP[15], 65_000);
 });
 
-test('career unlocks also require progress in the previous career', () => {
-  const lockedFisher = buildCareerAccess(3, false, { pizzerLevel: 2, fisherLevel: 1, pilotLevel: 1 });
-  const openFisher = buildCareerAccess(3, false, { pizzerLevel: 3, fisherLevel: 1, pilotLevel: 1 });
-  const lockedPilot = buildCareerAccess(6, false, { pizzerLevel: 3, fisherLevel: 3, pilotLevel: 1 });
-  const openPilot = buildCareerAccess(6, false, { pizzerLevel: 3, fisherLevel: 4, pilotLevel: 1 });
-  assert.equal(lockedFisher.fisher.unlocked, false);
-  assert.equal(openFisher.fisher.unlocked, true);
-  assert.equal(lockedPilot.pilot.unlocked, false);
-  assert.equal(openPilot.pilot.unlocked, true);
+test('each new unlock requires 75% of the previous career progression and its City level', () => {
+  assert.equal(CAREER_MAX_LEVEL_XP, 22_388);
+  assert.equal(CAREER_75_PERCENT_XP, 16_791);
+  assert.equal(PILOT_TOTAL_ROUTE_COMPLETIONS, 390);
+  assert.equal(PILOT_75_PERCENT_COMPLETIONS, 293);
+
+  for (const [key, cityLevel, progressKey, threshold] of [
+    ['fisher', 3, 'pizzerXp', CAREER_75_PERCENT_XP],
+    ['pilot', 6, 'fisherXp', CAREER_75_PERCENT_XP],
+    ['cayo', 10, 'pilotRouteCompletions', PILOT_75_PERCENT_COMPLETIONS],
+  ]) {
+    assert.equal(buildCareerAccess(cityLevel, false, { [progressKey]: threshold - 1 })[key].unlocked, false);
+    assert.equal(buildCareerAccess(cityLevel - 1, false, { [progressKey]: threshold })[key].unlocked, false);
+    assert.equal(buildCareerAccess(cityLevel, false, { [progressKey]: threshold })[key].unlocked, true);
+    assert.equal(buildCareerAccess(cityLevel, false, { [progressKey]: threshold })[key].reason, null);
+    assert.equal(buildCareerAccess(1, false, { legacyGrants: { [key]: true } })[key].unlocked, true);
+  }
 });
 
 test('Pizza Courier receives a random delivery directly from the server instead of route selection', () => {
