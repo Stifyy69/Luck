@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
 const { installHttpSecurity, createRateLimiter } = require('./server/security/http.cjs');
+const { assertJobAvailable, installJailGuard } = require('./server/security/jail.cjs');
 const { installCityProgress } = require('./server/cityProgress/install.cjs');
 const { installPlatformSystems } = require('./server/platform/install.cjs');
 const { hashPassword, validatePassword, verifyPassword } = require('./server/security/passwords.cjs');
@@ -42,14 +43,14 @@ const { checkpointReady, legacyCredits } = require('./server/gameplay/pilotProgr
 const app = express();
 const port = process.env.PORT || 3000;
 const distPath = path.join(__dirname, 'dist');
-
-installHttpSecurity(app);
-installCityProgress(app, express);
-installPlatformSystems(app, express);
-
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 const pool = hasDatabaseUrl ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
 let dbReady = false;
+
+installHttpSecurity(app);
+installCityProgress(app, express);
+installJailGuard(app, pool);
+installPlatformSystems(app, express);
 
 const getIp = (req) =>
   (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString().split(',')[0].trim();
@@ -3564,6 +3565,7 @@ app.post('/api/pilot/flight/complete', requireDb, async (req, res) => {
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
     const outcome = await withTransaction(async (db) => {
+      await assertJobAvailable(db, playerId);
       const progressRow = await ensurePilotProgress(db, playerId);
       const progressBefore = toPilotProgressView(progressRow);
       const activeSession = await getPilotSession(playerId, db);
@@ -3950,6 +3952,7 @@ app.post('/api/pizzer/delivery/handover', requireDb, async (req, res) => {
     if (!playerId || !handoverVariant) return res.status(400).json({ error: 'missing fields' });
 
     const outcome = await withTransaction(async (db) => {
+      await assertJobAvailable(db, playerId);
       const progressRow = await ensurePizzerProgress(db, playerId);
       const progressBefore = toPizzerProgressView(progressRow);
       const session = await getPizzerSession(playerId, db);
@@ -4356,6 +4359,7 @@ app.post('/api/fisher/dock/select', requireDb, async (req, res) => {
     });
 
     const levelOutcome = await withTransaction(async (db) => {
+      await assertJobAvailable(db, playerId);
       const lockedSession = await getFisherSession(playerId, db);
       if (lockedSession.shiftState !== 'SELECTING_DOCK' || Number(lockedSession.targetDockCell) !== parsedCell) {
         throw new Error('dock action already completed or expired');
@@ -4831,6 +4835,7 @@ app.post('/api/fisher/land', requireDb, async (req, res) => {
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
     const outcome = await withTransaction(async (db) => {
+      await assertJobAvailable(db, playerId);
       const progressRow = await ensureFisherProgress(db, playerId);
       const progressBefore = toFisherProgressView(progressRow);
       const session = await getFisherSession(playerId, db);
@@ -5039,6 +5044,7 @@ app.post('/api/fisher/catch/sell', requireDb, async (req, res) => {
     if (!playerId) return res.status(400).json({ error: 'playerId missing' });
 
     const outcome = await withTransaction(async (db) => {
+      await assertJobAvailable(db, playerId);
       const progressRow = await ensureFisherProgress(db, playerId);
       const progressView = toFisherProgressView(progressRow);
       const session = await getFisherSession(playerId, db);

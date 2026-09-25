@@ -93,6 +93,9 @@ function fakeCayoDb(initial = {}) {
 test('raid removes only the attempted production inputs, persists Heat and jail, and replay does not repeat the debit', async () => {
   const db = fakeCayoDb({ heat: 20 });
   const result = await runCayoAction(db, 'player1', 'PROCESS', 'process_operation_1', false, () => 0.05);
+  const restrictionLockIndex = db.queries.findIndex((sql) => sql.includes('SELECT 1 FROM player_restrictions') && sql.includes('FOR UPDATE'));
+  const resourcesLockIndex = db.queries.findIndex((sql) => sql.includes('FROM player_cayo_state cs') && sql.includes('FOR UPDATE OF cs, p'));
+  assert.ok(restrictionLockIndex >= 0 && restrictionLockIndex < resourcesLockIndex);
   assert.equal(result.raided, true);
   assert.equal(result.state.leaves, 0);
   assert.equal(result.state.whitePacks, 400);

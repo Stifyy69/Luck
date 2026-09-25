@@ -1,5 +1,6 @@
 const { consumeJobBoost, getVipMultiplier } = require('../economy/boosts.cjs');
 const { validateOperationId } = require('./cayo.cjs');
+const { assertJobAvailable } = require('../security/jail.cjs');
 
 const BASE_REWARD = 300_000;
 const CYCLE_SECONDS = 3;
@@ -61,6 +62,7 @@ async function saveOperation(db, playerId, operationId, operationType, result) {
 }
 
 async function startSleepCycle(db, playerId, operationIdValue) {
+  await assertJobAvailable(db, playerId);
   const operationId = validateOperationId(operationIdValue);
   const operationType = 'SLEEP_START';
   const replay = await operationReplay(db, playerId, operationId, operationType);
@@ -92,6 +94,7 @@ async function startSleepCycle(db, playerId, operationIdValue) {
 }
 
 async function claimSleepReward(db, playerId, operationIdValue) {
+  await assertJobAvailable(db, playerId);
   const operationId = validateOperationId(operationIdValue);
   const operationType = 'SLEEP_CLAIM';
   const replay = await operationReplay(db, playerId, operationId, operationType);
